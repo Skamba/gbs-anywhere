@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
 #   docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
-#     ghcr.io/skamba/gbs-anywhere --app-host <this-host-ip>
+#     ghcr.io/skamba/gbs-anywhere
 #
 # Arguments after the image name are extra `gbs-anywhere` flags
 # (see `gbs-anywhere --help`).

@@ -18,13 +18,13 @@ with Docker:
 
 ```sh
 docker run -d --name gbs-anywhere --restart unless-stopped \
-  -p 80:80 ghcr.io/skamba/gbs-anywhere --app-host <this-host-ip>
+  -p 80:80 ghcr.io/skamba/gbs-anywhere
 ```
 
-`<this-host-ip>` is that computer's address on your network, e.g.
-`192.168.1.20`. It must stay the same, so give it a fixed IP or a DHCP
-reservation in your router. Port 80 must be free and reachable from the
-grinder (allow it in the firewall).
+You'll need that computer's IP address on your network (e.g. `192.168.1.20`)
+for the grinder and your phone. It must stay the same, so give it a fixed IP
+or a DHCP reservation in your router. Port 80 must be free and reachable from
+the grinder (allow it in the firewall).
 
 Or from source, with Rust installed:
 
@@ -43,8 +43,8 @@ The grinder treats gbs-anywhere as a Xenia, so the menus below say "Xenia".
 2. On the grinder, open **Settings** (lower-left button on the home screen).
 3. Go to **Connectivity → Machine To Machine → Enable Xenia**.
 4. Open **Configuration**. The scan will not find gbs-anywhere, so enter the
-   hostname by hand: the computer's IP address, e.g. `192.168.1.20` (the same
-   `<this-host-ip>` as above). An IP is more reliable than a `.local` name.
+   hostname by hand: the computer's IP address, e.g. `192.168.1.20`. An IP is
+   more reliable than a `.local` name.
 5. Within a few seconds the app shows **grinder connected**. The grinder polls
    every 2 seconds from then on.
 
@@ -61,7 +61,7 @@ A blue chain icon on the recipe means GbS is active.
 
 ## Pull a shot
 
-1. Open `http://<this-host-ip>/` on your phone. The header shows
+1. Open `http://<that IP>/` on your phone, e.g. `http://192.168.1.20/`. The header shows
    "grinder connected" while the grinder is polling.
 2. Grind with a GbS recipe.
 3. When the grinder says "Press grinder rotary knob to start brewing.", press
@@ -79,7 +79,6 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 
 | flag | default | what |
 |---|---|---|
-| `--app-host <host>` | detected | address shown in the app URL on startup |
 | `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long |
 | `--log <file>` | off | append every grinder request to a file |
 | `-p, --ports <list>` | 80 | ports to serve on |

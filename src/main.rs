@@ -61,11 +61,6 @@ struct Args {
     /// Do not serve the app page and control API on the grinder ports.
     #[arg(long)]
     no_app: bool,
-
-    /// Host or IP to print in the app URL, instead of the detected LAN
-    /// address (which is the container's own inside Docker).
-    #[arg(long)]
-    app_host: Option<String>,
 }
 
 #[tokio::main]
@@ -99,9 +94,12 @@ async fn main() -> anyhow::Result<()> {
         app_on_grinder_ports: !args.no_app,
     };
     if !args.no_app {
-        let host = args.app_host.clone().unwrap_or_else(|| {
-            lan_ip().map_or_else(|| "<this-host>".to_owned(), |ip| ip.to_string())
-        });
+        // Inside a container the detected address is the container's own,
+        // which the phone cannot reach.
+        let host = match lan_ip() {
+            Some(ip) if !in_container() => ip.to_string(),
+            _ => "<this computer's IP>".to_owned(),
+        };
         let port = args.ports.first().copied().unwrap_or(80);
         let url = if port == 80 {
             format!("http://{host}/")
@@ -124,6 +122,11 @@ fn lan_ip() -> Option<IpAddr> {
     let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     s.connect("192.0.2.1:80").ok()?;
     s.local_addr().ok().map(|a| a.ip())
+}
+
+fn in_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
 }
 
 const HELP: &str = "\
