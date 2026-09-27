@@ -1,0 +1,15 @@
+/target
+
+# Run output (grinder transcripts contain your IPs)
+*.log
+logs/
+
+# Local settings and editor/OS noise
+.env
+.env.*
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db

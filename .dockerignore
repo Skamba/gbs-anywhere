@@ -1,0 +1,6 @@
+# Only what the build needs goes into the context.
+*
+!Cargo.toml
+!Cargo.lock
+!src/
+!web/

@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1c1714">
+<title>Grind-by-Sync</title>
+<style>
+  :root {
+    --bg: #f6f2ee;
+    --card: #ffffff;
+    --ink: #221b16;
+    --muted: #7a6d63;
+    --line: #e6ddd5;
+    --accent: #9a5b2e;
+    --accent-ink: #ffffff;
+    --ok: #2f7d4f;
+    --warn: #b36b00;
+    --bad: #b3261e;
+    --shadow: 0 1px 2px rgba(34, 27, 22, .06), 0 4px 16px rgba(34, 27, 22, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1c1714;
+      --card: #27201b;
+      --ink: #f3ebe4;
+      --muted: #a8998d;
+      --line: #3a3029;
+      --accent: #d08a52;
+      --accent-ink: #1c1714;
+      --ok: #6cc08c;
+      --warn: #e2a33d;
+      --bad: #ef7a70;
+      --shadow: none;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1c1714; --card: #27201b; --ink: #f3ebe4; --muted: #a8998d; --line: #3a3029;
+    --accent: #d08a52; --accent-ink: #1c1714; --ok: #6cc08c; --warn: #e2a33d; --bad: #ef7a70; --shadow: none;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  main {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; min-width: 0; }
+  .card, .banner { min-width: 0; overflow-wrap: break-word; }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -.01em; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 13px; color: var(--muted);
+    padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; white-space: nowrap;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .pill.ok .dot { background: var(--ok); }
+  .pill.bad .dot { background: var(--bad); }
+
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: 20px; box-shadow: var(--shadow); margin-bottom: 16px;
+  }
+  .step { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--accent); margin: 0 0 6px; }
+  .title { font-size: 22px; font-weight: 650; margin: 0 0 6px; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 0; }
+  .banner {
+    border-radius: 12px; padding: 12px 14px; margin-bottom: 16px; font-size: 15px;
+    border: 1px solid var(--line); background: var(--card);
+  }
+  .banner.warn { border-color: var(--warn); color: var(--warn); }
+  .banner.bad { border-color: var(--bad); color: var(--bad); }
+  .banner.ok { border-color: var(--ok); color: var(--ok); }
+  [hidden] { display: none !important; }
+
+  .timer { font-variant-numeric: tabular-nums; font-size: 44px; font-weight: 650; letter-spacing: -.02em; margin: 12px 0 2px; }
+  .fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin: 18px 0 14px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .input { display: flex; align-items: baseline; border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; background: var(--bg); }
+  .input:focus-within { border-color: var(--accent); }
+  .input input {
+    flex: 1 1 0; width: 100%; min-width: 0; border: 0; background: transparent; color: var(--ink);
+    font: inherit; font-size: 28px; font-weight: 600; padding: 10px 0; font-variant-numeric: tabular-nums; outline: none;
+  }
+  .input span { color: var(--muted); font-size: 16px; }
+  .hint { font-size: 14px; min-height: 1.45em; margin: 0 0 12px; color: var(--muted); }
+  .hint.warn { color: var(--warn); }
+  button {
+    font: inherit; font-weight: 600; border-radius: 12px; padding: 14px 16px; cursor: pointer; width: 100%;
+    border: 1px solid var(--line); background: transparent; color: var(--ink);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-size: 17px; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  button.quiet { border-color: transparent; color: var(--muted); font-weight: 500; padding: 10px; }
+
+  ol.steps { margin: 14px 0 0; padding-left: 20px; color: var(--muted); }
+  ol.steps li { margin: 4px 0; }
+  ol.steps li.now { color: var(--ink); font-weight: 600; }
+
+  h2 { font-size: 15px; margin: 24px 0 8px; color: var(--muted); font-weight: 600; }
+  ul.history { list-style: none; margin: 0; padding: 0; }
+  ul.history li {
+    display: flex; justify-content: space-between; gap: 12px; align-items: baseline;
+    padding: 12px 0; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums;
+  }
+  ul.history .main { font-weight: 600; }
+  ul.history .meta { color: var(--muted); font-size: 14px; text-align: right; }
+  .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Grind-by-Sync</h1>
+    <span id="link" class="pill"><span class="dot"></span><span id="link-text">connecting…</span></span>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <!-- Step 1: grind -->
+  <section id="s-grind" class="card" hidden>
+    <p class="step">Step 1</p>
+    <p class="title">Grind with your GbS recipe</p>
+    <p class="sub" id="grind-sub">When the grinder is done, the next step shows up here.</p>
+  </section>
+
+  <!-- Step 2: press the knob -->
+  <section id="s-knob" class="card" hidden>
+    <p class="step">Step 2</p>
+    <p class="title">Press the grinder’s rotary knob</p>
+    <p class="sub">…then start the shot on the machine right away. Target: <strong id="knob-target">–</strong>.</p>
+  </section>
+
+  <!-- Step 3: brewing -->
+  <section id="s-brew" class="card" hidden>
+    <p class="step">Step 3 · shot running</p>
+    <p class="title">Pull the shot and enter what you measured</p>
+    <div class="timer" id="brew-timer">0:00</div>
+    <p class="sub" id="brew-left">since the knob press</p>
+    <form id="shot-form" autocomplete="off">
+      <div class="fields">
+        <div>
+          <label for="f-time">Time (machine)</label>
+          <div class="input"><input id="f-time" size="1" inputmode="decimal" enterkeyhint="next" placeholder=""><span>s</span></div>
+        </div>
+        <div>
+          <label for="f-weight">Weight in cup</label>
+          <div class="input"><input id="f-weight" size="1" inputmode="decimal" enterkeyhint="send" placeholder=""><span>g</span></div>
+        </div>
+      </div>
+      <p class="hint" id="form-hint">Always use the same timer, from the moment the pump starts.</p>
+      <div class="row">
+        <button class="primary" id="send" type="submit" disabled>Enter the time first</button>
+        <button id="abort" class="quiet" type="button">Abort shot</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- Step 4: sent -->
+  <section id="s-sent" class="card" hidden>
+    <p class="step">Step 4</p>
+    <p class="title" id="sent-title">Sent</p>
+    <p class="sub">The grinder is processing the shot. Check its screen for the new grind setting.</p>
+  </section>
+
+  <ol class="steps" id="steps">
+    <li data-s="grind">Grind with the GbS recipe</li>
+    <li data-s="knob">Press the grinder knob, start the shot</li>
+    <li data-s="brew">Enter time and weight</li>
+    <li data-s="sent">The grinder adjusts its grind setting</li>
+  </ol>
+
+  <h2>Shots this session</h2>
+  <ul class="history" id="history"></ul>
+  <p class="empty" id="history-empty">No shots yet.</p>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const MIN_MS = 10000;   // grinder ignores shots up to 10 s ("Brew ignored")
+  const MAX_MS = 80000;   // grinder rejects shots over 80 s
+  let state = null, events = [], lastSeq = -1, step = null, busy = false;
+  let weightTouched = false;
+
+  async function api(path, opts) {
+    const r = await fetch(path, Object.assign({ headers: { "content-type": "application/json" } }, opts));
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.error || r.statusText);
+    return body;
+  }
+
+  function lastOf(kinds) {
+    for (let i = events.length - 1; i >= 0; i--) if (kinds.includes(events[i].kind)) return events[i];
+    return null;
+  }
+
+  function fmtClock(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000));
+    return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+  }
+  const num = (v) => { const n = parseFloat(String(v).replace(",", ".")); return isFinite(n) ? n : NaN; };
+  const g = (w) => (w == null ? "–" : (Math.round(w * 10) / 10) + " g");
+
+  function currentStep() {
+    const phase = state.phase.phase;
+    if (phase === "brewing") return "brew";
+    if (phase === "finishing") return "sent";
+    const e = lastOf(["grind_result", "shot_reported", "shot_aborted"]);
+    return e && e.kind === "grind_result" ? "knob" : "grind";
+  }
+
+  function render() {
+    if (!state) return;
+    const link = state.grinder, age = link.last_poll_age_ms;
+    const on = age != null && age < 6000;
+    $("link").className = "pill " + (on ? "ok" : "bad");
+    $("link-text").textContent = on ? "grinder connected" : "no grinder";
+
+    const b = $("banner");
+    const busyPhase = state.phase.phase !== "ready";
+    if (state.grind_blocked && !(busyPhase && state.grind_blocked.reason === "brewing")) {
+      b.hidden = false; b.className = "banner warn";
+      b.textContent = "Grinder blocked: " + state.grind_blocked.grinder_message;
+    } else if (!on) {
+      b.hidden = false; b.className = "banner bad";
+      b.textContent = "The grinder is not polling. Is it on and paired with this ‘Xenia’?";
+    } else b.hidden = true;
+
+    const s = currentStep();
+    if (s !== step) {
+      if (s === "brew" && navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (_) {} }
+      if (s === "brew") { $("f-time").value = ""; weightTouched = false; setHint(); }
+      step = s;
+    }
+    for (const id of ["grind", "knob", "brew", "sent"]) $("s-" + id).hidden = id !== s;
+    for (const li of $("steps").children) li.className = li.dataset.s === s ? "now" : "";
+
+    const grind = state.last_grind;
+    const target = grind && grind.beverage_weight_g;
+    $("knob-target").textContent = g(target);
+    if (s === "brew") {
+      const ms = state.mako.REAL_EXTRACTION_TIME_MS || 0;
+      $("brew-timer").textContent = fmtClock(ms);
+      const limit = state.config.brew_timeout ? state.config.brew_timeout.secs * 1000 : null;
+      $("brew-left").textContent = "since the knob press" + (limit ? " · " + fmtClock(limit - ms) + " left to enter it" : "");
+      if (!weightTouched && target && !$("f-weight").value) $("f-weight").value = target;
+    }
+    if (s === "sent" && state.phase.result) {
+      const r = state.phase.result;
+      $("sent-title").textContent = state.phase.aborted
+        ? "Shot aborted"
+        : "Sent: " + (r.time_ms / 1000) + " s · " + g(r.volume_ml);
+    }
+    const last = lastOf(["shot_reported", "shot_aborted"]);
+    $("grind-sub").textContent = last && last.kind === "shot_reported"
+      ? "Last shot: " + (last.result.time_ms / 1000) + " s · " + g(last.result.volume_ml) + ". Check the new grind setting on the grinder."
+      : "When the grinder is done, the next step shows up here.";
+  }
+
+  function renderHistory() {
+    const shots = [];
+    let targetW = null;
+    for (const e of events) {
+      if (e.kind === "grind_result") targetW = e.result.beverage_weight_g;
+      if (e.kind === "shot_reported") shots.push({ ...e.result, target: targetW, ok: e.result.time_ms > MIN_MS && e.in_grinder_range });
+      if (e.kind === "shot_aborted") shots.push({ aborted: true, reason: e.reason });
+    }
+    const ul = $("history");
+    ul.replaceChildren();
+    shots.reverse().forEach((sh, i) => {
+      const li = document.createElement("li");
+      const n = shots.length - i;
+      const main = document.createElement("span");
+      main.className = "main";
+      const meta = document.createElement("span");
+      meta.className = "meta";
+      if (sh.aborted) {
+        main.textContent = "#" + n + " aborted";
+        meta.textContent = sh.reason;
+      } else {
+        main.textContent = "#" + n + "  " + (sh.time_ms / 1000) + " s · " + g(sh.volume_ml);
+        meta.textContent = (sh.target ? "target " + g(sh.target) : "") + (sh.ok ? "" : " · ignored by grinder");
+      }
+      li.append(main, meta);
+      ul.append(li);
+    });
+    $("history-empty").hidden = shots.length > 0;
+  }
+
+  function setHint() {
+    const h = $("form-hint");
+    const t = num($("f-time").value);
+    const ok = isFinite(t) && t > 0;
+    $("send").disabled = !ok || busy;
+    $("send").textContent = ok ? "Send to grinder" : "Enter the time first";
+    h.className = "hint";
+    if (!isFinite(t)) { h.textContent = "Always use the same timer, from the moment the pump starts."; return; }
+    if (t * 1000 <= MIN_MS) { h.className = "hint warn"; h.textContent = "≤ 10 s: the grinder ignores this shot and asks you to go finer yourself."; return; }
+    if (t * 1000 > MAX_MS) { h.className = "hint warn"; h.textContent = "Over 80 s: the grinder ignores this shot."; return; }
+    h.textContent = "";
+  }
+
+  async function tick() {
+    try {
+      state = await api("/api/state");
+      if (state.last_seq !== lastSeq) {
+        events = await api("/api/events?after=0");
+        lastSeq = state.last_seq;
+        renderHistory();
+      }
+      render();
+    } catch (e) {
+      $("link").className = "pill bad";
+      $("link-text").textContent = "server unreachable";
+    }
+  }
+
+  $("f-time").addEventListener("input", setHint);
+  $("f-weight").addEventListener("input", () => { weightTouched = true; });
+  $("f-time").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("f-weight").focus(); } });
+
+  $("shot-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    const t = num($("f-time").value), w = num($("f-weight").value);
+    if (!isFinite(t) || t <= 0) { $("form-hint").className = "hint warn"; $("form-hint").textContent = "Enter the time."; $("f-time").focus(); return; }
+    busy = true; $("send").disabled = true;
+    try {
+      await api("/api/shot/result", { method: "POST", body: JSON.stringify({ time_s: t, weight_g: isFinite(w) ? w : 0 }) });
+      document.activeElement && document.activeElement.blur();
+      await tick();
+    } catch (err) {
+      $("form-hint").className = "hint warn"; $("form-hint").textContent = "Failed: " + err.message;
+    } finally { busy = false; setHint(); }
+  });
+
+  $("abort").addEventListener("click", async () => {
+    if (busy || !confirm("Abort the shot? The grinder will ignore it.")) return;
+    busy = true;
+    try { await api("/api/shot/abort", { method: "POST" }); await tick(); }
+    catch (err) { $("form-hint").textContent = "Failed: " + err.message; }
+    finally { busy = false; }
+  });
+
+  tick();
+  setInterval(tick, 1000);
+})();
+</script>
+</body>
+</html>
