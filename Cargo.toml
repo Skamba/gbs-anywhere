@@ -4,18 +4,26 @@ description = "Grind-by-Sync for the Mahlkönig E64 WS with any espresso machine
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
+license = "AGPL-3.0-or-later"
 publish = false
 
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
-clap = { version = "4.6.7", features = ["derive"] }
+base64 = "0.23.1"
+clap = { version = "4.6.7", features = ["derive", "env"] }
 futures-util = "0.3.34"
+p256 = "0.13"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json"] }
+# Only to pick the TLS crypto provider for reqwest (ring needs no cmake).
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.10"
 tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { version = "1.26.1", features = ["v4"] }
 
 [lints.rust]
 unsafe_code = "forbid"

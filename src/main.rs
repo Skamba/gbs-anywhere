@@ -6,6 +6,10 @@
 //! Flow: grind with a GbS recipe -> press the grinder knob when it says
 //! "Press grinder rotary knob to start brewing." -> start the shot -> enter
 //! time and weight in the app (or type `30 36` here) -> the grinder adjusts.
+//!
+//! Integrations ([`gbs_anywhere::integration`]) can report the shot instead:
+//! add them in the app (saved in `--config`) or with their flags, e.g.
+//! `--lm-username` for the La Marzocco cloud.
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -13,6 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
+use gbs_anywhere::integration;
 use gbs_anywhere::protocol::machine::EventRecord;
 use gbs_anywhere::protocol::{MachineConfig, MachineEvent, ShotResult};
 use gbs_anywhere::server::{self, ServeConfig, Server};
@@ -22,7 +27,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 #[derive(Parser)]
 #[command(
     name = "gbs-anywhere",
-    version,
+    version = gbs_anywhere::version(),
     about = "Grind-by-Sync for the Mahlkönig E64 WS with any espresso machine"
 )]
 struct Args {
@@ -61,12 +66,26 @@ struct Args {
     /// Do not serve the app page and control API on the grinder ports.
     #[arg(long)]
     no_app: bool,
+
+    /// Directory with your own icons for the app: `<integration>.svg` or
+    /// `.png` (e.g. la_marzocco.svg) replaces the built-in glyph.
+    #[arg(long, env = "ICONS_DIR", value_name = "DIR")]
+    icons: Option<PathBuf>,
+
+    /// Settings file for the integrations added in the app (created if missing;
+    /// holds their passwords). Without it they last until the next restart.
+    #[arg(long, env = "CONFIG_FILE", value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    #[command(flatten)]
+    integrations: integration::CliArgs,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     init_tracing();
+    tracing::info!("gbs-anywhere {}", gbs_anywhere::version());
     let mut config = MachineConfig {
         finishing_hold: Duration::from_secs_f64(args.finishing_hold_s),
         brew_timeout: (args.brew_timeout_s > 0.0)
@@ -80,6 +99,12 @@ async fn main() -> anyhow::Result<()> {
         Some(p) => Server::with_transcript(config, p).await?,
         None => Server::new(config),
     };
+    if let Some(dir) = &args.icons {
+        if !dir.is_dir() {
+            anyhow::bail!("--icons: {} is not a directory", dir.display());
+        }
+        x.set_icons_dir(dir.clone());
+    }
     let control = match args.control.as_str() {
         "off" | "" => None,
         s => Some(s.parse::<SocketAddr>()?),
@@ -110,6 +135,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tokio::spawn(print_events(x.clone()));
+    for (kind, settings) in args.integrations.configured() {
+        x.integrations().start_cli(&x, kind, &settings)?;
+    }
+    if let Some(path) = &args.config {
+        let n = x.integrations().load(&x, path, integration::KINDS)?;
+        tracing::info!("settings in {}: {n} added in the app", path.display());
+    }
     if !args.no_stdin {
         println!("{HELP}");
         tokio::spawn(stdin_loop(x.clone()));
@@ -249,4 +281,15 @@ fn init_tracing() {
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("gbs_anywhere=info"));
     fmt().with_env_filter(filter).with_target(false).init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_is_well_formed() {
+        use clap::CommandFactory;
+        Args::command().debug_assert();
+    }
 }

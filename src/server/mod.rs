@@ -14,12 +14,15 @@
 
 mod control_api;
 mod grinder_api;
+#[cfg(test)]
+mod tests;
 
 use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::integration::Integrations;
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{Machine, MachineConfig};
 use tokio::io::AsyncWriteExt;
@@ -34,6 +37,8 @@ pub struct Server {
     inner: Mutex<Inner>,
     events: broadcast::Sender<EventRecord>,
     transcript: Option<tokio::sync::Mutex<tokio::fs::File>>,
+    integrations: Integrations,
+    icons_dir: OnceLock<PathBuf>,
 }
 
 struct Inner {
@@ -62,6 +67,8 @@ impl Server {
             }),
             events: broadcast::channel(256).0,
             transcript: None,
+            integrations: Integrations::new(),
+            icons_dir: OnceLock::new(),
         })
     }
 
@@ -98,6 +105,22 @@ impl Server {
 
     pub fn grinder_link(&self) -> GrinderLink {
         self.lock().grinder.clone()
+    }
+
+    /// Serves the app's icons from `dir` (`GET /icons/<name>`): put
+    /// `<integration id>.svg` or `.png` there to replace a built-in glyph,
+    /// e.g. a vendor's official logo you are allowed to use.
+    pub fn set_icons_dir(&self, dir: PathBuf) {
+        let _ = self.icons_dir.set(dir);
+    }
+
+    pub fn icons_dir(&self) -> Option<&Path> {
+        self.icons_dir.get().map(PathBuf::as_path)
+    }
+
+    /// The running integrations (vendor clouds, scales, hubs): start, add, remove.
+    pub fn integrations(&self) -> &Integrations {
+        &self.integrations
     }
 
     fn note_request(&self, peer: SocketAddr, poll: bool) {

@@ -2,6 +2,10 @@
 # and publishes it to GitHub Container Registry as ghcr.io/<owner>/<repo>.
 # Pull requests only build. A first push creates a *private* package; make it
 # public once under the package's settings on GitHub.
+#
+# Tags: a push to main publishes `main` and `sha-*`; a `vX.Y.Z` tag publishes
+# `X.Y.Z`, `X.Y`, `X` (from 1.0) and `latest`, and creates the GitHub release
+# from that version's section in CHANGELOG.md.
 name: image
 
 on:
@@ -33,6 +37,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Check the tag against Cargo.toml and CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(grep -m 1 '^version = ' Cargo.toml | cut -d '"' -f 2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, but Cargo.toml says $version"
+            exit 1
+          fi
+          if ! grep -q "^## \[$version\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+
       - name: Image name (lowercase)
         run: |
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
@@ -46,6 +63,9 @@ jobs:
         id: meta
         with:
           images: ${{ env.IMAGE }}
+          # GitHub reports plain AGPL-3.0; give the exact SPDX id.
+          labels: |
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
 
       - uses: docker/login-action@v4
         if: env.PUSH == 'true'
@@ -60,6 +80,8 @@ jobs:
           context: .
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            GBS_COMMIT=${{ !startsWith(github.ref, 'refs/tags/') && github.sha || '' }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=${{ env.PUSH }}
           cache-from: type=gha,scope=${{ env.ARCH }}
           cache-to: type=gha,mode=max,scope=${{ env.ARCH }}
@@ -103,11 +125,13 @@ jobs:
         id: meta
         with:
           images: ${{ env.IMAGE }}
+          # `latest` comes from the semver tags (flavor latest=auto), so it
+          # only moves on a release; pre-releases get their exact tag only.
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=branch
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
             type=sha
 
       - uses: docker/login-action@v4
@@ -125,3 +149,25 @@ jobs:
 
       - name: Inspect
         run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: merge
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Create the GitHub release from CHANGELOG.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#v}
+          notes="$RUNNER_TEMP/notes.md"
+          awk -v v="$version" 'index($0, "## [" v "]") == 1 {on = 1; next} /^## / {on = 0} on' \
+            CHANGELOG.md > "$notes"
+          flags=()
+          if [[ $TAG == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$notes" "${flags[@]}"

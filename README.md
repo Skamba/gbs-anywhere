@@ -18,8 +18,16 @@ with Docker:
 
 ```sh
 docker run -d --name gbs-anywhere --restart unless-stopped \
-  -p 80:80 ghcr.io/skamba/gbs-anywhere
+  -p 80:80 -v gbs-anywhere:/data ghcr.io/skamba/gbs-anywhere
 ```
+
+The `/data` volume keeps the integrations you add in the app (see
+[Integrations](#integrations)).
+
+`latest` is the newest release. Pin a version with `:0.1` (newest 0.1.x) or
+`:0.1.0`, or follow `main` for the newest commit, which may not be released
+yet. The app shows the version at the bottom of the page; what changed is in
+[CHANGELOG.md](CHANGELOG.md).
 
 You'll need that computer's IP address on your network (e.g. `192.168.1.20`)
 for the grinder and your phone. It must stay the same, so give it a fixed IP
@@ -73,6 +81,30 @@ A blue chain icon on the recipe means GbS is active.
 Shots of 10 s or less and over 80 s are ignored by the grinder, as is an
 aborted shot.
 
+## Integrations
+
+Entering the numbers on your phone is the default and needs no setup.
+Optionally, let an *integration* report the shot instead: a vendor cloud, a
+connected scale, a home-automation hub. After the knob press it waits for the
+shot, then sends its time and weight to the grinder by itself. You can still
+enter or correct a shot on your phone; whichever comes first wins, also when
+several integrations run at once.
+
+Tap the green **+** at the top right of the app, pick one and fill in its
+form. Each
+integration gets a card showing whether it is connected and what it last
+sent; **Remove** stops it. Integrations added in the app are saved in the
+settings file (`--config`, `/data/gbs-anywhere.json` in Docker, holding their
+passwords), so keep the `/data` volume. Without a settings file they last
+until the next restart.
+
+Integrations can also be set with flags or environment variables. Those show
+"Set on the command line" and can only be turned off by removing the flags.
+
+| integration | reads | setup |
+|---|---|---|
+| La Marzocco cloud | time and weight from a connected La Marzocco's coffee log | [src/integration/la_marzocco](src/integration/la_marzocco/README.md) |
+
 ## Options
 
 Extra flags go after the image name (Docker) or after `--` (cargo):
@@ -80,8 +112,11 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | flag | default | what |
 |---|---|---|
 | `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long |
+| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for the integrations added in the app; also `CONFIG_FILE` |
+| `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs |
 | `--log <file>` | off | append every grinder request to a file |
 | `-p, --ports <list>` | 80 | ports to serve on |
+| `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
 
 Without Docker you can also type the shot into the console: `30 36` means
 30 s, 36 g. `h` lists the other commands.
@@ -92,11 +127,17 @@ JSON on the same port as the app, for scripts or another front end:
 
 | method | path | what |
 |---|---|---|
-| GET | `/api/state` | phase, machine state, last shot, grinder connection |
+| GET | `/api/state` | version, phase, machine state, last shot, grinder connection, integrations |
 | GET | `/api/events?after=N` | events with `seq > N` |
 | GET | `/api/events/stream` | the same, live, as server-sent events |
 | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` reports the running shot |
 | POST | `/api/shot/abort` | aborts the running shot (the grinder skips it) |
+| GET | `/api/integrations/kinds` | the integrations that can be added, with their setup forms |
+| POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{"username":"…","password":"…"}}` adds an integration |
+| DELETE | `/api/integrations/<id>` | removes an integration added in the app |
+
+The API has no login: anyone on your network who can open the app can add or
+remove integrations, as they can report shots. Passwords are never sent back.
 
 ## Build
 
@@ -105,3 +146,19 @@ cargo build --release     # binary: target/release/gbs-anywhere
 cargo test
 docker build -t gbs-anywhere .
 ```
+
+### Adding an integration
+
+Each integration is one folder under `src/integration/`; `la_marzocco/` is a
+complete example. The layout and the rules every integration follows are in
+the [`integration` module docs](src/integration/mod.rs) (`cargo doc --open`).
+The app builds its list behind **+** and the setup form from the folder's
+`KIND`, so nothing in `web/` changes.
+
+## License
+
+Copyright 2026 Skamba and the gbs-anywhere contributors.
+
+[GNU AGPL v3 or later](LICENSE): anyone, cafés included, may use, change and
+share it. If you share a changed version, or let other people use one over a
+network, you must offer them its source code under the same license.

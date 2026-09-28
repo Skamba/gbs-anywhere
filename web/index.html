@@ -15,6 +15,7 @@
     --accent: #9a5b2e;
     --accent-ink: #ffffff;
     --ok: #2f7d4f;
+    --ok-ink: #ffffff;
     --warn: #b36b00;
     --bad: #b3261e;
     --shadow: 0 1px 2px rgba(34, 27, 22, .06), 0 4px 16px rgba(34, 27, 22, .06);
@@ -29,6 +30,7 @@
       --accent: #d08a52;
       --accent-ink: #1c1714;
       --ok: #6cc08c;
+      --ok-ink: #10241a;
       --warn: #e2a33d;
       --bad: #ef7a70;
       --shadow: none;
@@ -36,7 +38,7 @@
   }
   :root[data-theme="dark"] {
     --bg: #1c1714; --card: #27201b; --ink: #f3ebe4; --muted: #a8998d; --line: #3a3029;
-    --accent: #d08a52; --accent-ink: #1c1714; --ok: #6cc08c; --warn: #e2a33d; --bad: #ef7a70; --shadow: none;
+    --accent: #d08a52; --accent-ink: #1c1714; --ok: #6cc08c; --ok-ink: #10241a; --warn: #e2a33d; --bad: #ef7a70; --shadow: none;
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; }
@@ -113,16 +115,107 @@
   ul.history .main { font-weight: 600; }
   ul.history .meta { color: var(--muted); font-size: 14px; text-align: right; }
   .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+  .version { color: var(--muted); font-size: 12px; text-align: center; margin: 24px 0 8px; }
+
+  .integ { padding: 16px 18px; }
+  .integ-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .integ-icon {
+    flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
+    background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+  }
+  .integ-icon svg { width: 24px; height: 24px; }
+  .integ-icon .mark {
+    width: 30px; height: 30px; background: currentColor;
+    -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat;
+  }
+  .integ-name { flex: 1 1 auto; min-width: 0; }
+  .integ-title { margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  .integ-subject { margin: 0; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .integ .pill { flex: none; }
+  .pill.watch .dot { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .pill.warn .dot { background: var(--warn); }
+  .integ-detail { margin: 12px 0 0; font-size: 15px; color: var(--ink); overflow-wrap: anywhere; }
+  .integ-detail::first-letter { text-transform: uppercase; }
+  .integ.error .integ-detail { color: var(--bad); }
+  .integ.watching .integ-detail { color: var(--accent); }
+  .integ-foot { margin: 6px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .auto { color: var(--ok); font-size: 14px; margin: 8px 0 0; }
+  .integ-foot { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .integ-foot button.quiet { width: auto; padding: 4px 0; font-size: 13px; }
+  .integ-foot button.quiet:hover { color: var(--bad); }
+
+  .header-end { display: flex; align-items: center; gap: 8px; flex: none; }
+  button.add {
+    flex: none; width: 30px; height: 30px; padding: 0; border-radius: 50%; display: grid; place-items: center;
+    background: var(--ok); border-color: var(--ok); color: var(--ok-ink);
+  }
+  button.add svg { width: 18px; height: 18px; transition: transform .15s ease; }
+  /* Open: the + turns into a × that closes the panel. */
+  button.add[aria-expanded="true"] svg { transform: rotate(45deg); }
+
+  ul.kinds { list-style: none; margin: 14px 0 8px; padding: 0; }
+  ul.kinds button {
+    display: flex; align-items: center; gap: 12px; text-align: left; font-weight: 500;
+    padding: 12px; margin-bottom: 8px;
+  }
+  ul.kinds button:hover { border-color: var(--ok); }
+  ul.kinds .kind-text { flex: 1 1 auto; min-width: 0; }
+  ul.kinds .kind-title { display: block; font-weight: 650; }
+  ul.kinds .kind-sum { display: block; font-size: 13px; color: var(--muted); }
+  ul.kinds .arrow { flex: none; width: 18px; height: 18px; color: var(--muted); }
+  .form-field { margin: 14px 0 0; }
+  .form-field input {
+    width: 100%; min-width: 0; font: inherit; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; outline: none;
+  }
+  .form-field input:focus { border-color: var(--ok); }
+  .form-field .help { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+  .form-field .opt { font-weight: 400; }
+  .add-head-step { margin: 0; }
+  #add-summary { margin-top: 12px; }
+  #add-error { margin: 14px 0 0; }
+  #add-error:empty { display: none; }
+  #add-form .row { margin-top: 16px; }
+  #add-form button.primary { background: var(--ok); border-color: var(--ok); color: var(--ok-ink); }
 </style>
 </head>
 <body>
 <main>
   <header>
     <h1>Grind-by-Sync</h1>
-    <span id="link" class="pill"><span class="dot"></span><span id="link-text">connecting…</span></span>
+    <div class="header-end">
+      <span id="link" class="pill"><span class="dot"></span><span id="link-text">connecting…</span></span>
+      <button id="add-integration" class="add" type="button" aria-expanded="false" aria-controls="add-panel"
+        aria-label="Add integration" title="Add integration" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
+    </div>
   </header>
 
   <div id="banner" class="banner" hidden></div>
+
+  <!-- Add integration: pick a kind, then fill in its form -->
+  <section id="add-panel" class="card" hidden>
+    <div id="add-pick">
+      <p class="step">Add integration</p>
+      <p class="title">What reports your shots?</p>
+      <p class="sub">Optional: it sends the time and weight to the grinder after each knob press, so you don’t have to type them.</p>
+      <ul class="kinds" id="kind-list"></ul>
+      <button id="add-cancel" class="quiet" type="button">Cancel</button>
+    </div>
+    <form id="add-form" autocomplete="off" hidden>
+      <div class="integ-head">
+        <div class="integ-icon" id="add-icon"></div>
+        <div class="integ-name"><p class="step add-head-step">Add integration</p><p class="integ-title" id="add-title"></p></div>
+      </div>
+      <p class="sub" id="add-summary"></p>
+      <div id="add-fields"></div>
+      <p class="hint warn" id="add-error"></p>
+      <p class="hint" id="add-note" hidden></p>
+      <div class="row">
+        <button class="primary" id="add-submit" type="submit">Add</button>
+        <button id="add-back" class="quiet" type="button">Back</button>
+      </div>
+    </form>
+  </section>
 
   <!-- Step 1: grind -->
   <section id="s-grind" class="card" hidden>
@@ -141,9 +234,10 @@
   <!-- Step 3: brewing -->
   <section id="s-brew" class="card" hidden>
     <p class="step">Step 3 · shot running</p>
-    <p class="title">Pull the shot and enter what you measured</p>
+    <p class="title" id="brew-title">Pull the shot and enter what you measured</p>
     <div class="timer" id="brew-timer">0:00</div>
     <p class="sub" id="brew-left">since the knob press</p>
+    <p class="auto" id="auto-hint" hidden></p>
     <form id="shot-form" autocomplete="off">
       <div class="fields">
         <div>
@@ -170,6 +264,8 @@
     <p class="sub">The grinder is processing the shot. Check its screen for the new grind setting.</p>
   </section>
 
+  <div id="integrations" hidden></div>
+
   <ol class="steps" id="steps">
     <li data-s="grind">Grind with the GbS recipe</li>
     <li data-s="knob">Press the grinder knob, start the shot</li>
@@ -180,6 +276,8 @@
   <h2>Shots this session</h2>
   <ul class="history" id="history"></ul>
   <p class="empty" id="history-empty">No shots yet.</p>
+
+  <p class="version" id="version"></p>
 </main>
 
 <script>
@@ -189,6 +287,9 @@
   const MAX_MS = 80000;   // grinder rejects shots over 80 s
   let state = null, events = [], lastSeq = -1, step = null, busy = false;
   let weightTouched = false;
+  // Titles of integrations that will report the shot themselves.
+  let autoTitles = [];
+  const joinTitles = (t) => t.join(" and ");
 
   async function api(path, opts) {
     const r = await fetch(path, Object.assign({ headers: { "content-type": "application/json" } }, opts));
@@ -217,12 +318,188 @@
     return e && e.kind === "grind_result" ? "knob" : "grind";
   }
 
+  // The options that can be added (GET /api/integrations/kinds): title,
+  // summary, icon and setup form each. A cloud glyph for anything unknown.
+  let kinds = null, persistent = false;
+  const kindOf = (id) => (kinds || []).find((k) => k.id === id);
+  const DEFAULT_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<path d="M7 18a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 9.5a3.5 3.5 0 0 1-.5 7H7z"/></svg>';
+  const ARROW = '<svg class="arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>';
+  const HEALTH = {
+    starting: ["warn", "connecting…"], connected: ["ok", "connected"], watching: ["watch", "watching"],
+    error: ["bad", "error"], stopped: ["bad", "stopped"],
+  };
+
+  // Icons from the --icons directory, probed once per integration kind
+  // (undefined: not probed yet, null: none, string: URL).
+  const customIcons = {};
+  async function probeIcon(id) {
+    customIcons[id] = null;
+    for (const ext of ["svg", "png", "webp"]) {
+      try {
+        const r = await fetch("/icons/" + id + "." + ext, { method: "HEAD", cache: "no-store" });
+        if (r.ok) { customIcons[id] = "/icons/" + id + "." + ext; return; }
+      } catch (_) {}
+    }
+  }
+
+  function iconFor(kindId) {
+    const icon = document.createElement("div"); icon.className = "integ-icon";
+    if (customIcons[kindId] === undefined) probeIcon(kindId);
+    if (customIcons[kindId]) {
+      const mark = document.createElement("span"); mark.className = "mark";
+      mark.style.setProperty("--icon", "url('" + customIcons[kindId] + "')");
+      icon.append(mark);
+    } else {
+      const k = kindOf(kindId);
+      icon.innerHTML = (k && k.icon) || DEFAULT_ICON;
+    }
+    return icon;
+  }
+
+  function integrationCard(i) {
+    const card = document.createElement("section"); card.className = "card integ " + i.health;
+    const head = document.createElement("div"); head.className = "integ-head";
+    const icon = iconFor(i.kind);
+    const name = document.createElement("div"); name.className = "integ-name";
+    const title = document.createElement("p"); title.className = "integ-title"; title.textContent = i.title;
+    const subject = document.createElement("p"); subject.className = "integ-subject";
+    subject.textContent = i.subject || "";
+    subject.hidden = !i.subject;
+    name.append(title, subject);
+    const [cls, label] = HEALTH[i.health] || ["", i.health];
+    const pill = document.createElement("span"); pill.className = "pill " + cls;
+    const dot = document.createElement("span"); dot.className = "dot";
+    pill.append(dot, document.createTextNode(label));
+    head.append(icon, name, pill);
+    const detail = document.createElement("p"); detail.className = "integ-detail";
+    detail.textContent = i.health === "error" ? (i.last_error || i.detail || "error")
+      : i.health === "stopped" ? "stopped" : (i.detail || "");
+    card.append(head, detail);
+    const foot = document.createElement("div"); foot.className = "integ-foot";
+    const stats = document.createElement("span");
+    if (i.reports > 0 && i.last_report) {
+      stats.textContent = i.reports + (i.reports === 1 ? " shot" : " shots") + " sent to the grinder this session · last "
+        + (i.last_report.time_ms / 1000) + " s, " + g(i.last_report.volume_ml);
+    } else if (i.source === "command_line") {
+      stats.textContent = "Set on the command line";
+    }
+    foot.append(stats);
+    if (i.source === "app") {
+      const rm = document.createElement("button"); rm.type = "button"; rm.className = "quiet"; rm.textContent = "Remove";
+      rm.addEventListener("click", () => removeIntegration(i));
+      foot.append(rm);
+    }
+    if (foot.textContent) card.append(foot);
+    return card;
+  }
+
+  async function removeIntegration(i) {
+    if (!confirm("Remove " + i.title + (i.subject ? " (" + i.subject + ")" : "") + "? It stops reporting shots.")) return;
+    try { await api("/api/integrations/" + encodeURIComponent(i.id), { method: "DELETE" }); await tick(); }
+    catch (err) { alert("Could not remove it: " + err.message); }
+  }
+
+  // --- Add integration ---------------------------------------------------------
+  let adding = null;  // the kind whose form is open
+
+  async function loadKinds() {
+    try {
+      const r = await api("/api/integrations/kinds");
+      kinds = r.kinds || []; persistent = !!r.persistent;
+      $("add-integration").hidden = kinds.length === 0;
+    } catch (_) {}
+  }
+
+  function openAdd(open) {
+    $("add-panel").hidden = !open;
+    $("add-integration").setAttribute("aria-expanded", String(open));
+    if (!open) { adding = null; return; }
+    showPick();
+    $("add-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function showPick() {
+    adding = null;
+    $("add-pick").hidden = false; $("add-form").hidden = true;
+    $("kind-list").replaceChildren(...(kinds || []).map((k) => {
+      const li = document.createElement("li");
+      const b = document.createElement("button"); b.type = "button";
+      const text = document.createElement("span"); text.className = "kind-text";
+      const t = document.createElement("span"); t.className = "kind-title"; t.textContent = k.title;
+      const sum = document.createElement("span"); sum.className = "kind-sum"; sum.textContent = k.summary;
+      text.append(t, sum);
+      b.append(iconFor(k.id), text);
+      b.insertAdjacentHTML("beforeend", ARROW);
+      b.addEventListener("click", () => showForm(k));
+      li.append(b);
+      return li;
+    }));
+  }
+
+  function showForm(k) {
+    adding = k;
+    $("add-pick").hidden = true; $("add-form").hidden = false;
+    $("add-icon").replaceWith(Object.assign(iconFor(k.id), { id: "add-icon" }));
+    $("add-title").textContent = k.title;
+    $("add-summary").textContent = k.summary;
+    $("add-error").textContent = "";
+    $("add-note").hidden = persistent;
+    $("add-note").textContent = "Not saved: gbs-anywhere runs without a settings file (--config), so this integration is gone after a restart.";
+    $("add-fields").replaceChildren(...k.fields.map((f) => {
+      const box = document.createElement("div"); box.className = "form-field";
+      const label = document.createElement("label"); label.htmlFor = "af-" + f.key; label.textContent = f.label;
+      if (!f.required) {
+        const opt = document.createElement("span"); opt.className = "opt"; opt.textContent = " (optional)";
+        label.append(opt);
+      }
+      const input = document.createElement("input");
+      input.id = "af-" + f.key; input.name = f.key; input.required = f.required;
+      input.type = { email: "email", password: "password" }[f.input] || "text";
+      if (f.input === "number") input.inputMode = "decimal";
+      if (f.input === "email") input.autocomplete = "username";
+      if (f.input === "password") input.autocomplete = "current-password";
+      input.autocapitalize = "off"; input.spellcheck = false;
+      if (f.default) input.placeholder = f.default;
+      box.append(label, input);
+      if (f.help) {
+        const help = document.createElement("p"); help.className = "help"; help.textContent = f.help;
+        box.append(help);
+      }
+      return box;
+    }));
+    const first = $("add-fields").querySelector("input");
+    if (first) first.focus();
+  }
+
+  $("add-integration").addEventListener("click", () => openAdd($("add-panel").hidden));
+  $("add-cancel").addEventListener("click", () => openAdd(false));
+  $("add-back").addEventListener("click", showPick);
+  $("add-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!adding || busy) return;
+    const settings = {};
+    for (const input of $("add-fields").querySelectorAll("input")) {
+      const v = input.type === "password" ? input.value : input.value.trim();
+      if (v) settings[input.name] = v;
+    }
+    busy = true; $("add-submit").disabled = true; $("add-error").textContent = "";
+    try {
+      await api("/api/integrations", { method: "POST", body: JSON.stringify({ kind: adding.id, settings }) });
+      openAdd(false);
+      await tick();
+    } catch (err) {
+      $("add-error").textContent = err.message;
+    } finally { busy = false; $("add-submit").disabled = false; }
+  });
+
   function render() {
     if (!state) return;
     const link = state.grinder, age = link.last_poll_age_ms;
     const on = age != null && age < 6000;
     $("link").className = "pill " + (on ? "ok" : "bad");
     $("link-text").textContent = on ? "grinder connected" : "no grinder";
+    $("version").textContent = state.version ? "gbs-anywhere " + state.version : "";
 
     const b = $("banner");
     const busyPhase = state.phase.phase !== "ready";
@@ -233,6 +510,17 @@
       b.hidden = false; b.className = "banner bad";
       b.textContent = "The grinder is not polling. Is it on and paired with this ‘Xenia’?";
     } else b.hidden = true;
+
+    const integs = state.integrations || [];
+    const box = $("integrations");
+    box.hidden = integs.length === 0;
+    box.replaceChildren(...integs.map(integrationCard));
+    autoTitles = integs.filter((i) => i.health === "connected" || i.health === "watching").map((i) => i.title);
+    const auto = autoTitles.length > 0;
+    $("steps").querySelector('[data-s="brew"]').textContent = auto
+      ? joinTitles(autoTitles) + (autoTitles.length > 1 ? " send" : " sends") + " the time and weight"
+      : "Enter time and weight";
+    $("brew-title").textContent = auto ? "Pull the shot" : "Pull the shot and enter what you measured";
 
     const s = currentStep();
     if (s !== step) {
@@ -252,6 +540,10 @@
       const limit = state.config.brew_timeout ? state.config.brew_timeout.secs * 1000 : null;
       $("brew-left").textContent = "since the knob press" + (limit ? " · " + fmtClock(limit - ms) + " left to enter it" : "");
       if (!weightTouched && target && !$("f-weight").value) $("f-weight").value = target;
+      const ah = $("auto-hint");
+      ah.hidden = !auto;
+      ah.textContent = joinTitles(autoTitles) + " will send the time and weight when the shot ends."
+        + " Enter them by hand only if that doesn't happen.";
     }
     if (s === "sent" && state.phase.result) {
       const r = state.phase.result;
@@ -302,13 +594,19 @@
     $("send").disabled = !ok || busy;
     $("send").textContent = ok ? "Send to grinder" : "Enter the time first";
     h.className = "hint";
-    if (!isFinite(t)) { h.textContent = "Always use the same timer, from the moment the pump starts."; return; }
+    if (!isFinite(t)) {
+      h.textContent = autoTitles.length
+        ? "Manual entry, in case the automatic report doesn't come."
+        : "Always use the same timer, from the moment the pump starts.";
+      return;
+    }
     if (t * 1000 <= MIN_MS) { h.className = "hint warn"; h.textContent = "≤ 10 s: the grinder ignores this shot and asks you to go finer yourself."; return; }
     if (t * 1000 > MAX_MS) { h.className = "hint warn"; h.textContent = "Over 80 s: the grinder ignores this shot."; return; }
     h.textContent = "";
   }
 
   async function tick() {
+    if (!kinds) await loadKinds();
     try {
       state = await api("/api/state");
       if (state.last_seq !== lastSeq) {
