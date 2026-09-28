@@ -422,6 +422,33 @@ mod tests {
         );
     }
 
+    /// Pins the installation derived from a login, so a crypto crate update
+    /// cannot silently give existing users a different installation.
+    #[test]
+    fn installation_key_and_signature_are_stable() {
+        let a = InstallationKey::derive("rick@example.org", "hunter2");
+        assert_eq!(a.installation_id, "1f7adb07-de9a-4453-941f-1b054dd04a7a");
+        assert_eq!(
+            a.public_key_b64(),
+            "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEVCFLIfS/hQzZ3TwM1pAwaHVBw5YvJzV4GZbaB5BaViDxBYR+mIzSXprUaOhqPaiBXBfb5CovzvMom1//AGD4PA=="
+        );
+        assert_eq!(
+            B64.encode(a.secret),
+            "nKkcrK3K9+vUSI1k4VD/FTWNPZfbRrM+E0DFDogvf4E="
+        );
+        // ECDSA here is deterministic (RFC 6979), so the signature is too.
+        let headers =
+            a.request_headers_with("6f1d2c3b-4a59-4e6f-9a8b-7c6d5e4f3a2b", "1790000000000");
+        let sig = headers
+            .iter()
+            .find(|(h, _)| *h == "X-Request-Signature")
+            .unwrap();
+        assert_eq!(
+            sig.1,
+            "MEQCIG24suhbxEwYgSZdIohWLaHKCog90AWRlJFEeDoMjTE8AiBxJbWCXR7KR380KtFggmYPlqYsgR1vsnlPkovW3gOroA=="
+        );
+    }
+
     #[test]
     fn installation_is_deterministic_and_signs() {
         let a = InstallationKey::derive("rick@example.org", "hunter2");
