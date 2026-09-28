@@ -10,7 +10,12 @@ updates:
     cooldown:
       default-days: 7
     groups:
-      # Major versions get their own pull request: they may need code changes.
+      # p256 and sha2 share the RustCrypto base crates; updated one at a time,
+      # each would pull in a second copy of them. Majors included.
+      rustcrypto:
+        patterns: ["p256", "sha2"]
+      # Other major versions get their own pull request: they may need code
+      # changes.
       cargo:
         patterns: ["*"]
         update-types: [minor, patch]
