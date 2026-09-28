@@ -4,9 +4,14 @@
 *.log
 logs/
 
+# Private notes and reports, not for the public repo
+/docs/
+
 # Local settings and editor/OS noise
 .env
 .env.*
+CLAUDE.local.md
+.claude/settings.local.json
 .vscode/
 .idea/
 *.swp

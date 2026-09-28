@@ -14,13 +14,15 @@
 
 mod control_api;
 mod grinder_api;
+#[cfg(test)]
+mod tests;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::integration::{Status, StatusSnapshot};
+use crate::integration::Integrations;
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{Machine, MachineConfig};
 use tokio::io::AsyncWriteExt;
@@ -35,7 +37,7 @@ pub struct Server {
     inner: Mutex<Inner>,
     events: broadcast::Sender<EventRecord>,
     transcript: Option<tokio::sync::Mutex<tokio::fs::File>>,
-    integrations: Mutex<Vec<Status>>,
+    integrations: Integrations,
     icons_dir: OnceLock<PathBuf>,
 }
 
@@ -65,7 +67,7 @@ impl Server {
             }),
             events: broadcast::channel(256).0,
             transcript: None,
-            integrations: Mutex::new(Vec::new()),
+            integrations: Integrations::new(),
             icons_dir: OnceLock::new(),
         })
     }
@@ -116,22 +118,9 @@ impl Server {
         self.icons_dir.get().map(PathBuf::as_path)
     }
 
-    /// Makes an integration's status visible in the API and the app.
-    pub fn register_integration(&self, status: Status) {
-        self.integrations
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push(status);
-    }
-
-    /// Current status of every integration, in registration order.
-    pub fn integrations(&self) -> Vec<StatusSnapshot> {
-        self.integrations
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .map(Status::snapshot)
-            .collect()
+    /// The running integrations (vendor clouds, scales, hubs): start, add, remove.
+    pub fn integrations(&self) -> &Integrations {
+        &self.integrations
     }
 
     fn note_request(&self, peer: SocketAddr, poll: bool) {

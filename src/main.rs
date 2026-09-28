@@ -8,6 +8,7 @@
 //! time and weight in the app (or type `30 36` here) -> the grinder adjusts.
 //!
 //! Integrations ([`gbs_anywhere::integration`]) can report the shot instead:
+//! add them in the app (saved in `--config`) or with their flags, e.g.
 //! `--lm-username` for the La Marzocco cloud.
 
 use std::net::{IpAddr, SocketAddr};
@@ -16,7 +17,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::Parser;
-use gbs_anywhere::integration::{self, la_marzocco};
+use gbs_anywhere::integration;
 use gbs_anywhere::protocol::machine::EventRecord;
 use gbs_anywhere::protocol::{MachineConfig, MachineEvent, ShotResult};
 use gbs_anywhere::server::{self, ServeConfig, Server};
@@ -26,7 +27,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 #[derive(Parser)]
 #[command(
     name = "gbs-anywhere",
-    version,
+    version = gbs_anywhere::version(),
     about = "Grind-by-Sync for the Mahlkönig E64 WS with any espresso machine"
 )]
 struct Args {
@@ -66,21 +67,25 @@ struct Args {
     #[arg(long)]
     no_app: bool,
 
-    /// Directory with your own icons for the app: `<integration id>.svg` or
+    /// Directory with your own icons for the app: `<integration>.svg` or
     /// `.png` (e.g. la_marzocco.svg) replaces the built-in glyph.
     #[arg(long, env = "ICONS_DIR", value_name = "DIR")]
     icons: Option<PathBuf>,
 
+    /// Settings file for the integrations added in the app (created if missing;
+    /// holds their passwords). Without it they last until the next restart.
+    #[arg(long, env = "CONFIG_FILE", value_name = "FILE")]
+    config: Option<PathBuf>,
+
     #[command(flatten)]
-    lm: la_marzocco::LaMarzoccoArgs,
+    integrations: integration::CliArgs,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     init_tracing();
-    // Add a new machine integration here (see `integration`).
-    let integrations: Vec<_> = [args.lm.build()?].into_iter().flatten().collect();
+    tracing::info!("gbs-anywhere {}", gbs_anywhere::version());
     let mut config = MachineConfig {
         finishing_hold: Duration::from_secs_f64(args.finishing_hold_s),
         brew_timeout: (args.brew_timeout_s > 0.0)
@@ -130,7 +135,13 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tokio::spawn(print_events(x.clone()));
-    integration::spawn_all(&x, integrations);
+    for (kind, settings) in args.integrations.configured() {
+        x.integrations().start_cli(&x, kind, &settings)?;
+    }
+    if let Some(path) = &args.config {
+        let n = x.integrations().load(&x, path, integration::KINDS)?;
+        tracing::info!("settings in {}: {n} added in the app", path.display());
+    }
     if !args.no_stdin {
         println!("{HELP}");
         tokio::spawn(stdin_loop(x.clone()));

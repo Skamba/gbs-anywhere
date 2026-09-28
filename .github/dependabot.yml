@@ -1,0 +1,26 @@
+# Grouped pull requests once a month; ci.yml checks each one.
+# Security fixes come separately and right away once Dependabot security
+# updates are on in the repository settings.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      # Major versions get their own pull request: they may need code changes.
+      cargo:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]

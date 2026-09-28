@@ -9,27 +9,49 @@
 //! in the app and in `GET /api/state`). Everything in between, protocols and
 //! logins and reconnects, is the integration's own business.
 //!
+//! Each kind of integration is a [`Kind`]: a name, an icon, a setup form and a way to
+//! build the integration from that form. People add one in the app with the
+//! **+** button (saved in the `--config` file) or on the command line;
+//! [`Integrations`] runs them all, so several can run side by side. The
+//! first one to report a shot wins.
+//!
 //! Included: [`la_marzocco`], which reads the La Marzocco cloud's coffee log.
 //!
 //! # Adding one
 //!
-//! 1. Create `src/integration/<vendor>.rs` with:
-//!    * a `clap::Args` struct for its flags (a unique struct name, prefixed
-//!      field names such as `lm_username`, `next_help_heading`, `env`
-//!      fallbacks, hide secrets in help) and a `build()` on it that returns
-//!      the integration when its flags are set, or a clear error when they
-//!      are incomplete;
-//!    * a type implementing [`Integration`]. In `run`, loop forever: connect,
-//!      set the status, wait for [`Link::grinder_brews`], measure, call
-//!      [`Link::report`]; on failure set [`Status::error`] and back off with
-//!      [`Backoff`].
-//! 2. In `main.rs`, flatten the args into the CLI and add `build()`'s result
-//!    to the list given to [`spawn_all`].
+//! Every integration is a folder `src/integration/<id>/` with this layout:
+//!
+//! | file | what |
+//! |---|---|
+//! | `mod.rs` | module docs and `pub static KIND: Kind`, wiring the files below |
+//! | `config.rs` | the setup form (`FIELDS`), the typed config built from [`Settings`], and the `clap::Args` for its flags |
+//! | `run.rs` | the task: a type implementing [`Integration`] |
+//! | `icon.svg` | 24×24 glyph drawn with `currentColor`; no vendor logos (trademarks) |
+//! | `README.md` | what it needs, how it behaves, its flags |
+//!
+//! Anything else the integration needs (a cloud client, a protocol parser) goes
+//! into more files in the same folder.
+//!
+//! * `config.rs`: field keys are short (`username`); flags are prefixed
+//!   (`--lm-username`), have `env` fallbacks, hide secrets in help, and
+//!   `settings()` maps them to the same keys. Give the struct
+//!   `#[group(id = "<id>")]` (every folder's is called `Args`) and a
+//!   `next_help_heading`.
+//!   [`Kind::create`] checks required fields and numbers for both; check
+//!   anything else when building the config.
+//! * `run.rs`: in `run`, loop forever: connect, set the status, wait for
+//!   [`Link::grinder_brews`], measure, call [`Link::report`]; on failure set
+//!   [`Status::error`] and back off with [`Backoff`].
+//! * Then list it here: `pub mod <id>;`, its `KIND` in [`KINDS`], and its
+//!   args in [`CliArgs`] and [`CliArgs::configured`].
 //!
 //! [`Link::report`] applies the rules every integration must follow: a shot
 //! only counts while the grinder is waiting after a knob press, and a missing
 //! weight falls back to the recipe weight the grinder sent. Keep vendor code
 //! free of those so all integrations behave the same.
+
+mod kind;
+mod manager;
 
 pub mod la_marzocco;
 
@@ -45,44 +67,37 @@ use crate::protocol::machine::EventRecord;
 use crate::protocol::{MachineError, MachineEvent, Phase, ShotResult};
 use crate::server::Server;
 
+pub use kind::{Field, Input, Kind, Settings};
+pub use manager::{ChangeError, Integrations, Source, View};
+
+/// Every integration, in the order the app lists them.
+pub static KINDS: &[&Kind] = &[&la_marzocco::KIND];
+
+/// The command-line flags of every integration.
+#[derive(Debug, Clone, clap::Args)]
+pub struct CliArgs {
+    #[command(flatten)]
+    la_marzocco: la_marzocco::config::Args,
+}
+
+impl CliArgs {
+    /// The integrations whose flags are set, with their settings.
+    pub fn configured(&self) -> Vec<(&'static Kind, Settings)> {
+        [(&la_marzocco::KIND, self.la_marzocco.settings())]
+            .into_iter()
+            .filter_map(|(kind, settings)| Some((kind, settings?)))
+            .collect()
+    }
+}
+
 /// The future an integration runs as.
 pub type BoxFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// Something that reports shots on its own.
 pub trait Integration: Send + 'static {
-    /// Stable id for the API and the app, e.g. `la_marzocco`.
-    fn id(&self) -> &'static str;
-    /// Human name, e.g. `La Marzocco cloud`.
-    fn title(&self) -> &'static str;
-    /// Runs until the process ends: reconnect and retry inside. Returning
-    /// marks the integration as stopped.
+    /// Runs until the process ends or it is removed: reconnect and retry
+    /// inside. Returning marks the integration as stopped.
     fn run(self: Box<Self>, link: Link) -> BoxFuture;
-}
-
-/// Starts every integration and registers its status with the server.
-pub fn spawn_all(server: &Arc<Server>, integrations: Vec<Box<dyn Integration>>) {
-    if integrations.is_empty() {
-        return;
-    }
-    // Integrations that speak TLS share rustls; make sure a provider is set
-    // before the first one connects (reqwest leaves it to the application).
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    for integration in integrations {
-        let status = Status::new(integration.id(), integration.title());
-        server.register_integration(status.clone());
-        tracing::info!(
-            "{}: enabled, shots are reported automatically after a knob press",
-            integration.title()
-        );
-        let link = Link {
-            server: server.clone(),
-            status: status.clone(),
-        };
-        tokio::spawn(async move {
-            integration.run(link).await;
-            status.stopped();
-        });
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -224,10 +239,13 @@ pub enum Health {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusSnapshot {
-    pub id: &'static str,
-    pub title: &'static str,
+    /// This integration, e.g. `la_marzocco` or `la_marzocco-2`.
+    pub id: String,
+    /// Its kind ([`Kind::id`]).
+    pub kind: String,
+    pub title: String,
     pub health: Health,
-    /// What is being watched, once known: `MI004024 · Linea Mini R`.
+    /// What is being watched, once known: `MI000000 · Linea Mini R`.
     pub subject: String,
     /// The current state in one line, e.g. `last coffee 3 min ago: 25.1 s`.
     pub detail: String,
@@ -252,16 +270,18 @@ struct StatusInner {
 /// Shared, cheap to clone. Integrations set it; the server reads it.
 #[derive(Debug, Clone)]
 pub struct Status {
-    id: &'static str,
-    title: &'static str,
+    id: Arc<str>,
+    kind: Arc<str>,
+    title: Arc<str>,
     inner: Arc<Mutex<StatusInner>>,
 }
 
 impl Status {
-    pub fn new(id: &'static str, title: &'static str) -> Self {
+    pub fn new(id: impl Into<Arc<str>>, kind: &str, title: &str) -> Self {
         Self {
-            id,
-            title,
+            id: id.into(),
+            kind: kind.into(),
+            title: title.into(),
             inner: Arc::new(Mutex::new(StatusInner {
                 health: Health::Starting,
                 subject: String::new(),
@@ -274,12 +294,12 @@ impl Status {
         }
     }
 
-    pub fn id(&self) -> &'static str {
-        self.id
+    pub fn id(&self) -> &str {
+        &self.id
     }
 
-    pub fn title(&self) -> &'static str {
-        self.title
+    pub fn title(&self) -> &str {
+        &self.title
     }
 
     /// Names what is being watched (machine, account); shown above the
@@ -338,8 +358,9 @@ impl Status {
     pub fn snapshot(&self) -> StatusSnapshot {
         let s = self.lock();
         StatusSnapshot {
-            id: self.id,
-            title: self.title,
+            id: self.id.to_string(),
+            kind: self.kind.to_string(),
+            title: self.title.to_string(),
             health: s.health,
             subject: s.subject.clone(),
             detail: s.detail.clone(),
@@ -409,7 +430,7 @@ mod tests {
     fn link() -> Link {
         Link {
             server: Server::new(MachineConfig::default()),
-            status: Status::new("test", "Test"),
+            status: Status::new("test", "test", "Test"),
         }
     }
 
@@ -477,7 +498,7 @@ mod tests {
 
     #[test]
     fn status_tracks_health_and_errors() {
-        let s = Status::new("x", "X");
+        let s = Status::new("x", "x", "X");
         assert_eq!(s.snapshot().health, Health::Starting);
         s.error("boom");
         assert_eq!(s.snapshot().last_error.as_deref(), Some("boom"));
