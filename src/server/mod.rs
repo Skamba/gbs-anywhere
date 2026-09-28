@@ -16,10 +16,11 @@ mod control_api;
 mod grinder_api;
 
 use std::net::SocketAddr;
-use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::integration::{Status, StatusSnapshot};
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{Machine, MachineConfig};
 use tokio::io::AsyncWriteExt;
@@ -34,6 +35,8 @@ pub struct Server {
     inner: Mutex<Inner>,
     events: broadcast::Sender<EventRecord>,
     transcript: Option<tokio::sync::Mutex<tokio::fs::File>>,
+    integrations: Mutex<Vec<Status>>,
+    icons_dir: OnceLock<PathBuf>,
 }
 
 struct Inner {
@@ -62,6 +65,8 @@ impl Server {
             }),
             events: broadcast::channel(256).0,
             transcript: None,
+            integrations: Mutex::new(Vec::new()),
+            icons_dir: OnceLock::new(),
         })
     }
 
@@ -98,6 +103,35 @@ impl Server {
 
     pub fn grinder_link(&self) -> GrinderLink {
         self.lock().grinder.clone()
+    }
+
+    /// Serves the app's icons from `dir` (`GET /icons/<name>`): put
+    /// `<integration id>.svg` or `.png` there to replace a built-in glyph,
+    /// e.g. a vendor's official logo you are allowed to use.
+    pub fn set_icons_dir(&self, dir: PathBuf) {
+        let _ = self.icons_dir.set(dir);
+    }
+
+    pub fn icons_dir(&self) -> Option<&Path> {
+        self.icons_dir.get().map(PathBuf::as_path)
+    }
+
+    /// Makes an integration's status visible in the API and the app.
+    pub fn register_integration(&self, status: Status) {
+        self.integrations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(status);
+    }
+
+    /// Current status of every integration, in registration order.
+    pub fn integrations(&self) -> Vec<StatusSnapshot> {
+        self.integrations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(Status::snapshot)
+            .collect()
     }
 
     fn note_request(&self, peer: SocketAddr, poll: bool) {

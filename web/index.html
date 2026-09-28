@@ -113,6 +113,30 @@
   ul.history .main { font-weight: 600; }
   ul.history .meta { color: var(--muted); font-size: 14px; text-align: right; }
   .empty { color: var(--muted); font-size: 14px; padding: 8px 0; }
+
+  .integ { padding: 16px 18px; }
+  .integ-head { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .integ-icon {
+    flex: none; width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center;
+    background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent);
+  }
+  .integ-icon svg { width: 24px; height: 24px; }
+  .integ-icon .mark {
+    width: 30px; height: 30px; background: currentColor;
+    -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat;
+  }
+  .integ-name { flex: 1 1 auto; min-width: 0; }
+  .integ-title { margin: 0; font-weight: 650; letter-spacing: -.01em; }
+  .integ-subject { margin: 0; font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .integ .pill { flex: none; }
+  .pill.watch .dot { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+  .pill.warn .dot { background: var(--warn); }
+  .integ-detail { margin: 12px 0 0; font-size: 15px; color: var(--ink); overflow-wrap: anywhere; }
+  .integ-detail::first-letter { text-transform: uppercase; }
+  .integ.error .integ-detail { color: var(--bad); }
+  .integ.watching .integ-detail { color: var(--accent); }
+  .integ-foot { margin: 6px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .auto { color: var(--ok); font-size: 14px; margin: 8px 0 0; }
 </style>
 </head>
 <body>
@@ -141,9 +165,10 @@
   <!-- Step 3: brewing -->
   <section id="s-brew" class="card" hidden>
     <p class="step">Step 3 · shot running</p>
-    <p class="title">Pull the shot and enter what you measured</p>
+    <p class="title" id="brew-title">Pull the shot and enter what you measured</p>
     <div class="timer" id="brew-timer">0:00</div>
     <p class="sub" id="brew-left">since the knob press</p>
+    <p class="auto" id="auto-hint" hidden></p>
     <form id="shot-form" autocomplete="off">
       <div class="fields">
         <div>
@@ -170,6 +195,8 @@
     <p class="sub">The grinder is processing the shot. Check its screen for the new grind setting.</p>
   </section>
 
+  <div id="integrations" hidden></div>
+
   <ol class="steps" id="steps">
     <li data-s="grind">Grind with the GbS recipe</li>
     <li data-s="knob">Press the grinder knob, start the shot</li>
@@ -189,6 +216,9 @@
   const MAX_MS = 80000;   // grinder rejects shots over 80 s
   let state = null, events = [], lastSeq = -1, step = null, busy = false;
   let weightTouched = false;
+  // Titles of integrations that will report the shot themselves.
+  let autoTitles = [];
+  const joinTitles = (t) => t.join(" and ");
 
   async function api(path, opts) {
     const r = await fetch(path, Object.assign({ headers: { "content-type": "application/json" } }, opts));
@@ -217,6 +247,68 @@
     return e && e.kind === "grind_result" ? "knob" : "grind";
   }
 
+  // Inline icons per integration id; a cloud for anything unknown.
+  const ICONS = {
+    la_marzocco: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      + '<rect x="3.5" y="3" width="17" height="7" rx="1.8"/><path d="M6 10v3.5M18 10v3.5M9 13.5h6M12 13.5v2.5"/>'
+      + '<path d="M8 18h7.5a2.5 2.5 0 0 1-2.5 3H10.5A2.5 2.5 0 0 1 8 18z"/><path d="M3.5 21.5h17"/></svg>',
+    default: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+      + '<path d="M7 18a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 9.5a3.5 3.5 0 0 1-.5 7H7z"/></svg>',
+  };
+  const HEALTH = {
+    starting: ["warn", "connecting…"], connected: ["ok", "connected"], watching: ["watch", "watching"],
+    error: ["bad", "error"], stopped: ["bad", "stopped"],
+  };
+
+  // Icons from the --icons directory, probed once per integration id
+  // (undefined: not probed yet, null: none, string: URL).
+  const customIcons = {};
+  async function probeIcon(id) {
+    customIcons[id] = null;
+    for (const ext of ["svg", "png", "webp"]) {
+      try {
+        const r = await fetch("/icons/" + id + "." + ext, { method: "HEAD", cache: "no-store" });
+        if (r.ok) { customIcons[id] = "/icons/" + id + "." + ext; return; }
+      } catch (_) {}
+    }
+  }
+
+  function integrationCard(i) {
+    const card = document.createElement("section"); card.className = "card integ " + i.health;
+    const head = document.createElement("div"); head.className = "integ-head";
+    const icon = document.createElement("div"); icon.className = "integ-icon";
+    if (customIcons[i.id] === undefined) probeIcon(i.id);
+    if (customIcons[i.id]) {
+      const mark = document.createElement("span"); mark.className = "mark";
+      mark.style.setProperty("--icon", "url('" + customIcons[i.id] + "')");
+      icon.append(mark);
+    } else {
+      icon.innerHTML = ICONS[i.id] || ICONS.default;
+    }
+    const name = document.createElement("div"); name.className = "integ-name";
+    const title = document.createElement("p"); title.className = "integ-title"; title.textContent = i.title;
+    const subject = document.createElement("p"); subject.className = "integ-subject";
+    subject.textContent = i.subject || "";
+    subject.hidden = !i.subject;
+    name.append(title, subject);
+    const [cls, label] = HEALTH[i.health] || ["", i.health];
+    const pill = document.createElement("span"); pill.className = "pill " + cls;
+    const dot = document.createElement("span"); dot.className = "dot";
+    pill.append(dot, document.createTextNode(label));
+    head.append(icon, name, pill);
+    const detail = document.createElement("p"); detail.className = "integ-detail";
+    detail.textContent = i.health === "error" ? (i.last_error || i.detail || "error")
+      : i.health === "stopped" ? "stopped" : (i.detail || "");
+    card.append(head, detail);
+    if (i.reports > 0 && i.last_report) {
+      const foot = document.createElement("p"); foot.className = "integ-foot";
+      foot.textContent = i.reports + (i.reports === 1 ? " shot" : " shots") + " sent to the grinder this session · last "
+        + (i.last_report.time_ms / 1000) + " s, " + g(i.last_report.volume_ml);
+      card.append(foot);
+    }
+    return card;
+  }
+
   function render() {
     if (!state) return;
     const link = state.grinder, age = link.last_poll_age_ms;
@@ -233,6 +325,17 @@
       b.hidden = false; b.className = "banner bad";
       b.textContent = "The grinder is not polling. Is it on and paired with this ‘Xenia’?";
     } else b.hidden = true;
+
+    const integs = state.integrations || [];
+    const box = $("integrations");
+    box.hidden = integs.length === 0;
+    box.replaceChildren(...integs.map(integrationCard));
+    autoTitles = integs.filter((i) => i.health === "connected" || i.health === "watching").map((i) => i.title);
+    const auto = autoTitles.length > 0;
+    $("steps").querySelector('[data-s="brew"]').textContent = auto
+      ? joinTitles(autoTitles) + (autoTitles.length > 1 ? " send" : " sends") + " the time and weight"
+      : "Enter time and weight";
+    $("brew-title").textContent = auto ? "Pull the shot" : "Pull the shot and enter what you measured";
 
     const s = currentStep();
     if (s !== step) {
@@ -252,6 +355,10 @@
       const limit = state.config.brew_timeout ? state.config.brew_timeout.secs * 1000 : null;
       $("brew-left").textContent = "since the knob press" + (limit ? " · " + fmtClock(limit - ms) + " left to enter it" : "");
       if (!weightTouched && target && !$("f-weight").value) $("f-weight").value = target;
+      const ah = $("auto-hint");
+      ah.hidden = !auto;
+      ah.textContent = joinTitles(autoTitles) + " will send the time and weight when the shot ends."
+        + " Enter them by hand only if that doesn't happen.";
     }
     if (s === "sent" && state.phase.result) {
       const r = state.phase.result;
@@ -302,7 +409,12 @@
     $("send").disabled = !ok || busy;
     $("send").textContent = ok ? "Send to grinder" : "Enter the time first";
     h.className = "hint";
-    if (!isFinite(t)) { h.textContent = "Always use the same timer, from the moment the pump starts."; return; }
+    if (!isFinite(t)) {
+      h.textContent = autoTitles.length
+        ? "Manual entry, in case the automatic report doesn't come."
+        : "Always use the same timer, from the moment the pump starts.";
+      return;
+    }
     if (t * 1000 <= MIN_MS) { h.className = "hint warn"; h.textContent = "≤ 10 s: the grinder ignores this shot and asks you to go finer yourself."; return; }
     if (t * 1000 > MAX_MS) { h.className = "hint warn"; h.textContent = "Over 80 s: the grinder ignores this shot."; return; }
     h.textContent = "";

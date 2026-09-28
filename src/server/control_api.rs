@@ -3,7 +3,8 @@
 //! | method | path | what |
 //! |---|---|---|
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
-//! | GET | `/api/state` | phase, current mako reply, grind gate, last shot/grind, grinder link |
+//! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
+//! | GET | `/api/state` | phase, current mako reply, grind gate, last shot/grind, grinder link, integrations |
 //! | GET | `/api/events?after=N` | events with `seq > N` |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers |
@@ -18,8 +19,8 @@ use std::time::Duration;
 
 use crate::protocol::{MachineError, MakoState, ShotResult};
 use axum::Json;
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, State};
+use axum::http::{StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -32,6 +33,7 @@ use crate::server::Server;
 pub fn control_router(state: Arc<Server>) -> axum::Router {
     axum::Router::new()
         .route("/", get(app_page))
+        .route("/icons/{name}", get(icon))
         .route("/api/state", get(get_state))
         .route("/api/events", get(get_events))
         .route("/api/events/stream", get(stream_events))
@@ -46,6 +48,7 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
 /// The full state as JSON; also what the CLI prints.
 pub fn state_json(x: &Server) -> Value {
     let link = x.grinder_link();
+    let integrations = x.integrations();
     x.with(|m, now| {
         let mako = m.mako(now);
         let blocked = mako.grind_blocked().map(|b| {
@@ -64,6 +67,7 @@ pub fn state_json(x: &Server) -> Value {
                 "requests": link.requests,
                 "last_poll_age_ms": link.last_poll.map(|t| now.saturating_duration_since(t).as_millis() as u64),
             },
+            "integrations": integrations,
             "last_seq": m.last_seq(),
             "config": m.config(),
         })
@@ -72,6 +76,41 @@ pub fn state_json(x: &Server) -> Value {
 
 async fn app_page() -> axum::response::Html<&'static str> {
     axum::response::Html(include_str!("../../web/index.html"))
+}
+
+/// An icon file from the `--icons` directory. Names are restricted to
+/// `[a-z0-9_-]+.(svg|png|webp)` so nothing else on disk can be read.
+async fn icon(State(x): State<Arc<Server>>, Path(name): Path<String>) -> Response {
+    let Some(dir) = x.icons_dir() else {
+        return error(StatusCode::NOT_FOUND, "no --icons directory");
+    };
+    let Some((stem, ext)) = name.rsplit_once('.') else {
+        return error(StatusCode::NOT_FOUND, "no such icon");
+    };
+    let mime = match ext {
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        _ => return error(StatusCode::NOT_FOUND, "no such icon"),
+    };
+    if stem.is_empty()
+        || !stem
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+    {
+        return error(StatusCode::NOT_FOUND, "no such icon");
+    }
+    match tokio::fs::read(dir.join(&name)).await {
+        Ok(bytes) => (
+            [
+                (header::CONTENT_TYPE, mime),
+                (header::CACHE_CONTROL, "max-age=3600"),
+            ],
+            bytes,
+        )
+            .into_response(),
+        Err(_) => error(StatusCode::NOT_FOUND, "no such icon"),
+    }
 }
 
 async fn get_state(State(x): State<Arc<Server>>) -> Json<Value> {
