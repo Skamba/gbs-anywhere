@@ -16,7 +16,9 @@
 //! first one to report a shot wins.
 //!
 //! Included: [`la_marzocco`], which reads the La Marzocco cloud's coffee log.
-//!
+//! and [`eureka_precisa`], which weighs and times the shot with a Eureka
+//! Precisa scale over Bluetooth
+
 //! # Adding one
 //!
 //! Every integration is a folder `src/integration/<id>/` with this layout:
