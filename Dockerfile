@@ -30,3 +30,4 @@ VOLUME ["/data"]
 # network namespace, so port 80 works as nonroot with `-p 80:80`.
 EXPOSE 80
 ENTRYPOINT ["/usr/local/bin/gbs-anywhere", "--no-stdin", "--control", "off"]
+ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig:/usr/local/lib/pkgconfig
