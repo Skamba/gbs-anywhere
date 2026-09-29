@@ -479,8 +479,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "gbs-anywhere"
-version = "0.1.0"
+name = "gbs-anywhere-bt"
+version = "0.1"
 dependencies = [
  "anyhow",
  "axum",
