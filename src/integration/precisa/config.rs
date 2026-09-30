@@ -42,10 +42,20 @@ pub const FIELDS: &[Field] = &[
         required: false,
         default: "5",
     },
+    Field {
+        key: "live_ms",
+        label: "Live display refresh (ms)",
+        help: "How often the app updates weight and time during a shot: lower is smoother, \
+               higher means less traffic. 100 to 2000.",
+        input: Input::Number,
+        required: false,
+        default: "250",
+    },
 ];
 
 const DEFAULT_STABLE_S: f64 = 3.0;
 const DEFAULT_MIN_G: f64 = 5.0;
+const DEFAULT_LIVE_MS: f64 = 250.0;
 const DEFAULT_SCAN: Duration = Duration::from_secs(10);
 
 /// The scale to use and when a shot counts as over.
@@ -63,6 +73,9 @@ pub struct Config {
     pub stable_for: Duration,
     /// ... with at least this many grams in the cup.
     pub min_weight_g: f64,
+    /// How often the app refreshes the live display during a shot, and how
+    /// often a running shot is checked here.
+    pub live_every: Duration,
     /// How long one search for the scale lasts.
     pub scan_for: Duration,
 }
@@ -77,12 +90,17 @@ impl Config {
         if min_g <= 0.0 {
             bail!("minimum grams must be above 0");
         }
+        let live_ms = s.number("live_ms")?.unwrap_or(DEFAULT_LIVE_MS);
+        if !(100.0..=2000.0).contains(&live_ms) {
+            bail!("live display refresh must be between 100 and 2000 ms");
+        }
         Ok(Self {
             address: s.text("address").map(str::to_owned),
             name_prefix: s.text("name").unwrap_or(DEFAULT_NAME_PREFIX).to_owned(),
             drive_timer: s.text("timer") != Some("off"),
             stable_for: Duration::from_secs_f64(stable_s),
             min_weight_g: min_g,
+            live_every: Duration::from_secs_f64(live_ms / 1000.0),
             scan_for: DEFAULT_SCAN,
         })
     }
@@ -126,6 +144,11 @@ pub struct Args {
     /// Grams in the cup before a stable weight ends a shot.
     #[arg(long, env = "PRECISA_MIN_G", default_value_t = DEFAULT_MIN_G)]
     pub precisa_min_g: f64,
+
+    /// Milliseconds between live display updates in the app during a shot
+    /// (100 to 2000).
+    #[arg(long, env = "PRECISA_LIVE_MS", default_value_t = DEFAULT_LIVE_MS)]
+    pub precisa_live_ms: f64,
 }
 
 impl Args {
@@ -140,7 +163,8 @@ impl Args {
                 .with("name", Some(&self.precisa_name))
                 .with("timer", self.precisa_no_timer.then_some("off"))
                 .with("stable_s", Some(self.precisa_stable_s))
-                .with("min_g", Some(self.precisa_min_g)),
+                .with("min_g", Some(self.precisa_min_g))
+                .with("live_ms", Some(self.precisa_live_ms)),
         )
     }
 }
@@ -159,12 +183,14 @@ mod tests {
             precisa_no_timer: true,
             precisa_stable_s: 4.0,
             precisa_min_g: 8.0,
+            precisa_live_ms: 500.0,
         };
         let cfg = Config::from_settings(&args.settings().unwrap()).unwrap();
         assert_eq!(cfg.address.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
         assert!(!cfg.drive_timer);
         assert_eq!(cfg.stable_for, Duration::from_secs(4));
         assert_eq!(cfg.min_weight_g, 8.0);
+        assert_eq!(cfg.live_every, Duration::from_millis(500));
         assert!(KIND.create(&args.settings().unwrap(), false).is_ok());
 
         // The form: everything optional.
@@ -174,6 +200,7 @@ mod tests {
         assert_eq!(cfg.name_prefix, DEFAULT_NAME_PREFIX);
         assert!(cfg.drive_timer);
         assert_eq!(cfg.stable_for, Duration::from_secs(3));
+        assert_eq!(cfg.live_every, Duration::from_millis(250));
 
         let off = Args {
             precisa: false,
@@ -184,5 +211,7 @@ mod tests {
         assert!(Config::from_settings(&too_quick).is_err());
         let no_grams = Settings::new().with("min_g", Some("0"));
         assert!(Config::from_settings(&no_grams).is_err());
+        let too_often = Settings::new().with("live_ms", Some("50"));
+        assert!(Config::from_settings(&too_often).is_err());
     }
 }

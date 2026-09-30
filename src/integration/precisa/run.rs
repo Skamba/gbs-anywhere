@@ -28,8 +28,6 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const SILENCE: Duration = Duration::from_secs(5);
 /// Give up on a shot whose end is never seen.
 const MAX_SHOT: Duration = Duration::from_secs(120);
-/// How often a running shot is checked while the scale is quiet.
-const TICK: Duration = Duration::from_millis(250);
 const READY: &str = "ready, waiting for a knob press";
 
 /// The integration. See the module docs.
@@ -91,7 +89,7 @@ async fn serve(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<(
             }
             // Idle: show what is on the scale.
             reading = scale.next_reading() => {
-                show(link, reading?.grams, None);
+                show(link, cfg, reading?.grams, None);
             }
         }
     }
@@ -121,7 +119,7 @@ async fn shot(
     }
 
     let mut tracker = ShotTracker::new(cfg.end_rule());
-    let mut tick = tokio::time::interval(TICK);
+    let mut tick = tokio::time::interval(cfg.live_every);
     let mut grams_now = 0.0;
     let end: End = loop {
         tokio::select! {
@@ -129,7 +127,7 @@ async fn shot(
                 let reading = reading?;
                 let at = start.elapsed();
                 grams_now = reading.grams;
-                show(link, grams_now, Some(at));
+                show(link, cfg, grams_now, Some(at));
                 if let Some(end) = tracker.reading(at, reading) {
                     break end;
                 }
@@ -137,7 +135,7 @@ async fn shot(
             _ = tick.tick() => {
                 let at = start.elapsed();
                 // The clock runs on while the scale is quiet.
-                show(link, grams_now, Some(at));
+                show(link, cfg, grams_now, Some(at));
                 if let Some(end) = tracker.tick(at) {
                     break end;
                 }
@@ -164,7 +162,7 @@ async fn shot(
 
     let grams = tenth(end.grams);
     let secs = end.time.as_secs_f64();
-    show(link, end.grams, None);
+    show(link, cfg, end.grams, None);
     if test {
         tracing::info!("{TITLE}: test shot {secs:.1} s, {grams:.1} g (not reported)");
         link.status
@@ -181,11 +179,12 @@ async fn shot(
 }
 
 /// Puts the scale's weight, and during a shot its time, into the status for
-/// the app's live display.
-fn show(link: &Link, grams: f64, shot: Option<Duration>) {
+/// the app's live display, with how often the app should refresh it.
+fn show(link: &Link, cfg: &Config, grams: f64, shot: Option<Duration>) {
     link.status.live(Some(Live {
         grams: tenth(grams),
         shot_s: shot.map(|d| tenth(d.as_secs_f64())),
+        refresh_ms: u32::try_from(cfg.live_every.as_millis()).unwrap_or(u32::MAX),
     }));
 }
 

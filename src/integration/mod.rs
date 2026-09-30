@@ -316,6 +316,9 @@ pub struct Live {
     /// Seconds since the brew started while a shot is measured; `None`
     /// otherwise.
     pub shot_s: Option<f64>,
+    /// How often the app should refresh while showing this, in ms (the
+    /// integration's setting).
+    pub refresh_ms: u32,
 }
 
 #[derive(Debug)]
@@ -584,7 +587,7 @@ mod tests {
         assert_eq!(snap.subject, "thing");
         assert_eq!(snap.detail, "fine");
         assert_eq!(snap.last_error, None);
-        s.live(Some(Live { grams: 18.2, shot_s: Some(4.5) }));
+        s.live(Some(Live { grams: 18.2, shot_s: Some(4.5), refresh_ms: 250 }));
         assert_eq!(s.snapshot().live.unwrap().grams, 18.2);
         s.error("gone");
         assert_eq!(s.snapshot().live, None);
