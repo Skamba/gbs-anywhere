@@ -43,6 +43,15 @@ pub const FIELDS: &[Field] = &[
         default: "5",
     },
     Field {
+        key: "start_delay_ms",
+        label: "Milliseconds to start the machine",
+        help: "After the knob press (or a test start) the scale waits this long before it \
+               tares and times the shot, so there is time to start the machine. 0 to 30000.",
+        input: Input::Number,
+        required: false,
+        default: "3000",
+    },
+    Field {
         key: "live_ms",
         label: "Live display refresh (ms)",
         help: "How often the app updates weight and time during a shot: lower is smoother, \
@@ -56,6 +65,7 @@ pub const FIELDS: &[Field] = &[
 const DEFAULT_STABLE_S: f64 = 3.0;
 const DEFAULT_MIN_G: f64 = 5.0;
 const DEFAULT_LIVE_MS: f64 = 250.0;
+const DEFAULT_START_DELAY_MS: f64 = 3000.0;
 const DEFAULT_SCAN: Duration = Duration::from_secs(10);
 
 /// The scale to use and when a shot counts as over.
@@ -76,6 +86,9 @@ pub struct Config {
     /// How often the app refreshes the live display during a shot, and how
     /// often a running shot is checked here.
     pub live_every: Duration,
+    /// Wait after the brew start before taring and timing, to start the
+    /// machine by hand. The shot is timed from its end.
+    pub start_delay: Duration,
     /// How long one search for the scale lasts.
     pub scan_for: Duration,
 }
@@ -90,6 +103,12 @@ impl Config {
         if min_g <= 0.0 {
             bail!("minimum grams must be above 0");
         }
+        let start_delay_ms = s
+            .number("start_delay_ms")?
+            .unwrap_or(DEFAULT_START_DELAY_MS);
+        if !(0.0..=30_000.0).contains(&start_delay_ms) {
+            bail!("milliseconds to start the machine must be between 0 and 30000");
+        }
         let live_ms = s.number("live_ms")?.unwrap_or(DEFAULT_LIVE_MS);
         if !(100.0..=2000.0).contains(&live_ms) {
             bail!("live display refresh must be between 100 and 2000 ms");
@@ -101,6 +120,7 @@ impl Config {
             stable_for: Duration::from_secs_f64(stable_s),
             min_weight_g: min_g,
             live_every: Duration::from_secs_f64(live_ms / 1000.0),
+            start_delay: Duration::from_secs_f64(start_delay_ms / 1000.0),
             scan_for: DEFAULT_SCAN,
         })
     }
@@ -149,6 +169,11 @@ pub struct Args {
     /// (100 to 2000).
     #[arg(long, env = "PRECISA_LIVE_MS", default_value_t = DEFAULT_LIVE_MS)]
     pub precisa_live_ms: f64,
+
+    /// Milliseconds after the knob press (or a test start) before the scale
+    /// tares and times the shot, to start the machine by hand (0 to 30000).
+    #[arg(long, env = "PRECISA_START_DELAY_MS", default_value_t = DEFAULT_START_DELAY_MS)]
+    pub precisa_start_delay_ms: f64,
 }
 
 impl Args {
@@ -164,7 +189,8 @@ impl Args {
                 .with("timer", self.precisa_no_timer.then_some("off"))
                 .with("stable_s", Some(self.precisa_stable_s))
                 .with("min_g", Some(self.precisa_min_g))
-                .with("live_ms", Some(self.precisa_live_ms)),
+                .with("live_ms", Some(self.precisa_live_ms))
+                .with("start_delay_ms", Some(self.precisa_start_delay_ms)),
         )
     }
 }
@@ -184,6 +210,7 @@ mod tests {
             precisa_stable_s: 4.0,
             precisa_min_g: 8.0,
             precisa_live_ms: 500.0,
+            precisa_start_delay_ms: 1500.0,
         };
         let cfg = Config::from_settings(&args.settings().unwrap()).unwrap();
         assert_eq!(cfg.address.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
@@ -191,6 +218,7 @@ mod tests {
         assert_eq!(cfg.stable_for, Duration::from_secs(4));
         assert_eq!(cfg.min_weight_g, 8.0);
         assert_eq!(cfg.live_every, Duration::from_millis(500));
+        assert_eq!(cfg.start_delay, Duration::from_millis(1500));
         assert!(KIND.create(&args.settings().unwrap(), false).is_ok());
 
         // The form: everything optional.
@@ -201,6 +229,7 @@ mod tests {
         assert!(cfg.drive_timer);
         assert_eq!(cfg.stable_for, Duration::from_secs(3));
         assert_eq!(cfg.live_every, Duration::from_millis(250));
+        assert_eq!(cfg.start_delay, Duration::from_secs(3));
 
         let off = Args {
             precisa: false,
@@ -213,5 +242,7 @@ mod tests {
         assert!(Config::from_settings(&no_grams).is_err());
         let too_often = Settings::new().with("live_ms", Some("50"));
         assert!(Config::from_settings(&too_often).is_err());
+        let too_late = Settings::new().with("start_delay_ms", Some("45000"));
+        assert!(Config::from_settings(&too_late).is_err());
     }
 }

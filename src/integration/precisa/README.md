@@ -31,18 +31,22 @@ docker run -d --name gbs-anywhere --restart unless-stopped --net=host \
 | leave the timer alone | `--precisa-no-timer` | `PRECISA_NO_TIMER` | off |
 | Seconds without a rise | `--precisa-stable-s` | `PRECISA_STABLE_S` | 3 |
 | Minimum grams | `--precisa-min-g` | `PRECISA_MIN_G` | 5 |
+| Milliseconds to start the machine | `--precisa-start-delay-ms` | `PRECISA_START_DELAY_MS` | 3000 |
 | Live display refresh (ms) | `--precisa-live-ms` | `PRECISA_LIVE_MS` | 250 |
 
 ## How it works
 
-Put the cup on the scale, grind, press the knob and start the shot right away.
-gbs-anywhere tares the scale and resets and starts its timer.
+Put the cup on the scale, grind, press the knob and start the machine within
+the "milliseconds to start the machine" (3000 ms by default; the app counts
+down).
+Then gbs-anywhere tares the scale and resets and starts its timer; the shot
+is timed from that moment. With 0 it starts right at the knob press.
 
 - **The end of the shot.** Stopping the timer on the scale ends it at once.
   Otherwise it ends when the weight has not risen by 0.3 g for 3 s with at
   least 5 g in the cup; the time is then the moment the weight last rose.
-- **Time from the knob press.** Measured by gbs-anywhere, not by the scale,
-  whose timer only counts whole seconds.
+- **Time from the end of the countdown.** Measured by gbs-anywhere, not by
+  the scale, whose timer only counts whole seconds.
 - **The first second is ignored**, while the tare settles.
 - **Test without the grinder.** A brew started by hand (without a knob press)
   is measured the same way; when the scale ends it, the brew ends with the

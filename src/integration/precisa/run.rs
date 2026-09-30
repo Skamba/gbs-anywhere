@@ -117,7 +117,6 @@ async fn shot(
     started: BrewStart,
 ) -> anyhow::Result<Option<Duration>> {
     let test = started == BrewStart::Manual;
-    let start = Instant::now();
     if test {
         tracing::info!("{TITLE}: test brew started by hand, watching the scale");
         link.status.watching("test · watching the scale, the grinder sees a flush");
@@ -125,6 +124,10 @@ async fn shot(
         tracing::info!("{TITLE}: grinder is waiting, watching the scale");
         link.status.watching("grinder is waiting · watching the scale");
     }
+    if !cfg.start_delay.is_zero() && !countdown(link, cfg, scale, test).await? {
+        return Ok(None);
+    }
+    let start = Instant::now();
     scale.send(&precisa::TARE).await.context("tare")?;
     if cfg.drive_timer {
         tokio::time::sleep(COMMAND_GAP).await;
@@ -174,12 +177,7 @@ async fn shot(
                 }
                 // Someone answered or aborted the brew (the app, a timeout):
                 // nothing left to measure for.
-                let still = if test {
-                    link.brewing() == Some(BrewStart::Manual)
-                } else {
-                    link.grinder_waiting()
-                };
-                if !still {
+                if !brew_still_on(link, test) {
                     tracing::info!("{TITLE}: brew ended before the scale saw the shot end");
                     link.status.connected(READY);
                     return Ok(None);
@@ -217,6 +215,65 @@ async fn shot(
     Ok(Some(end.time))
 }
 
+/// Waits `cfg.start_delay` after the brew start, so there is time to start
+/// the machine by hand; the shot is timed from the end of it. The app shows
+/// the seconds left as a negative shot time. `false` if the brew ended
+/// meanwhile.
+async fn countdown(
+    link: &Link,
+    cfg: &Config,
+    scale: &mut Scale,
+    test: bool,
+) -> anyhow::Result<bool> {
+    let secs = cfg.start_delay.as_secs_f64();
+    tracing::info!("{TITLE}: measuring starts in {secs:.1} s");
+    let what = if test { "test" } else { "grinder is waiting" };
+    link.status
+        .watching(format!("{what} · start the machine, measuring in {secs:.0} s"));
+    let until = Instant::now() + cfg.start_delay;
+    let mut tick = tokio::time::interval(cfg.live_every);
+    let mut grams = 0.0;
+    loop {
+        let left = until.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            link.status.watching(format!("{what} · watching the scale"));
+            return Ok(true);
+        }
+        link.status.live(Some(Live {
+            grams: tenth(grams),
+            shot_s: Some(-tenth(left.as_secs_f64())),
+            measuring: true,
+            refresh_ms: refresh_ms(cfg),
+        }));
+        if !brew_still_on(link, test) {
+            tracing::info!("{TITLE}: brew ended before measuring started");
+            link.status.connected(READY);
+            return Ok(false);
+        }
+        tokio::select! {
+            reading = scale.next_reading() => {
+                grams = reading?.grams;
+            }
+            _ = tick.tick() => {}
+            () = tokio::time::sleep(left) => {}
+        }
+    }
+}
+
+/// Whether the brew a shot is measured for still runs: the grinder still
+/// waits, or for a test, the manual brew still runs.
+fn brew_still_on(link: &Link, test: bool) -> bool {
+    if test {
+        link.brewing() == Some(BrewStart::Manual)
+    } else {
+        link.grinder_waiting()
+    }
+}
+
+fn refresh_ms(cfg: &Config) -> u32 {
+    u32::try_from(cfg.live_every.as_millis()).unwrap_or(u32::MAX)
+}
+
 /// Puts the scale's weight and a shot's time into the status for the app's
 /// live display: the running time while `measuring`, else the last shot's.
 fn show(link: &Link, cfg: &Config, grams: f64, shot: Option<Duration>, measuring: bool) {
@@ -224,7 +281,7 @@ fn show(link: &Link, cfg: &Config, grams: f64, shot: Option<Duration>, measuring
         grams: tenth(grams),
         shot_s: shot.map(|d| tenth(d.as_secs_f64())),
         measuring,
-        refresh_ms: u32::try_from(cfg.live_every.as_millis()).unwrap_or(u32::MAX),
+        refresh_ms: refresh_ms(cfg),
     }));
 }
 
