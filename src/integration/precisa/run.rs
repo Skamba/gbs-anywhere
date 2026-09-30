@@ -21,9 +21,8 @@ use crate::integration::{
     Backoff, BoxFuture, BrewStart, Integration, Link, Live, ReportOutcome,
 };
 
-const MIN_BACKOFF: Duration = Duration::from_secs(2);
-/// A switched-off scale is the normal case: look again at least every minute.
-const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// How often a running scan looks at what it has found.
+const SCAN_POLL: Duration = Duration::from_millis(250);
 /// Without a notification for this long, check the scale is still connected.
 const SILENCE: Duration = Duration::from_secs(5);
 /// Give up on a shot whose end is never seen.
@@ -51,7 +50,9 @@ impl Integration for Precisa {
 // ---------------------------------------------------------------------------
 
 async fn run(link: Link, cfg: Config) {
-    let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
+    // A switched-off scale is the normal case: keep looking at the configured
+    // pace, without growing delays, so it reconnects soon after switching on.
+    let mut backoff = Backoff::new(cfg.reconnect_every, cfg.reconnect_every);
     loop {
         link.status.starting("looking for the scale");
         match connect(&cfg).await {
@@ -364,7 +365,7 @@ async fn connect(cfg: &Config) -> anyhow::Result<Scale> {
             let _ = adapter.stop_scan().await;
             bail!("scale not found (switched on and in range?)");
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(SCAN_POLL).await;
     };
     let _ = adapter.stop_scan().await;
     let (peripheral, name) = found;

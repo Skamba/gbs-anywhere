@@ -52,6 +52,15 @@ pub const FIELDS: &[Field] = &[
         default: "2000",
     },
     Field {
+        key: "reconnect_ms",
+        label: "Reconnect pause (ms)",
+        help: "Pause between searches while the scale is off or out of reach: lower \
+               reconnects sooner after switching it on. 500 to 3000.",
+        input: Input::Number,
+        required: false,
+        default: "500",
+    },
+    Field {
         key: "live_ms",
         label: "Live display refresh (ms)",
         help: "How often the app updates weight and time during a shot: lower is smoother, \
@@ -66,6 +75,7 @@ const DEFAULT_STABLE_S: f64 = 3.0;
 const DEFAULT_MIN_G: f64 = 5.0;
 const DEFAULT_LIVE_MS: f64 = 100.0;
 const DEFAULT_START_DELAY_MS: f64 = 2000.0;
+const DEFAULT_RECONNECT_MS: f64 = 500.0;
 const DEFAULT_SCAN: Duration = Duration::from_secs(10);
 
 /// The scale to use and when a shot counts as over.
@@ -89,6 +99,8 @@ pub struct Config {
     /// Wait after the brew start before taring and timing, to start the
     /// machine by hand. The shot is timed from its end.
     pub start_delay: Duration,
+    /// Pause between searches for the scale while it is off or away.
+    pub reconnect_every: Duration,
     /// How long one search for the scale lasts.
     pub scan_for: Duration,
 }
@@ -109,6 +121,10 @@ impl Config {
         if !(0.0..=30_000.0).contains(&start_delay_ms) {
             bail!("milliseconds to start the machine must be between 0 and 30000");
         }
+        let reconnect_ms = s.number("reconnect_ms")?.unwrap_or(DEFAULT_RECONNECT_MS);
+        if !(500.0..=3000.0).contains(&reconnect_ms) {
+            bail!("reconnect pause must be between 500 and 3000 ms");
+        }
         let live_ms = s.number("live_ms")?.unwrap_or(DEFAULT_LIVE_MS);
         if !(100.0..=2000.0).contains(&live_ms) {
             bail!("live display refresh must be between 100 and 2000 ms");
@@ -121,6 +137,7 @@ impl Config {
             min_weight_g: min_g,
             live_every: Duration::from_secs_f64(live_ms / 1000.0),
             start_delay: Duration::from_secs_f64(start_delay_ms / 1000.0),
+            reconnect_every: Duration::from_secs_f64(reconnect_ms / 1000.0),
             scan_for: DEFAULT_SCAN,
         })
     }
@@ -174,6 +191,11 @@ pub struct Args {
     /// tares and times the shot, to start the machine by hand (0 to 30000).
     #[arg(long, env = "PRECISA_START_DELAY_MS", default_value_t = DEFAULT_START_DELAY_MS)]
     pub precisa_start_delay_ms: f64,
+
+    /// Milliseconds between searches while the scale is off or out of reach
+    /// (500 to 3000).
+    #[arg(long, env = "PRECISA_RECONNECT_MS", default_value_t = DEFAULT_RECONNECT_MS)]
+    pub precisa_reconnect_ms: f64,
 }
 
 impl Args {
@@ -190,7 +212,8 @@ impl Args {
                 .with("stable_s", Some(self.precisa_stable_s))
                 .with("min_g", Some(self.precisa_min_g))
                 .with("live_ms", Some(self.precisa_live_ms))
-                .with("start_delay_ms", Some(self.precisa_start_delay_ms)),
+                .with("start_delay_ms", Some(self.precisa_start_delay_ms))
+                .with("reconnect_ms", Some(self.precisa_reconnect_ms)),
         )
     }
 }
@@ -211,6 +234,7 @@ mod tests {
             precisa_min_g: 8.0,
             precisa_live_ms: 500.0,
             precisa_start_delay_ms: 1500.0,
+            precisa_reconnect_ms: 1000.0,
         };
         let cfg = Config::from_settings(&args.settings().unwrap()).unwrap();
         assert_eq!(cfg.address.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
@@ -219,6 +243,7 @@ mod tests {
         assert_eq!(cfg.min_weight_g, 8.0);
         assert_eq!(cfg.live_every, Duration::from_millis(500));
         assert_eq!(cfg.start_delay, Duration::from_millis(1500));
+        assert_eq!(cfg.reconnect_every, Duration::from_secs(1));
         assert!(KIND.create(&args.settings().unwrap(), false).is_ok());
 
         // The form: everything optional.
@@ -230,6 +255,7 @@ mod tests {
         assert_eq!(cfg.stable_for, Duration::from_secs(3));
         assert_eq!(cfg.live_every, Duration::from_millis(100));
         assert_eq!(cfg.start_delay, Duration::from_secs(2));
+        assert_eq!(cfg.reconnect_every, Duration::from_millis(500));
 
         let off = Args {
             precisa: false,
@@ -242,6 +268,10 @@ mod tests {
         assert!(Config::from_settings(&no_grams).is_err());
         let too_often = Settings::new().with("live_ms", Some("50"));
         assert!(Config::from_settings(&too_often).is_err());
+        for bad in ["400", "3500"] {
+            let reconnect = Settings::new().with("reconnect_ms", Some(bad));
+            assert!(Config::from_settings(&reconnect).is_err());
+        }
         let too_late = Settings::new().with("start_delay_ms", Some("45000"));
         assert!(Config::from_settings(&too_late).is_err());
     }
