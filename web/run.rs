@@ -430,23 +430,55 @@ impl Bluetooth {
 }
 
 async fn connect(adapter: &Adapter, cfg: &Config) -> anyhow::Result<Scale> {
+    start_scan(adapter).await?;
+    // Whatever happens while searching, the scan is stopped again: a scan
+    // left running makes the next start fail with "operation already in
+    // progress".
+    let found = search(adapter, cfg).await;
+    let _ = adapter.stop_scan().await;
+    let (peripheral, name) = found?;
+
+    peripheral.connect().await.context("connecting to the scale")?;
+    match set_up(peripheral.clone(), name).await {
+        Ok(scale) => Ok(scale),
+        Err(e) => {
+            // Half set up: let go of it so the next attempt starts clean.
+            let _ = peripheral.disconnect().await;
+            Err(e)
+        }
+    }
+}
+
+/// Starts a scan; one still running (from an earlier search, or another
+/// program using Bluetooth) is fine too.
+async fn start_scan(adapter: &Adapter) -> anyhow::Result<()> {
     // No service filter: not every scale advertises FFF0.
-    adapter.start_scan(ScanFilter::default()).await?;
+    match adapter.start_scan(ScanFilter::default()).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.to_string().to_lowercase().contains("in progress") => {
+            tracing::debug!("{TITLE}: scan already running ({e})");
+            Ok(())
+        }
+        Err(e) => Err(e).context("starting a Bluetooth scan"),
+    }
+}
+
+/// Looks for the scale in the running scan for up to `cfg.scan_for`.
+async fn search(adapter: &Adapter, cfg: &Config) -> anyhow::Result<(Peripheral, String)> {
     let deadline = Instant::now() + cfg.scan_for;
-    let found = loop {
+    loop {
         if let Some(found) = find(adapter, cfg).await? {
-            break found;
+            return Ok(found);
         }
         if Instant::now() >= deadline {
-            let _ = adapter.stop_scan().await;
             bail!("scale not found (switched on and in range?)");
         }
         tokio::time::sleep(SCAN_POLL).await;
-    };
-    let _ = adapter.stop_scan().await;
-    let (peripheral, name) = found;
+    }
+}
 
-    peripheral.connect().await.context("connecting to the scale")?;
+/// Subscribes to a connected scale's weight and sets grams.
+async fn set_up(peripheral: Peripheral, name: String) -> anyhow::Result<Scale> {
     peripheral.discover_services().await?;
     let characteristics = peripheral.characteristics();
     let pick = |uuid: Uuid| characteristics.iter().find(|c| c.uuid == uuid).cloned();
@@ -468,7 +500,9 @@ async fn connect(adapter: &Adapter, cfg: &Config) -> anyhow::Result<Scale> {
 /// The configured scale among what the scan has seen, with a display name.
 async fn find(adapter: &Adapter, cfg: &Config) -> anyhow::Result<Option<(Peripheral, String)>> {
     for p in adapter.peripherals().await? {
-        let Some(props) = p.properties().await? else {
+        // A device can vanish between listing and asking (BlueZ drops stale
+        // ones during a scan): skip it rather than fail the search.
+        let Ok(Some(props)) = p.properties().await else {
             continue;
         };
         let address = p.address().to_string();
