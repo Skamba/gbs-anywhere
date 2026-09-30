@@ -17,7 +17,7 @@ use super::TITLE;
 use super::config::Config;
 use super::precisa::{self, Reading};
 use super::shot::{End, ShotTracker};
-use crate::integration::{Backoff, BoxFuture, Integration, Link, ReportOutcome};
+use crate::integration::{Backoff, BoxFuture, BrewStart, Integration, Link, ReportOutcome};
 
 const MIN_BACKOFF: Duration = Duration::from_secs(2);
 /// A switched-off scale is the normal case: look again at least every minute.
@@ -76,16 +76,16 @@ async fn run(link: Link, cfg: Config) {
 
 /// Runs while the scale stays connected. `Ok` once the server is gone.
 async fn serve(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<()> {
-    // Subscribed per connection: knob presses while the scale was away must
+    // Subscribed per connection: brews started while the scale was away must
     // not start a shot now.
-    let mut brews = link.grinder_brews();
+    let mut brews = link.brews();
     loop {
         tokio::select! {
-            pressed = brews.next() => {
-                if !pressed {
+            started = brews.next() => {
+                let Some(started) = started else {
                     return Ok(());
-                }
-                shot(link, cfg, scale).await?;
+                };
+                shot(link, cfg, scale, started).await?;
             }
             // Idle readings only keep the connection watched.
             reading = scale.next_reading() => {
@@ -95,11 +95,23 @@ async fn serve(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<(
     }
 }
 
-/// One shot, from the knob press to the report.
-async fn shot(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<()> {
+/// One shot, from the brew start to the report. A manual start is a test:
+/// the shot is measured the same way and shown, but never reported.
+async fn shot(
+    link: &Link,
+    cfg: &Config,
+    scale: &mut Scale,
+    started: BrewStart,
+) -> anyhow::Result<()> {
+    let test = started == BrewStart::Manual;
     let start = Instant::now();
-    tracing::info!("{TITLE}: grinder is waiting, watching the scale");
-    link.status.watching("grinder is waiting · watching the scale");
+    if test {
+        tracing::info!("{TITLE}: test brew started by hand, watching the scale (not reported)");
+        link.status.watching("test · watching the scale, nothing goes to the grinder");
+    } else {
+        tracing::info!("{TITLE}: grinder is waiting, watching the scale");
+        link.status.watching("grinder is waiting · watching the scale");
+    }
     scale.send(&precisa::TARE).await.context("tare")?;
     if cfg.drive_timer {
         scale.send(&precisa::RESET_TIMER).await.context("reset timer")?;
@@ -120,7 +132,9 @@ async fn shot(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<()
                 if let Some(end) = tracker.tick(at) {
                     break end;
                 }
-                if !link.grinder_waiting() {
+                // A test runs until the scale sees the end, whatever the
+                // emulated brew does meanwhile.
+                if !test && !link.grinder_waiting() {
                     tracing::info!("{TITLE}: brew ended before the scale saw the shot end");
                     link.status.connected(READY);
                     return Ok(());
@@ -141,11 +155,16 @@ async fn shot(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<()
 
     // The scale reads 0.1 g.
     let grams = (end.grams * 10.0).round() / 10.0;
+    let secs = end.time.as_secs_f64();
+    if test {
+        tracing::info!("{TITLE}: test shot {secs:.1} s, {grams:.1} g (not reported)");
+        link.status
+            .connected(format!("test shot: {secs:.1} s, {grams:.1} g (not reported)"));
+        return Ok(());
+    }
     let outcome = link.report(end.time, Some((grams, "weighed by the scale".to_owned())));
     let line = match outcome {
-        ReportOutcome::Reported { grams, .. } => {
-            format!("last shot: {:.1} s, {grams:.1} g", end.time.as_secs_f64())
-        }
+        ReportOutcome::Reported { grams, .. } => format!("last shot: {secs:.1} s, {grams:.1} g"),
         ReportOutcome::NotWaiting | ReportOutcome::Refused(_) => READY.to_owned(),
     };
     link.status.connected(line);
