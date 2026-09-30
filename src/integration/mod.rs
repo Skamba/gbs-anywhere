@@ -118,6 +118,17 @@ pub struct Link {
     pub status: Status,
 }
 
+/// Who started a brew. See [`Link::brews`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrewStart {
+    /// A knob press: the grinder waits for the result.
+    Grinder,
+    /// Started by hand (a test without the grinder): nothing waits for a
+    /// result. An integration may measure it and show it, but
+    /// [`Link::report`] refuses it.
+    Manual,
+}
+
 /// What happened to a reported shot.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReportOutcome {
@@ -146,6 +157,10 @@ impl Link {
     /// The moments the grinder asks for a brew (knob presses), from now on.
     pub fn grinder_brews(&self) -> GrinderBrews {
         GrinderBrews(self.server.subscribe())
+    }
+    /// Every brew start from now on, knob presses and manual ones.
+    pub fn brews(&self) -> Brews {
+        Brews(self.server.subscribe())
     }
 
     /// Reports a measured shot: `time` as the machine ran it, `weight` in
@@ -219,6 +234,34 @@ impl GrinderBrews {
                 }
                 Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => return false,
+            }
+        }
+    }
+}
+
+/// Brew starts as they happen. See [`Link::brews`].
+pub struct Brews(broadcast::Receiver<EventRecord>);
+
+impl Brews {
+    /// Waits for the next brew start. `None` once the server is gone.
+    pub async fn next(&mut self) -> Option<BrewStart> {
+        loop {
+            match self.0.recv().await {
+                Ok(rec) => {
+                    if let MachineEvent::BrewStarted {
+                        requested_by_grinder,
+                        ..
+                    } = rec.event
+                    {
+                        return Some(if requested_by_grinder {
+                            BrewStart::Grinder
+                        } else {
+                            BrewStart::Manual
+                        });
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return None,
             }
         }
     }
@@ -527,5 +570,19 @@ mod tests {
         assert_eq!(b.peek(), Duration::from_secs(5));
         b.reset();
         assert_eq!(b.advance(), Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn brews_tell_knob_presses_from_manual_starts() {
+        let l = link();
+        let mut brews = l.brews();
+        l.server.with(|m, now| m.start_brew(now)).unwrap();
+        assert_eq!(brews.next().await, Some(BrewStart::Manual));
+        assert!(!l.grinder_waiting());
+        l.server.with(|m, now| m.abort(now)).unwrap();
+
+        let later = Instant::now() + Duration::from_secs(30);
+        l.server.with(|m, _| m.on_start_request(later, Some(9)));
+        assert_eq!(brews.next().await, Some(BrewStart::Grinder));
     }
 }
