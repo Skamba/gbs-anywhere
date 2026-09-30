@@ -8,7 +8,7 @@ use super::precisa::DEFAULT_NAME_PREFIX;
 use super::shot::EndRule;
 use crate::integration::{Field, Input, Settings};
 
-/// The form in the app. `timer` is not on it: command line only.
+/// The form in the app. `timer` and `beep` are not on it: command line only.
 pub const FIELDS: &[Field] = &[
     Field {
         key: "address",
@@ -89,6 +89,9 @@ pub struct Config {
     /// at the end. Off: only tare; a timer someone started by hand still ends
     /// the shot when stopped.
     pub drive_timer: bool,
+    /// Beep twice when a shot is reported, four times when one ends without
+    /// a result.
+    pub beep: bool,
     /// No rise in weight for this long ends a shot ...
     pub stable_for: Duration,
     /// ... with at least this many grams in the cup.
@@ -133,6 +136,7 @@ impl Config {
             address: s.text("address").map(str::to_owned),
             name_prefix: s.text("name").unwrap_or(DEFAULT_NAME_PREFIX).to_owned(),
             drive_timer: s.text("timer") != Some("off"),
+            beep: s.text("beep") != Some("off"),
             stable_for: Duration::from_secs_f64(stable_s),
             min_weight_g: min_g,
             live_every: Duration::from_secs_f64(live_ms / 1000.0),
@@ -174,6 +178,11 @@ pub struct Args {
     #[arg(long, env = "PRECISA_NO_TIMER")]
     pub precisa_no_timer: bool,
 
+    /// No beeps (twice when a shot is reported, four times when one is
+    /// aborted).
+    #[arg(long, env = "PRECISA_NO_BEEP")]
+    pub precisa_no_beep: bool,
+
     /// Seconds without a rise in weight that end a shot.
     #[arg(long, env = "PRECISA_STABLE_S", default_value_t = DEFAULT_STABLE_S)]
     pub precisa_stable_s: f64,
@@ -209,6 +218,7 @@ impl Args {
                 .with("address", self.precisa_address.as_ref())
                 .with("name", Some(&self.precisa_name))
                 .with("timer", self.precisa_no_timer.then_some("off"))
+                .with("beep", self.precisa_no_beep.then_some("off"))
                 .with("stable_s", Some(self.precisa_stable_s))
                 .with("min_g", Some(self.precisa_min_g))
                 .with("live_ms", Some(self.precisa_live_ms))
@@ -230,6 +240,7 @@ mod tests {
             precisa_address: Some(" AA:BB:CC:DD:EE:FF ".into()),
             precisa_name: DEFAULT_NAME_PREFIX.into(),
             precisa_no_timer: true,
+            precisa_no_beep: true,
             precisa_stable_s: 4.0,
             precisa_min_g: 8.0,
             precisa_live_ms: 500.0,
@@ -239,6 +250,7 @@ mod tests {
         let cfg = Config::from_settings(&args.settings().unwrap()).unwrap();
         assert_eq!(cfg.address.as_deref(), Some("AA:BB:CC:DD:EE:FF"));
         assert!(!cfg.drive_timer);
+        assert!(!cfg.beep);
         assert_eq!(cfg.stable_for, Duration::from_secs(4));
         assert_eq!(cfg.min_weight_g, 8.0);
         assert_eq!(cfg.live_every, Duration::from_millis(500));
@@ -252,6 +264,7 @@ mod tests {
         assert_eq!(cfg.address, None);
         assert_eq!(cfg.name_prefix, DEFAULT_NAME_PREFIX);
         assert!(cfg.drive_timer);
+        assert!(cfg.beep);
         assert_eq!(cfg.stable_for, Duration::from_secs(3));
         assert_eq!(cfg.live_every, Duration::from_millis(100));
         assert_eq!(cfg.start_delay, Duration::from_secs(2));

@@ -29,16 +29,18 @@ docker run -d --name gbs-anywhere --restart unless-stopped --net=host \
 | Bluetooth address | `--precisa-address` | `PRECISA_ADDRESS` | first scale found by name |
 | Bluetooth name | `--precisa-name` | `PRECISA_NAME` | `CFS-9002` |
 | leave the timer alone | `--precisa-no-timer` | `PRECISA_NO_TIMER` | off |
+| no beeps | `--precisa-no-beep` | `PRECISA_NO_BEEP` | off |
 | Seconds without a rise | `--precisa-stable-s` | `PRECISA_STABLE_S` | 3 |
 | Minimum grams | `--precisa-min-g` | `PRECISA_MIN_G` | 5 |
-| Milliseconds to start the machine | `--precisa-start-delay-ms` | `PRECISA_START_DELAY_MS` | 1000 |
-| Live display refresh (ms) | `--precisa-live-ms` | `PRECISA_LIVE_MS` | 250 |
+| Milliseconds to start the machine | `--precisa-start-delay-ms` | `PRECISA_START_DELAY_MS` | 2000 |
+| Reconnect pause (ms) | `--precisa-reconnect-ms` | `PRECISA_RECONNECT_MS` | 500 |
+| Live display refresh (ms) | `--precisa-live-ms` | `PRECISA_LIVE_MS` | 100 |
 
 ## How it works
 
 Put the cup on the scale, grind, press the knob and start the machine within
-the "milliseconds to start the machine" (1000 ms by default; the time in the
-app stays at 0 until then).
+the "milliseconds to start the machine" (2000 ms by default; the time and the
+clock in the app stay at 0 until then).
 Then gbs-anywhere tares the scale and resets and starts its timer; the shot
 is timed from that moment. With 0 it starts right at the knob press.
 
@@ -48,6 +50,9 @@ is timed from that moment. With 0 it starts right at the knob press.
 - **Time from the end of the countdown.** Measured by gbs-anywhere, not by
   the scale, whose timer only counts whole seconds.
 - **The first second is ignored**, while the tare settles.
+- **Beeps.** The scale beeps twice when a shot goes to the grinder (or ends a
+  test), and four times when one ends without a result: aborted, answered
+  in the app, or no end seen after 120 s. `--precisa-no-beep` turns this off.
 - **Test without the grinder.** A brew started by hand (without a knob press)
   is measured the same way; when the scale ends it, the brew ends with the
   scale's time and weight, as if typed in the app. The grinder sees a flush.
@@ -58,9 +63,12 @@ is timed from that moment. With 0 it starts right at the knob press.
 - **The phone still works.** You can still enter a shot on your phone;
   whichever comes first wins.
 - **Live display.** While a shot runs, the app shows the scale's weight and
-  time instead of the entry fields and refreshes every 250 ms (100 to 2000,
+  time instead of the entry fields and refreshes every 100 ms (100 to 2000,
   the setting above). The scale itself sends at its own rate.
-- A switched-off scale is looked for again at least every minute.
+- **Reconnecting.** While the scale is off or out of reach, gbs-anywhere
+  searches for it over and over with the "reconnect pause" in between
+  (500 ms by default, 500 to 3000), so it connects within about a second of
+  switching the scale on.
 
 ## Building it in
 

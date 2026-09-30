@@ -35,6 +35,8 @@ const COMMAND_GAP: Duration = Duration::from_millis(200);
 const TIMER_RETRY: Duration = Duration::from_millis(800);
 /// ... up to this many times in all.
 const TIMER_TRIES: u32 = 3;
+/// Between two double beeps, so four beeps are heard as four.
+const BEEP_GAP: Duration = Duration::from_millis(700);
 
 /// The integration. See the module docs.
 pub struct Precisa {
@@ -126,6 +128,7 @@ async fn shot(
         link.status.watching("grinder is waiting · watching the scale");
     }
     if !cfg.start_delay.is_zero() && !countdown(link, cfg, scale, test).await? {
+        aborted(cfg, scale).await;
         return Ok(None);
     }
     let start = Instant::now();
@@ -181,12 +184,14 @@ async fn shot(
                 if !brew_still_on(link, test) {
                     tracing::info!("{TITLE}: brew ended before the scale saw the shot end");
                     link.status.connected(READY);
+                    aborted(cfg, scale).await;
                     return Ok(None);
                 }
                 if at > MAX_SHOT {
                     tracing::info!("{TITLE}: no end of the shot after {} s, giving up",
                         MAX_SHOT.as_secs());
                     link.status.connected(READY);
+                    aborted(cfg, scale).await;
                     return Ok(None);
                 }
             }
@@ -205,7 +210,7 @@ async fn shot(
     } else {
         link.report(end.time, Some((grams, "weighed by the scale".to_owned())))
     };
-    let line = match outcome {
+    let line = match &outcome {
         ReportOutcome::Reported { grams, .. } if test => {
             format!("test shot: {secs:.1} s, {grams:.1} g")
         }
@@ -213,6 +218,10 @@ async fn shot(
         ReportOutcome::NotWaiting | ReportOutcome::Refused(_) => READY.to_owned(),
     };
     link.status.connected(line);
+    if cfg.beep {
+        let times = if matches!(outcome, ReportOutcome::Reported { .. }) { 2 } else { 4 };
+        beep(scale, times).await;
+    }
     Ok(Some(end.time))
 }
 
@@ -258,6 +267,28 @@ async fn countdown(
             _ = tick.tick() => {}
             () = tokio::time::sleep(left) => {}
         }
+    }
+}
+
+/// A shot that ended without a result: stop the scale's timer and beep four
+/// times.
+async fn aborted(cfg: &Config, scale: &mut Scale) {
+    if cfg.drive_timer {
+        let _ = scale.send(&precisa::STOP_TIMER).await;
+    }
+    if cfg.beep {
+        beep(scale, 4).await;
+    }
+}
+
+/// Beeps `times` times (2 or 4): the scale only knows a double beep. Failures
+/// are ignored, the beeps are only a signal.
+async fn beep(scale: &mut Scale, times: u32) {
+    for i in 0..times / 2 {
+        if i > 0 {
+            tokio::time::sleep(BEEP_GAP).await;
+        }
+        let _ = scale.send(&precisa::BEEP_TWICE).await;
     }
 }
 
