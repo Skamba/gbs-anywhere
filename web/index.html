@@ -146,6 +146,7 @@
   .integ.error .integ-detail { color: var(--bad); }
   .integ.watching .integ-detail { color: var(--accent); }
   .integ-foot { margin: 6px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .integ-actions { display: flex; gap: 4px; }
   .integ-live { margin: 8px 0 0; font-size: 24px; font-weight: 650; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
   .auto { color: var(--ok); font-size: 14px; margin: 8px 0 0; }
   .integ-foot { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
@@ -421,9 +422,13 @@
     }
     foot.append(stats);
     if (i.source === "app") {
+      const actions = document.createElement("span"); actions.className = "integ-actions";
+      const edit = document.createElement("button"); edit.type = "button"; edit.className = "quiet"; edit.textContent = "Configure";
+      edit.addEventListener("click", () => openEdit(i));
       const rm = document.createElement("button"); rm.type = "button"; rm.className = "quiet"; rm.textContent = "Remove";
       rm.addEventListener("click", () => removeIntegration(i));
-      foot.append(rm);
+      actions.append(edit, rm);
+      foot.append(actions);
     }
     if (foot.textContent) card.append(foot);
     return card;
@@ -437,6 +442,7 @@
 
   // --- Add integration ---------------------------------------------------------
   let adding = null;  // the kind whose form is open
+  let editing = null; // the id of the integration being changed, or null when adding
 
   async function loadKinds() {
     try {
@@ -449,13 +455,13 @@
   function openAdd(open) {
     $("add-panel").hidden = !open;
     $("add-integration").setAttribute("aria-expanded", String(open));
-    if (!open) { adding = null; return; }
+    if (!open) { adding = null; editing = null; return; }
     showPick();
     $("add-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   function showPick() {
-    adding = null;
+    adding = null; editing = null;
     $("add-pick").hidden = false; $("add-form").hidden = true;
     $("kind-list").replaceChildren(...(kinds || []).map((k) => {
       const li = document.createElement("li");
@@ -472,14 +478,32 @@
     }));
   }
 
-  function showForm(k) {
+  // Opens the form of one added in the app, filled with its settings
+  // (GET /api/integrations/<id>; passwords are never sent back).
+  async function openEdit(i) {
+    try {
+      const r = await api("/api/integrations/" + encodeURIComponent(i.id));
+      const k = (kinds || []).find((k) => k.id === r.kind);
+      if (!k) { alert("This version has no form for " + r.kind + "."); return; }
+      $("add-panel").hidden = false;
+      $("add-integration").setAttribute("aria-expanded", "true");
+      showForm(k, r.settings || {}, i.id);
+      $("add-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } catch (err) { alert("Could not open its settings: " + err.message); }
+  }
+
+  function showForm(k, values, id) {
     adding = k;
+    editing = id || null;
+    document.querySelector(".add-head-step").textContent = editing ? "Configure integration" : "Add integration";
+    $("add-submit").textContent = editing ? "Save" : "Add";
+    $("add-back").textContent = editing ? "Cancel" : "Back";
     $("add-pick").hidden = true; $("add-form").hidden = false;
     $("add-icon").replaceWith(Object.assign(iconFor(k.id), { id: "add-icon" }));
     $("add-title").textContent = k.title;
     $("add-summary").textContent = k.summary;
     $("add-error").textContent = "";
-    $("add-note").hidden = persistent;
+    $("add-note").hidden = persistent || !!editing;
     $("add-note").textContent = "Not saved: gbs-anywhere runs without a settings file (--config), so this integration is gone after a restart.";
     $("add-fields").replaceChildren(...k.fields.map((f) => {
       const box = document.createElement("div"); box.className = "form-field";
@@ -496,6 +520,12 @@
       if (f.input === "password") input.autocomplete = "current-password";
       input.autocapitalize = "off"; input.spellcheck = false;
       if (f.default) input.placeholder = f.default;
+      if (editing && f.input === "password") {
+        // Left empty, the saved password stays.
+        input.required = false; input.placeholder = "unchanged";
+      } else if (values && values[f.key] != null) {
+        input.value = values[f.key];
+      }
       box.append(label, input);
       if (f.help) {
         const help = document.createElement("p"); help.className = "help"; help.textContent = f.help;
@@ -509,7 +539,7 @@
 
   $("add-integration").addEventListener("click", () => openAdd($("add-panel").hidden));
   $("add-cancel").addEventListener("click", () => openAdd(false));
-  $("add-back").addEventListener("click", showPick);
+  $("add-back").addEventListener("click", () => (editing ? openAdd(false) : showPick()));
   $("add-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!adding || busy) return;
@@ -520,7 +550,11 @@
     }
     busy = true; $("add-submit").disabled = true; $("add-error").textContent = "";
     try {
-      await api("/api/integrations", { method: "POST", body: JSON.stringify({ kind: adding.id, settings }) });
+      if (editing) {
+        await api("/api/integrations/" + encodeURIComponent(editing), { method: "PUT", body: JSON.stringify({ settings }) });
+      } else {
+        await api("/api/integrations", { method: "POST", body: JSON.stringify({ kind: adding.id, settings }) });
+      }
       openAdd(false);
       await tick();
     } catch (err) {
