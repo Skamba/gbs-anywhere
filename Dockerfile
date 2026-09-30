@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --release --locked \
  && cp target/release/gbs-anywhere /usr/local/bin/gbs-anywhere \
  && mkdir -p /out/data
-RUN ls /usr/lib/
+
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libdbus-1-dev \
@@ -34,5 +34,6 @@ VOLUME ["/data"]
 ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig/:usr/lib/aarch64-unknown-linux-gnu/pkgconfig
 # Docker lets unprivileged processes bind low ports inside a container's own
 # network namespace, so port 80 works as nonroot with `-p 80:80`.
+RUN ls /usr/lib/ | tee /home/panterro/Projects/gbs-anywhere-bt/build.txt
 EXPOSE 80
 ENTRYPOINT ["/usr/local/bin/gbs-anywhere", "--no-stdin", "--control", "off"]
