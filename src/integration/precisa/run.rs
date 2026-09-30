@@ -29,6 +29,13 @@ const SILENCE: Duration = Duration::from_secs(5);
 /// Give up on a shot whose end is never seen.
 const MAX_SHOT: Duration = Duration::from_secs(120);
 const READY: &str = "ready, waiting for a knob press";
+/// Pause between commands: sent back to back, the scale drops some.
+const COMMAND_GAP: Duration = Duration::from_millis(200);
+/// If the scale does not report its timer running this long after a start
+/// command, the command is sent again ...
+const TIMER_RETRY: Duration = Duration::from_millis(800);
+/// ... up to this many times in all.
+const TIMER_TRIES: u32 = 3;
 
 /// The integration. See the module docs.
 pub struct Precisa {
@@ -114,9 +121,15 @@ async fn shot(
     }
     scale.send(&precisa::TARE).await.context("tare")?;
     if cfg.drive_timer {
+        tokio::time::sleep(COMMAND_GAP).await;
         scale.send(&precisa::RESET_TIMER).await.context("reset timer")?;
+        tokio::time::sleep(COMMAND_GAP).await;
         scale.send(&precisa::START_TIMER).await.context("start timer")?;
     }
+    // Whether the scale has confirmed its timer runs; retried if not.
+    let mut timer_confirmed = !cfg.drive_timer;
+    let mut start_tries = 1;
+    let mut last_start = Instant::now();
 
     let mut tracker = ShotTracker::new(cfg.end_rule());
     let mut tick = tokio::time::interval(cfg.live_every);
@@ -127,6 +140,7 @@ async fn shot(
                 let reading = reading?;
                 let at = start.elapsed();
                 grams_now = reading.grams;
+                timer_confirmed |= reading.timer_running;
                 show(link, cfg, grams_now, Some(at));
                 if let Some(end) = tracker.reading(at, reading) {
                     break end;
@@ -136,6 +150,19 @@ async fn shot(
                 let at = start.elapsed();
                 // The clock runs on while the scale is quiet.
                 show(link, cfg, grams_now, Some(at));
+                if !timer_confirmed && last_start.elapsed() >= TIMER_RETRY {
+                    if start_tries < TIMER_TRIES {
+                        start_tries += 1;
+                        last_start = Instant::now();
+                        tracing::info!("{TITLE}: scale timer not running, start again \
+                            (try {start_tries} of {TIMER_TRIES})");
+                        scale.send(&precisa::START_TIMER).await.context("start timer")?;
+                    } else {
+                        tracing::warn!("{TITLE}: the scale's timer does not start; \
+                            measuring the shot without it");
+                        timer_confirmed = true;
+                    }
+                }
                 if let Some(end) = tracker.tick(at) {
                     break end;
                 }
@@ -224,6 +251,7 @@ impl Scale {
         loop {
             match tokio::time::timeout(SILENCE, self.notifications.next()).await {
                 Ok(Some(n)) => {
+                    tracing::trace!("{TITLE}: {} {:02X?}", n.uuid, n.value);
                     if n.uuid == precisa::STATUS
                         && let Some(r) = precisa::parse(&n.value)
                     {
