@@ -1,52 +1,40 @@
-# Changes outside src/integration/eureka_precisa/
+//! Eureka Precisa: reports shots weighed and timed by the scale under the cup.
+//!
+//! The Precisa (a Krell CFS-9002 sold by Eureka) sends its weight and timer
+//! over Bluetooth Low Energy. This integration keeps it connected and, after
+//! each knob press, tares it, starts its timer and watches the cup fill. The
+//! shot is over when the timer is stopped or the weight stops rising; its
+//! time and the weight in the cup go to the grinder at once.
+//!
+//! Needs a Bluetooth adapter on the host (BlueZ on Linux) within reach of the
+//! scale, and the scale not held by another app.
+//!
+//! * [`config`]: the setup form, the `--precisa*` flags, [`config::Config`].
+//! * [`precisa`]: the scale's protocol.
+//! * [`shot`]: finding the end of a shot in the readings.
+//! * [`run`]: the task.
 
-## src/integration/mod.rs
+pub mod config;
+pub mod precisa;
+pub mod run;
+pub mod shot;
 
-```rust
-pub mod eureka_precisa;
-pub mod la_marzocco;
+use crate::integration::{Integration, Kind, Settings};
 
-pub static KINDS: &[&Kind] = &[&la_marzocco::KIND, &eureka_precisa::KIND];
+const TITLE: &str = "Eureka Precisa";
 
-pub struct CliArgs {
-    #[command(flatten)]
-    la_marzocco: la_marzocco::config::Args,
-    #[command(flatten)]
-    eureka_precisa: eureka_precisa::config::Args,
+pub static KIND: Kind = Kind {
+    id: "eureka_precisa",
+    title: TITLE,
+    summary: "Time and weight from a Eureka Precisa scale under the cup, over Bluetooth. \
+              Needs Bluetooth on the computer running gbs-anywhere.",
+    icon: include_str!("icon.svg"),
+    fields: config::FIELDS,
+    build,
+};
+
+fn build(settings: &Settings) -> anyhow::Result<Box<dyn Integration>> {
+    Ok(Box::new(run::Precisa {
+        cfg: config::Config::from_settings(settings)?,
+    }))
 }
-
-impl CliArgs {
-    pub fn configured(&self) -> Vec<(&'static Kind, Settings)> {
-        [
-            (&la_marzocco::KIND, self.la_marzocco.settings()),
-            (&eureka_precisa::KIND, self.eureka_precisa.settings()),
-        ]
-        .into_iter()
-        .filter_map(|(kind, settings)| Some((kind, settings?)))
-        .collect()
-    }
-}
-```
-
-Also add `eureka_precisa` to the "Included:" line of the module docs.
-
-## Cargo.toml
-
-```toml
-btleplug = "0.11"
-uuid = "1"
-futures = "0.3"   # if not there yet
-```
-
-btleplug talks to BlueZ over D-Bus and links `libdbus-1`. For the distroless
-image either copy `libdbus-1.so.3` into it, or enable the `dbus` crate's
-`vendored` feature:
-
-```toml
-dbus = { version = "0.9", features = ["vendored"] }
-```
-
-## Dockerfile / README
-
-Bluetooth needs `--net=host` and `-v /run/dbus:/run/dbus:ro`; see this
-integration's README.
