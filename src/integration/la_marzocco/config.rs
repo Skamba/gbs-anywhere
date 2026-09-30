@@ -62,8 +62,8 @@ pub struct Config {
 impl Config {
     pub fn from_settings(s: &Settings) -> anyhow::Result<Self> {
         let poll_s = s.number("poll_s")?.unwrap_or(DEFAULT_POLL_S);
-        if poll_s < 1.0 {
-            bail!("check at most once a second (poll_s at least 1)");
+        if !(1.0..=60.0).contains(&poll_s) {
+            bail!("check between once a second and once a minute (poll_s from 1 to 60)");
         }
         Ok(Self {
             username: s.text("username").context("E-mail is required")?.to_owned(),
@@ -156,7 +156,9 @@ mod tests {
             ..args
         };
         assert!(no_flags.settings().is_none());
-        let too_fast = form.with("poll_s", Some("0.5"));
-        assert!(Config::from_settings(&too_fast).is_err());
+        for bad in ["0.5", "61", "1e20", "NaN"] {
+            let form = form.clone().with("poll_s", Some(bad));
+            assert!(Config::from_settings(&form).is_err(), "{bad}");
+        }
     }
 }
