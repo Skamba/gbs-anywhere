@@ -11,17 +11,18 @@ FROM rust:1-trixie AS build
 ARG GBS_COMMIT=""
 WORKDIR /src
 COPY . .
-RUN apt-get update && apt-get install -y \
-    pkg-config \
-    libdbus-1-dev \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
-RUN ls /usr/lib/ | tee target/build.txt
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
     cargo build --release --locked \
  && cp target/release/gbs-anywhere /usr/local/bin/gbs-anywhere \
  && mkdir -p /out/data
+
+RUN apt-get update && apt-get install -y \
+    pkg-config \
+    libdbus-1-dev \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN ls /usr/lib/ | tee /home/panterro/Projects/gbs-anywhere-bt/build.txt
 FROM gcr.io/distroless/cc-debian13:nonroot
 COPY --from=build /usr/local/bin/gbs-anywhere /usr/local/bin/gbs-anywhere
 COPY LICENSE /usr/share/doc/gbs-anywhere/LICENSE
