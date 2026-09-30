@@ -49,7 +49,7 @@ pub const FIELDS: &[Field] = &[
                tares and times the shot, so there is time to start the machine. 0 to 30000.",
         input: Input::Number,
         required: false,
-        default: "1000",
+        default: "2000",
     },
     Field {
         key: "live_ms",
@@ -58,14 +58,14 @@ pub const FIELDS: &[Field] = &[
                higher means less traffic. 100 to 2000.",
         input: Input::Number,
         required: false,
-        default: "250",
+        default: "100",
     },
 ];
 
 const DEFAULT_STABLE_S: f64 = 3.0;
 const DEFAULT_MIN_G: f64 = 5.0;
-const DEFAULT_LIVE_MS: f64 = 250.0;
-const DEFAULT_START_DELAY_MS: f64 = 1000.0;
+const DEFAULT_LIVE_MS: f64 = 100.0;
+const DEFAULT_START_DELAY_MS: f64 = 2000.0;
 const DEFAULT_SCAN: Duration = Duration::from_secs(10);
 
 /// The scale to use and when a shot counts as over.
@@ -228,8 +228,8 @@ mod tests {
         assert_eq!(cfg.name_prefix, DEFAULT_NAME_PREFIX);
         assert!(cfg.drive_timer);
         assert_eq!(cfg.stable_for, Duration::from_secs(3));
-        assert_eq!(cfg.live_every, Duration::from_millis(250));
-        assert_eq!(cfg.start_delay, Duration::from_secs(1));
+        assert_eq!(cfg.live_every, Duration::from_millis(100));
+        assert_eq!(cfg.start_delay, Duration::from_secs(2));
 
         let off = Args {
             precisa: false,

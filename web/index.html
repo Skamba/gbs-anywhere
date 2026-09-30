@@ -571,12 +571,16 @@
     $("knob-target").textContent = g(target);
     if (s === "brew") {
       const ms = state.mako.REAL_EXTRACTION_TIME_MS || 0;
-      $("brew-timer").textContent = fmtClock(ms);
-      const limit = state.config.brew_timeout ? state.config.brew_timeout.secs * 1000 : null;
-      $("brew-left").textContent = "since the knob press" + (limit ? " · " + fmtClock(limit - ms) + " left to enter it" : "");
-      if (!weightTouched && target && !$("f-weight").value) $("f-weight").value = target;
       const src = liveSource();
       const live = !!src && !manualOverride;
+      // With a scale, the clock shows the scale's shot time: it waits out the
+      // scale's start delay (held at 0) like the scale does.
+      const scaleMs = live && src.live.shot_s != null ? Math.max(0, src.live.shot_s) * 1000 : null;
+      $("brew-timer").textContent = fmtClock(scaleMs != null ? scaleMs : ms);
+      const limit = state.config.brew_timeout ? state.config.brew_timeout.secs * 1000 : null;
+      $("brew-left").textContent = (scaleMs != null ? "timed by " + src.title : "since the knob press")
+        + (limit ? " · " + fmtClock(limit - ms) + " left to enter it" : "");
+      if (!weightTouched && target && !$("f-weight").value) $("f-weight").value = target;
       const ah = $("auto-hint");
       ah.hidden = !auto || live;
       ah.textContent = joinTitles(autoTitles) + " will send the time and weight when the shot ends."
@@ -714,7 +718,7 @@
   async function loop() {
     await tick();
     const src = state && state.phase.phase === "brewing" && liveSource();
-    const every = src ? Math.min(2000, Math.max(100, src.live.refresh_ms || 250)) : 1000;
+    const every = src ? Math.min(2000, Math.max(100, src.live.refresh_ms || 100)) : 1000;
     setTimeout(loop, every);
   }
   loop();
