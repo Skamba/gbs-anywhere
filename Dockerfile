@@ -20,7 +20,6 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
-ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig/
 FROM gcr.io/distroless/cc-debian13:nonroot
 COPY --from=build /usr/local/bin/gbs-anywhere /usr/local/bin/gbs-anywhere
 COPY LICENSE /usr/share/doc/gbs-anywhere/LICENSE
@@ -30,6 +29,7 @@ LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV CONFIG_FILE=/data/gbs-anywhere.json
 VOLUME ["/data"]
+ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig/
 # Docker lets unprivileged processes bind low ports inside a container's own
 # network namespace, so port 80 works as nonroot with `-p 80:80`.
 EXPOSE 80
