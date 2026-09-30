@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     cargo build --release --locked \
  && cp target/release/gbs-anywhere /usr/local/bin/gbs-anywhere \
  && mkdir -p /out/data
- && ls /usr/lib/
+    ls /usr/lib/
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libdbus-1-dev \
