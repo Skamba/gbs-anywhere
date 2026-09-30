@@ -304,6 +304,18 @@ pub struct StatusSnapshot {
     pub since_ms: u64,
     pub reports: u32,
     pub last_report: Option<ShotResult>,
+    /// The current reading, for integrations that have one and are
+    /// connected; `None` otherwise.
+    pub live: Option<Live>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Live {
+    /// Grams on the scale.
+    pub grams: f64,
+    /// Seconds since the brew started while a shot is measured; `None`
+    /// otherwise.
+    pub shot_s: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -315,6 +327,7 @@ struct StatusInner {
     since: Instant,
     reports: u32,
     last_report: Option<ShotResult>,
+    live: Option<Live>,
 }
 
 /// Shared, cheap to clone. Integrations set it; the server reads it.
@@ -340,6 +353,7 @@ impl Status {
                 since: Instant::now(),
                 reports: 0,
                 last_report: None,
+                live: None,
             })),
         }
     }
@@ -370,6 +384,12 @@ impl Status {
         self.set(Health::Watching, detail.into());
     }
 
+    /// The current reading; `None` clears it. Cleared by itself on errors and
+    /// when the integration stops.
+    pub fn live(&self, live: Option<Live>) {
+        self.lock().live = live;
+    }
+
     /// Records a failure; the message stays visible as `last_error` until the
     /// next successful state.
     pub fn error(&self, message: impl Into<String>) {
@@ -380,6 +400,7 @@ impl Status {
         }
         s.health = Health::Error;
         s.detail.clone_from(&message);
+        s.live = None;
         s.last_error = Some(message);
     }
 
@@ -396,6 +417,9 @@ impl Status {
         s.detail = detail;
         if health != Health::Error {
             s.last_error = None;
+            if matches!(health, Health::Error | Health::Stopped) {
+            s.live = None;
+            }    
         }
     }
 
@@ -418,6 +442,7 @@ impl Status {
             since_ms: u64::try_from(s.since.elapsed().as_millis()).unwrap_or(u64::MAX),
             reports: s.reports,
             last_report: s.last_report,
+            live: s.live,
         }
     }
 
@@ -559,6 +584,10 @@ mod tests {
         assert_eq!(snap.subject, "thing");
         assert_eq!(snap.detail, "fine");
         assert_eq!(snap.last_error, None);
+        s.live(Some(Live { grams: 18.2, shot_s: Some(4.5) }));
+        assert_eq!(s.snapshot().live.unwrap().grams, 18.2);
+        s.error("gone");
+        assert_eq!(s.snapshot().live, None);
     }
 
     #[test]

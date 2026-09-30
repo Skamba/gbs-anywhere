@@ -17,7 +17,9 @@ use super::TITLE;
 use super::config::Config;
 use super::precisa::{self, Reading};
 use super::shot::{End, ShotTracker};
-use crate::integration::{Backoff, BoxFuture, BrewStart, Integration, Link, ReportOutcome};
+use crate::integration::{
+    Backoff, BoxFuture, BrewStart, Integration, Link, Live, ReportOutcome,
+};
 
 const MIN_BACKOFF: Duration = Duration::from_secs(2);
 /// A switched-off scale is the normal case: look again at least every minute.
@@ -87,9 +89,9 @@ async fn serve(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<(
                 };
                 shot(link, cfg, scale, started).await?;
             }
-            // Idle readings only keep the connection watched.
+            // Idle: show what is on the scale.
             reading = scale.next_reading() => {
-                reading?;
+                show(link, reading?.grams, None);
             }
         }
     }
@@ -120,15 +122,22 @@ async fn shot(
 
     let mut tracker = ShotTracker::new(cfg.end_rule());
     let mut tick = tokio::time::interval(TICK);
+    let mut grams_now = 0.0;
     let end: End = loop {
         tokio::select! {
             reading = scale.next_reading() => {
-                if let Some(end) = tracker.reading(start.elapsed(), reading?) {
+                let reading = reading?;
+                let at = start.elapsed();
+                grams_now = reading.grams;
+                show(link, grams_now, Some(at));
+                if let Some(end) = tracker.reading(at, reading) {
                     break end;
                 }
             }
             _ = tick.tick() => {
                 let at = start.elapsed();
+                // The clock runs on while the scale is quiet.
+                show(link, grams_now, Some(at));
                 if let Some(end) = tracker.tick(at) {
                     break end;
                 }
@@ -153,9 +162,9 @@ async fn shot(
         let _ = scale.send(&precisa::STOP_TIMER).await;
     }
 
-    // The scale reads 0.1 g.
-    let grams = (end.grams * 10.0).round() / 10.0;
+    let grams = tenth(end.grams);
     let secs = end.time.as_secs_f64();
+    show(link, end.grams, None);
     if test {
         tracing::info!("{TITLE}: test shot {secs:.1} s, {grams:.1} g (not reported)");
         link.status
@@ -169,6 +178,20 @@ async fn shot(
     };
     link.status.connected(line);
     Ok(())
+}
+
+/// Puts the scale's weight, and during a shot its time, into the status for
+/// the app's live display.
+fn show(link: &Link, grams: f64, shot: Option<Duration>) {
+    link.status.live(Some(Live {
+        grams: tenth(grams),
+        shot_s: shot.map(|d| tenth(d.as_secs_f64())),
+    }));
+}
+
+/// The scale reads 0.1 g; times are shown to 0.1 s.
+fn tenth(x: f64) -> f64 {
+    (x * 10.0).round() / 10.0
 }
 
 // ---------------------------------------------------------------------------
