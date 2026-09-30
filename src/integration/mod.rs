@@ -160,10 +160,12 @@ impl Link {
             }
             let (grams, source) = match weight {
                 Some((g, source)) if g.is_finite() && g > 0.0 => (g, source),
-                _ => match m.last_grind().and_then(|g| g.beverage_weight_g) {
-                    Some(g) => (g, "grinder recipe weight".to_owned()),
-                    None => (0.0, "no weight known".to_owned()),
-                },
+                // `report_shot` refuses the shot when there is no recipe
+                // weight either.
+                _ => (
+                    m.recipe_weight_g().unwrap_or(0.0),
+                    "grinder recipe weight".to_owned(),
+                ),
             };
             let shot = ShotResult::from_grams(time, grams);
             match m.report_shot(now, shot) {
@@ -473,12 +475,10 @@ mod tests {
         let l = link();
         let later = Instant::now() + Duration::from_secs(30);
         l.server.with(|m, _| m.on_start_request(later, Some(9)));
+        // No weight and no recipe weight: refused rather than sending 0 g.
         assert_eq!(
             l.report(Duration::from_secs(30), None),
-            ReportOutcome::Reported {
-                grams: 0.0,
-                source: "no weight known".into()
-            }
+            ReportOutcome::Refused(MachineError::NoWeight)
         );
 
         let l = link();

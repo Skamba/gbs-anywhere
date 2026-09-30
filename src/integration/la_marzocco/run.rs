@@ -222,9 +222,8 @@ async fn watch(
         }
         let poll_s = cfg.poll.as_secs();
         tracing::info!("{TITLE}: grinder is waiting, watching the coffee log every {poll_s} s");
-        link.status.watching(format!(
-            "grinder is waiting · checking the coffee log every {poll_s} s"
-        ));
+        let waiting = format!("grinder is waiting · checking the coffee log every {poll_s} s");
+        link.status.watching(&waiting);
         let mut errors = 0u32;
         loop {
             tokio::time::sleep(cfg.poll).await;
@@ -234,7 +233,11 @@ async fn watch(
             }
             let list = match client.last_coffees(&machine.serial, 1).await {
                 Ok(l) => {
-                    errors = 0;
+                    if errors > 0 {
+                        // Back from a failed poll: still watching this brew.
+                        errors = 0;
+                        link.status.watching(&waiting);
+                    }
                     l
                 }
                 Err(e) => {
