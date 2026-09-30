@@ -28,7 +28,7 @@ docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
 | E-mail | `--lm-username` | `LM_USERNAME` | off |
 | Password | `--lm-password` | `LM_PASSWORD` | |
 | Machine serial number | `--lm-serial` | `LM_SERIAL` | the account's only machine |
-| Seconds between checks | `--lm-poll-s` | `LM_POLL_S` | 3 |
+| Seconds between checks (1 to 60) | `--lm-poll-s` | `LM_POLL_S` | 3 |
 
 ## How it works
 

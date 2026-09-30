@@ -48,11 +48,11 @@ struct Args {
     log: Option<PathBuf>,
 
     /// Seconds to show ACTIVE FINISHING before going back to ON (>= 1 poll).
-    #[arg(long, default_value_t = 6.0)]
+    #[arg(long, default_value_t = 6.0, value_parser = up_to_an_hour)]
     finishing_hold_s: f64,
 
     /// Abort a brew after this many seconds without a reported result.
-    #[arg(long, default_value_t = 180.0)]
+    #[arg(long, default_value_t = 180.0, value_parser = up_to_an_hour)]
     brew_timeout_s: f64,
 
     /// Serial number to report (MA_SN).
@@ -256,16 +256,26 @@ fn handle_line(x: &Server, line: &str) -> String {
             let Ok(s) = secs.replace(',', ".").parse::<f64>() else {
                 return format!("unknown command `{line}` (h for help)");
             };
-            if !s.is_finite() || s < 0.0 {
-                return "time must be a positive number of seconds".into();
-            }
+            let Some(time) = ShotResult::time_from_secs(s) else {
+                return "time must be between 0 and 600 seconds".into();
+            };
             let grams = words
                 .next()
                 .and_then(|g| g.replace(',', ".").parse::<f64>().ok())
                 .unwrap_or(0.0);
-            let shot = ShotResult::from_grams(Duration::from_secs_f64(s), grams);
+            let shot = ShotResult::from_grams(time, grams);
             result_msg(x.with(|m, now| m.report_shot(now, shot)))
         }
+    }
+}
+
+/// Parses a flag in seconds, from 0 to an hour.
+fn up_to_an_hour(s: &str) -> Result<f64, String> {
+    let secs: f64 = s.parse().map_err(|_| format!("`{s}` is not a number"))?;
+    if (0.0..=3600.0).contains(&secs) {
+        Ok(secs)
+    } else {
+        Err("must be between 0 and 3600 seconds".to_owned())
     }
 }
 
@@ -291,5 +301,19 @@ mod tests {
     fn cli_is_well_formed() {
         use clap::CommandFactory;
         Args::command().debug_assert();
+    }
+
+    #[test]
+    fn second_flags_reject_what_would_not_fit() {
+        let parse = |flag: &str, value: &str| Args::try_parse_from(["gbs-anywhere", flag, value]);
+        assert_eq!(
+            parse("--finishing-hold-s", "2.5").unwrap().finishing_hold_s,
+            2.5
+        );
+        assert_eq!(parse("--brew-timeout-s", "0").unwrap().brew_timeout_s, 0.0);
+        for bad in ["-1", "3601", "1e20", "NaN", "inf", "soon"] {
+            assert!(parse("--finishing-hold-s", bad).is_err(), "{bad}");
+            assert!(parse("--brew-timeout-s", bad).is_err(), "{bad}");
+        }
     }
 }

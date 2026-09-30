@@ -4,6 +4,7 @@
 //! |---|---|---|
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
+//! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
 //! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
@@ -12,7 +13,7 @@
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
 //! | GET | `/api/events?after=N` | events with `seq > N` |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
-//! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers |
+//! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the brew as a user abort (grinder skips it) |
 //! | POST | `/api/shot/start` | starts a brew without a grinder request (grinder sees a flush) |
 //! | POST | `/api/machine` | patch the `ON`-state mako fields, e.g. `{"TANK_LEVEL":0}` |
@@ -40,6 +41,9 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
     axum::Router::new()
         .route("/", get(app_page))
         .route("/icons/{name}", get(icon))
+        .route("/favicon.ico", get(no_icon))
+        .route("/apple-touch-icon.png", get(no_icon))
+        .route("/apple-touch-icon-precomposed.png", get(no_icon))
         .route("/api/state", get(get_state))
         .route("/api/events", get(get_events))
         .route("/api/events/stream", get(stream_events))
@@ -91,6 +95,12 @@ pub fn state_json(x: &Server) -> Value {
 
 async fn app_page() -> axum::response::Html<&'static str> {
     axum::response::Html(include_str!("../../web/index.html"))
+}
+
+/// Browsers ask for these by themselves; not answered here, they would reach
+/// the grinder handler and be counted as grinder traffic.
+async fn no_icon() -> StatusCode {
+    StatusCode::NOT_FOUND
 }
 
 /// An icon file from the `--icons` directory. Names are restricted to
@@ -247,7 +257,8 @@ fn change_error(e: &ChangeError) -> Response {
 }
 
 /// A measured shot as a person enters it. Time is required; volume may be
-/// given as grams from a scale (1 g ≈ 1 ml) or as ml.
+/// given as grams from a scale (1 g ≈ 1 ml) or as ml. Without one (or with
+/// 0), the machine uses the recipe weight.
 #[derive(Debug, Deserialize)]
 pub struct ShotInput {
     pub time_s: Option<f64>,
@@ -259,10 +270,13 @@ pub struct ShotInput {
 impl ShotInput {
     pub fn into_result(self) -> Result<ShotResult, &'static str> {
         let time = match (self.time_ms, self.time_s) {
-            (Some(ms), _) => Duration::from_millis(ms.into()),
-            (None, Some(s)) if s.is_finite() && s >= 0.0 => Duration::from_secs_f64(s),
-            _ => return Err("need time_s or time_ms"),
+            (Some(ms), _) => Some(Duration::from_millis(ms.into())),
+            (None, Some(s)) => ShotResult::time_from_secs(s),
+            (None, None) => return Err("need time_s or time_ms"),
         };
+        let time = time
+            .filter(|t| *t <= ShotResult::MAX_TIME)
+            .ok_or("time must be between 0 and 600 seconds")?;
         let volume = self.volume_ml.or(self.weight_g).unwrap_or(0.0);
         Ok(ShotResult::new(time, volume))
     }
@@ -324,6 +338,7 @@ async fn clear_overrides(State(x): State<Arc<Server>>) -> Json<Value> {
 fn machine_reply(r: Result<(), MachineError>, x: &Server) -> Response {
     match r {
         Ok(()) => Json(state_json(x)).into_response(),
+        Err(e @ MachineError::NoWeight) => error(StatusCode::BAD_REQUEST, &e.to_string()),
         Err(e) => error(StatusCode::CONFLICT, &e.to_string()),
     }
 }

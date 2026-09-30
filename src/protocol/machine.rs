@@ -71,6 +71,18 @@ pub struct ShotResult {
 }
 
 impl ShotResult {
+    /// Longest shot time a person can enter. Well past the grinder's 80 s, so
+    /// a slow shot still reaches it (and is skipped there); more is a typo.
+    pub const MAX_TIME: Duration = Duration::from_secs(600);
+
+    /// A typed shot time in seconds, or `None` unless it is a number from 0
+    /// to [`Self::MAX_TIME`].
+    pub fn time_from_secs(s: f64) -> Option<Duration> {
+        (0.0..=Self::MAX_TIME.as_secs_f64())
+            .contains(&s)
+            .then(|| Duration::from_secs_f64(s))
+    }
+
     pub fn new(time: Duration, volume_ml: f64) -> Self {
         Self {
             time_ms: u32::try_from(time.as_millis()).unwrap_or(u32::MAX),
@@ -154,6 +166,9 @@ pub enum MachineError {
     NotBrewing,
     /// A brew was requested while one is running.
     AlreadyBrewing,
+    /// A result came without a weight, and the grinder sent no recipe weight
+    /// to fall back on.
+    NoWeight,
 }
 
 impl std::fmt::Display for MachineError {
@@ -161,6 +176,7 @@ impl std::fmt::Display for MachineError {
         f.write_str(match self {
             Self::NotBrewing => "no brew is running",
             Self::AlreadyBrewing => "a brew is already running",
+            Self::NoWeight => "no weight given, and the grinder sent no recipe weight",
         })
     }
 }
@@ -221,6 +237,12 @@ impl Machine {
         self.last_grind.as_ref()
     }
 
+    /// The target weight of the last grind's recipe, if the grinder sent one.
+    pub fn recipe_weight_g(&self) -> Option<f64> {
+        let g = self.last_grind.as_ref()?.beverage_weight_g?;
+        (g.is_finite() && g > 0.0).then_some(g)
+    }
+
     /// Events with `seq > after`, oldest first (the last few hundred are kept).
     pub fn events_after(&self, after: u64) -> impl Iterator<Item = &EventRecord> {
         self.events.iter().filter(move |e| e.seq > after)
@@ -260,12 +282,23 @@ impl Machine {
         Ok(())
     }
 
-    /// The human's measured numbers: ends the brew and shows the result.
+    /// The human's measured numbers: ends the brew and shows the result. A
+    /// weight of 0 (none given) becomes the recipe weight; with no recipe
+    /// weight either, the result is refused.
     pub fn report_shot(&mut self, now: Instant, result: ShotResult) -> Result<(), MachineError> {
         self.tick(now);
         if !matches!(self.phase, Phase::Brewing { .. }) {
             return Err(MachineError::NotBrewing);
         }
+        // Never send 0 g: without a weight, use the recipe's.
+        let result = if result.volume_ml.is_finite() && result.volume_ml > 0.0 {
+            result
+        } else {
+            ShotResult {
+                volume_ml: self.recipe_weight_g().ok_or(MachineError::NoWeight)?,
+                ..result
+            }
+        };
         self.phase = Phase::Finishing {
             until: now + self.config.finishing_hold,
             result,
@@ -426,6 +459,17 @@ mod tests {
     }
 
     #[test]
+    fn typed_shot_time_stays_in_range() {
+        let secs = ShotResult::time_from_secs;
+        assert_eq!(secs(28.5), Some(Duration::from_millis(28_500)));
+        assert_eq!(secs(0.0), Some(Duration::ZERO));
+        assert_eq!(secs(600.0), Some(ShotResult::MAX_TIME));
+        for bad in [-1.0, 600.1, 1e20, f64::INFINITY, f64::NAN] {
+            assert_eq!(secs(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
     fn human_shot_is_accepted_by_the_grinder_model() {
         let t0 = Instant::now();
         let mut m = Machine::new(MachineConfig::default());
@@ -451,6 +495,35 @@ mod tests {
             m.mako(t2 + Duration::from_secs(60)).status,
             MachineStatus::On
         );
+    }
+
+    #[test]
+    fn shot_without_weight_gets_the_recipe_weight_never_zero() {
+        let t0 = Instant::now();
+        let time = Duration::from_secs(30);
+        let mut m = Machine::new(MachineConfig::default());
+        m.on_start_request(t0, Some(9));
+        assert_eq!(
+            m.report_shot(t0, ShotResult::from_grams(time, 0.0)),
+            Err(MachineError::NoWeight),
+            "no recipe weight to fall back on"
+        );
+        assert!(
+            matches!(m.phase(t0), Phase::Brewing { .. }),
+            "still brewing"
+        );
+
+        let recipe = GrindResult::parse(br#"{"SYNC_BEVERAGE_WEIGHT":36.5}"#).unwrap();
+        m.on_grind_result(t0, recipe);
+        for none in [0.0, -1.0, f64::NAN] {
+            let mut m = m.clone();
+            m.report_shot(t0, ShotResult::from_grams(time, none))
+                .unwrap();
+            assert_eq!(m.last_shot().unwrap().volume_ml, 36.5, "{none}");
+        }
+        m.report_shot(t0, ShotResult::from_grams(time, 38.0))
+            .unwrap();
+        assert_eq!(m.last_shot().unwrap().volume_ml, 38.0, "a weight is kept");
     }
 
     #[test]

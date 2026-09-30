@@ -154,7 +154,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 
 | flag | default | what |
 |---|---|---|
-| `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long |
+| `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever) |
 | `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for the integrations added in the app; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs |
 | `--log <file>` | off | append every grinder request to a file |
@@ -174,7 +174,7 @@ JSON on the same port as the app, for scripts or another front end:
 | GET | `/api/state` | version, phase, machine state, last shot, grinder connection, integrations (with a scale's live reading) |
 | GET | `/api/events?after=N` | events with `seq > N` |
 | GET | `/api/events/stream` | the same, live, as server-sent events |
-| POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` reports the running shot |
+| POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` reports the running shot (time up to 600 s; without a weight, the recipe weight is sent) |
 | POST | `/api/shot/abort` | aborts the running shot (the grinder skips it) |
 | POST | `/api/shot/start` | starts a brew without the grinder (a test; the grinder sees a flush) |
 | GET | `/api/integrations/kinds` | the integrations that can be added, with their setup forms |

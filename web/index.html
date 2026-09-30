@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#1c1714">
 <title>Grind-by-Sync</title>
+<link rel="icon" href="data:,">
 <style>
   :root {
     --bg: #f6f2ee;
@@ -724,7 +725,9 @@
     if (!isFinite(t) || t <= 0) { $("form-hint").className = "hint warn"; $("form-hint").textContent = "Enter the time."; $("f-time").focus(); return; }
     busy = true; $("send").disabled = true;
     try {
-      await api("/api/shot/result", { method: "POST", body: JSON.stringify({ time_s: t, weight_g: isFinite(w) ? w : 0 }) });
+      // Without a weight the server uses the recipe's; it never sends 0 g.
+      const shot = w > 0 ? { time_s: t, weight_g: w } : { time_s: t };
+      await api("/api/shot/result", { method: "POST", body: JSON.stringify(shot) });
       document.activeElement && document.activeElement.blur();
       await tick();
     } catch (err) {

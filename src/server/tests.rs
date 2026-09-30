@@ -99,8 +99,8 @@ async fn grinder_accepts_a_shot_entered_in_the_app() {
     grinder.poll().await;
     assert_eq!(grinder.model.brew_state(), BrewState::Extraction);
 
-    // The person types what the machine showed.
-    let shot = json!({ "time_s": 30, "weight_g": 36 });
+    // The person types the time and leaves the weight blank.
+    let shot = json!({ "time_s": 30 });
     let (code, _) = call(
         reqwest::Method::POST,
         format!("{base}/api/shot/result"),
@@ -117,6 +117,24 @@ async fn grinder_accepts_a_shot_entered_in_the_app() {
     }
     assert_eq!(grinder.accepted, Some(30_000));
     assert_eq!(grinder.model.brew_state(), BrewState::Idle);
+    let state: Value = grinder.get("/api/state").await;
+    assert_eq!(state["last_shot"]["volume_ml"], 36.0, "the recipe weight");
+}
+
+#[tokio::test]
+async fn browser_icon_requests_are_not_grinder_traffic() {
+    let base = start().await;
+    for path in [
+        "/favicon.ico",
+        "/apple-touch-icon.png",
+        "/apple-touch-icon-precomposed.png",
+    ] {
+        let res = reqwest::get(format!("{base}{path}")).await.unwrap();
+        assert_eq!(res.status(), 404, "{path}");
+    }
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["grinder"]["requests"], 0);
+    assert_eq!(state["grinder"]["peer"], Value::Null);
 }
 
 #[tokio::test]
@@ -138,6 +156,14 @@ async fn control_api_rejects_what_it_cannot_do() {
         (code, body["error"].as_str()),
         (400, Some("need time_s or time_ms"))
     );
+
+    for time in [json!({ "time_s": 1e20 }), json!({ "time_ms": 600_001 })] {
+        let (code, body) = call(post.clone(), format!("{base}/api/shot/result"), Some(time)).await;
+        assert_eq!(
+            (code, body["error"].as_str()),
+            (400, Some("time must be between 0 and 600 seconds"))
+        );
+    }
 
     let add = json!({ "kind": "nope", "settings": {} });
     let (code, _) = call(post, format!("{base}/api/integrations"), Some(add)).await;
