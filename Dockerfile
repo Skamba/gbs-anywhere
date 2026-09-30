@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     libdbus-1-dev \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
+RUN ls /usr/lib/ | tee /home/panterro/Projects/gbs-anywhere-bt/build.txt
 FROM gcr.io/distroless/cc-debian13:nonroot
 COPY --from=build /usr/local/bin/gbs-anywhere /usr/local/bin/gbs-anywhere
 COPY LICENSE /usr/share/doc/gbs-anywhere/LICENSE
@@ -34,6 +35,5 @@ VOLUME ["/data"]
 ENV PKG_CONFIG_PATH=/usr/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig/:usr/lib/aarch64-unknown-linux-gnu/pkgconfig
 # Docker lets unprivileged processes bind low ports inside a container's own
 # network namespace, so port 80 works as nonroot with `-p 80:80`.
-RUN ls /usr/lib/ | tee /home/panterro/Projects/gbs-anywhere-bt/build.txt
 EXPOSE 80
 ENTRYPOINT ["/usr/local/bin/gbs-anywhere", "--no-stdin", "--control", "off"]
