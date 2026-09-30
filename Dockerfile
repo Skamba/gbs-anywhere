@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
     libdbus-1-dev \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
-RUN ls /usr/lib/ | tee /home/panterro/Projects/gbs-anywhere-bt/build.txt
+RUN ls /usr/lib/aarch64-linux-gnu | tee /home/panterro/Projects/gbs-anywhere-bt/build.txt
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
     cargo build --release --locked \
