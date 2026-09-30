@@ -31,14 +31,14 @@ docker run -d --name gbs-anywhere --restart unless-stopped --net=host \
 | leave the timer alone | `--precisa-no-timer` | `PRECISA_NO_TIMER` | off |
 | Seconds without a rise | `--precisa-stable-s` | `PRECISA_STABLE_S` | 3 |
 | Minimum grams | `--precisa-min-g` | `PRECISA_MIN_G` | 5 |
-| Milliseconds to start the machine | `--precisa-start-delay-ms` | `PRECISA_START_DELAY_MS` | 3000 |
+| Milliseconds to start the machine | `--precisa-start-delay-ms` | `PRECISA_START_DELAY_MS` | 1000 |
 | Live display refresh (ms) | `--precisa-live-ms` | `PRECISA_LIVE_MS` | 250 |
 
 ## How it works
 
 Put the cup on the scale, grind, press the knob and start the machine within
-the "milliseconds to start the machine" (3000 ms by default; the app counts
-down).
+the "milliseconds to start the machine" (1000 ms by default; the time in the
+app stays at 0 until then).
 Then gbs-anywhere tares the scale and resets and starts its timer; the shot
 is timed from that moment. With 0 it starts right at the knob press.
 

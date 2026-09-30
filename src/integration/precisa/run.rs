@@ -216,9 +216,8 @@ async fn shot(
 }
 
 /// Waits `cfg.start_delay` after the brew start, so there is time to start
-/// the machine by hand; the shot is timed from the end of it. The app shows
-/// the seconds left as a negative shot time. `false` if the brew ended
-/// meanwhile.
+/// the machine by hand; the shot is timed from the end of it. Meanwhile the
+/// app's shot time stays at 0. `false` if the brew ended meanwhile.
 async fn countdown(
     link: &Link,
     cfg: &Config,
@@ -241,7 +240,8 @@ async fn countdown(
         }
         link.status.live(Some(Live {
             grams: tenth(grams),
-            shot_s: Some(-tenth(left.as_secs_f64())),
+            // Held at 0 until the delay is over and the shot is timed.
+            shot_s: Some(0.0),
             measuring: true,
             refresh_ms: refresh_ms(cfg),
         }));
