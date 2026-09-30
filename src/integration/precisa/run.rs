@@ -56,9 +56,24 @@ async fn run(link: Link, cfg: Config) {
     // A switched-off scale is the normal case: keep looking at the configured
     // pace, without growing delays, so it reconnects soon after switching on.
     let mut backoff = Backoff::new(cfg.reconnect_every, cfg.reconnect_every);
+    // One D-Bus connection for the whole run. Each `Manager` opens its own
+    // and keeps it; one per attempt used up the system bus's per-user limit
+    // ("maximum number of active connections for UID 0").
+    let bt = loop {
+        link.status.starting("opening Bluetooth");
+        match Bluetooth::open().await {
+            Ok(bt) => break bt,
+            Err(e) => {
+                tracing::warn!("{TITLE}: {e:#}");
+                link.status.error(format!("{e:#}"));
+                // Slower here: without Bluetooth nothing changes quickly.
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+    };
     loop {
         link.status.starting("looking for the scale");
-        match connect(&cfg).await {
+        match connect(&bt.adapter, &cfg).await {
             Ok(mut scale) => {
                 backoff.reset();
                 tracing::info!("{TITLE}: connected to {}", scale.name);
@@ -391,20 +406,35 @@ impl Scale {
 }
 
 /// Finds the scale, connects, subscribes to its weight and sets grams.
-async fn connect(cfg: &Config) -> anyhow::Result<Scale> {
-    let manager = Manager::new().await.context("Bluetooth not available")?;
-    let adapter = manager
-        .adapters()
-        .await?
-        .into_iter()
-        .next()
-        .context("no Bluetooth adapter")?;
+/// The Bluetooth stack, opened once: the manager holds the D-Bus connection.
+struct Bluetooth {
+    // Kept alive with the adapter, which works through its connection.
+    _manager: Manager,
+    adapter: Adapter,
+}
 
+impl Bluetooth {
+    async fn open() -> anyhow::Result<Self> {
+        let manager = Manager::new().await.context("Bluetooth not available")?;
+        let adapter = manager
+            .adapters()
+            .await?
+            .into_iter()
+            .next()
+            .context("no Bluetooth adapter")?;
+        Ok(Self {
+            _manager: manager,
+            adapter,
+        })
+    }
+}
+
+async fn connect(adapter: &Adapter, cfg: &Config) -> anyhow::Result<Scale> {
     // No service filter: not every scale advertises FFF0.
     adapter.start_scan(ScanFilter::default()).await?;
     let deadline = Instant::now() + cfg.scan_for;
     let found = loop {
-        if let Some(found) = find(&adapter, cfg).await? {
+        if let Some(found) = find(adapter, cfg).await? {
             break found;
         }
         if Instant::now() >= deadline {
