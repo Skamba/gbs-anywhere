@@ -28,7 +28,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, post, put};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::broadcast::error::RecvError;
