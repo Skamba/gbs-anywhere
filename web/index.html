@@ -407,7 +407,8 @@
     card.append(head, detail);
     if (i.live) {
       const live = document.createElement("p"); live.className = "integ-live";
-      live.textContent = one(i.live.grams) + " g" + (i.live.shot_s != null ? "  ·  " + one(i.live.shot_s) + " s" : "");
+      live.textContent = one(i.live.grams) + " g" + (i.live.shot_s != null ? "  ·  " + one(i.live.shot_s) + " s"
+        + (i.live.measuring ? "" : " last shot") : "");
       card.append(live);
     }
     const foot = document.createElement("div"); foot.className = "integ-foot";
@@ -585,15 +586,16 @@
       $("send").hidden = live;
       $("manual").hidden = !live;
       if (live) {
-        const measuring = src.live.shot_s != null;
-        $("l-time").textContent = measuring ? one(src.live.shot_s) : "–";
+        const measuring = !!src.live.measuring;
+        // After the scale stops, its last time stays until the next shot.
+        $("l-time").textContent = src.live.shot_s != null ? one(src.live.shot_s) : "–";
         $("l-weight").textContent = one(src.live.grams);
         $("l-time-box").classList.toggle("on", measuring);
         $("l-weight-box").classList.toggle("on", measuring);
         const h = $("form-hint");
         h.className = "hint";
         h.textContent = measuring
-          ? src.title + " measures the shot and sends it to the grinder when it ends."
+          ? src.title + " measures the shot and sends it when the scale ends it."
           : src.title + " is not measuring this shot. Enter it by hand if it doesn't start.";
       }
     }

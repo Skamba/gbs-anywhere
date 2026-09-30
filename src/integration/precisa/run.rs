@@ -86,35 +86,41 @@ async fn serve(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<(
     // Subscribed per connection: brews started while the scale was away must
     // not start a shot now.
     let mut brews = link.brews();
+    // The last measured shot's time, shown until the next shot starts.
+    let mut last_time = None;
     loop {
         tokio::select! {
             started = brews.next() => {
                 let Some(started) = started else {
                     return Ok(());
                 };
-                shot(link, cfg, scale, started).await?;
+                last_time = shot(link, cfg, scale, started).await?;
             }
             // Idle: show what is on the scale.
             reading = scale.next_reading() => {
-                show(link, cfg, reading?.grams, None);
+                show(link, cfg, reading?.grams, last_time, false);
             }
         }
     }
 }
 
-/// One shot, from the brew start to the report. A manual start is a test:
-/// the shot is measured the same way and shown, but never reported.
+/// One shot, from the brew start to its end. Returns the shot's time once the
+/// scale saw it end.
+///
+/// A knob press is reported to the grinder. A manual start is a test: the
+/// shot is measured the same way and ends the manual brew with the scale's
+/// numbers, as typing them in would (the grinder sees a flush).
 async fn shot(
     link: &Link,
     cfg: &Config,
     scale: &mut Scale,
     started: BrewStart,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Option<Duration>> {
     let test = started == BrewStart::Manual;
     let start = Instant::now();
     if test {
-        tracing::info!("{TITLE}: test brew started by hand, watching the scale (not reported)");
-        link.status.watching("test · watching the scale, nothing goes to the grinder");
+        tracing::info!("{TITLE}: test brew started by hand, watching the scale");
+        link.status.watching("test · watching the scale, the grinder sees a flush");
     } else {
         tracing::info!("{TITLE}: grinder is waiting, watching the scale");
         link.status.watching("grinder is waiting · watching the scale");
@@ -141,7 +147,7 @@ async fn shot(
                 let at = start.elapsed();
                 grams_now = reading.grams;
                 timer_confirmed |= reading.timer_running;
-                show(link, cfg, grams_now, Some(at));
+                show(link, cfg, grams_now, Some(at), true);
                 if let Some(end) = tracker.reading(at, reading) {
                     break end;
                 }
@@ -149,7 +155,7 @@ async fn shot(
             _ = tick.tick() => {
                 let at = start.elapsed();
                 // The clock runs on while the scale is quiet.
-                show(link, cfg, grams_now, Some(at));
+                show(link, cfg, grams_now, Some(at), true);
                 if !timer_confirmed && last_start.elapsed() >= TIMER_RETRY {
                     if start_tries < TIMER_TRIES {
                         start_tries += 1;
@@ -166,18 +172,23 @@ async fn shot(
                 if let Some(end) = tracker.tick(at) {
                     break end;
                 }
-                // A test runs until the scale sees the end, whatever the
-                // emulated brew does meanwhile.
-                if !test && !link.grinder_waiting() {
+                // Someone answered or aborted the brew (the app, a timeout):
+                // nothing left to measure for.
+                let still = if test {
+                    link.brewing() == Some(BrewStart::Manual)
+                } else {
+                    link.grinder_waiting()
+                };
+                if !still {
                     tracing::info!("{TITLE}: brew ended before the scale saw the shot end");
                     link.status.connected(READY);
-                    return Ok(());
+                    return Ok(None);
                 }
                 if at > MAX_SHOT {
                     tracing::info!("{TITLE}: no end of the shot after {} s, giving up",
                         MAX_SHOT.as_secs());
                     link.status.connected(READY);
-                    return Ok(());
+                    return Ok(None);
                 }
             }
         }
@@ -189,28 +200,30 @@ async fn shot(
 
     let grams = tenth(end.grams);
     let secs = end.time.as_secs_f64();
-    show(link, cfg, end.grams, None);
-    if test {
-        tracing::info!("{TITLE}: test shot {secs:.1} s, {grams:.1} g (not reported)");
-        link.status
-            .connected(format!("test shot: {secs:.1} s, {grams:.1} g (not reported)"));
-        return Ok(());
-    }
-    let outcome = link.report(end.time, Some((grams, "weighed by the scale".to_owned())));
+    show(link, cfg, end.grams, Some(end.time), false);
+    let outcome = if test {
+        link.finish_manual(end.time, grams, "weighed by the scale (test)")
+    } else {
+        link.report(end.time, Some((grams, "weighed by the scale".to_owned())))
+    };
     let line = match outcome {
+        ReportOutcome::Reported { grams, .. } if test => {
+            format!("test shot: {secs:.1} s, {grams:.1} g")
+        }
         ReportOutcome::Reported { grams, .. } => format!("last shot: {secs:.1} s, {grams:.1} g"),
         ReportOutcome::NotWaiting | ReportOutcome::Refused(_) => READY.to_owned(),
     };
     link.status.connected(line);
-    Ok(())
+    Ok(Some(end.time))
 }
 
-/// Puts the scale's weight, and during a shot its time, into the status for
-/// the app's live display, with how often the app should refresh it.
-fn show(link: &Link, cfg: &Config, grams: f64, shot: Option<Duration>) {
+/// Puts the scale's weight and a shot's time into the status for the app's
+/// live display: the running time while `measuring`, else the last shot's.
+fn show(link: &Link, cfg: &Config, grams: f64, shot: Option<Duration>, measuring: bool) {
     link.status.live(Some(Live {
         grams: tenth(grams),
         shot_s: shot.map(|d| tenth(d.as_secs_f64())),
+        measuring,
         refresh_ms: u32::try_from(cfg.live_every.as_millis()).unwrap_or(u32::MAX),
     }));
 }

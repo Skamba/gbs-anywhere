@@ -124,8 +124,8 @@ pub enum BrewStart {
     /// A knob press: the grinder waits for the result.
     Grinder,
     /// Started by hand (a test without the grinder): nothing waits for a
-    /// result. An integration may measure it and show it, but
-    /// [`Link::report`] refuses it.
+    /// result. [`Link::report`] refuses it; [`Link::finish_manual`] ends it
+    /// with measured numbers, as typing them in the app would.
     Manual,
 }
 
@@ -159,8 +159,63 @@ impl Link {
         GrinderBrews(self.server.subscribe())
     }
     /// Every brew start from now on, knob presses and manual ones.
+    /// Every brew start from now on, knob presses and manual ones.
     pub fn brews(&self) -> Brews {
         Brews(self.server.subscribe())
+    }
+
+    /// Who started the running brew; `None` when no brew runs.
+    pub fn brewing(&self) -> Option<BrewStart> {
+        self.server.with(|m, now| match m.phase(now) {
+            Phase::Brewing {
+                requested_by_grinder,
+                ..
+            } => Some(if requested_by_grinder {
+                BrewStart::Grinder
+            } else {
+                BrewStart::Manual
+            }),
+            _ => None,
+        })
+    }
+
+    /// Ends a brew started by hand with measured numbers, like entering them
+    /// in the app (`POST /api/shot/result`): the grinder sees a flush. For
+    /// tests of an integration without the grinder. `NotWaiting` unless a
+    /// manual brew runs; never counted as a report to the grinder.
+    pub fn finish_manual(&self, time: Duration, grams: f64, source: &str) -> ReportOutcome {
+        let title = self.status.title();
+        let secs = time.as_secs_f64();
+        let outcome = self.server.with(|m, now| {
+            if !matches!(
+                m.phase(now),
+                Phase::Brewing {
+                    requested_by_grinder: false,
+                    ..
+                }
+            ) {
+                return ReportOutcome::NotWaiting;
+            }
+            match m.report_shot(now, ShotResult::from_grams(time, grams)) {
+                Ok(()) => ReportOutcome::Reported {
+                    grams,
+                    source: source.to_owned(),
+                },
+                Err(e) => ReportOutcome::Refused(e),
+            }
+        });
+        match &outcome {
+            ReportOutcome::Reported { .. } => {
+                tracing::info!("{title}: test shot {secs:.1} s, {grams:.1} g ended the manual brew");
+            }
+            ReportOutcome::NotWaiting => {
+                tracing::info!("{title}: {secs:.1} s test shot seen but no manual brew running");
+            }
+            ReportOutcome::Refused(e) => {
+                tracing::warn!("{title}: {secs:.1} s test shot not taken: {e}");
+            }
+        }
+        outcome
     }
 
     /// Reports a measured shot: `time` as the machine ran it, `weight` in
@@ -309,13 +364,16 @@ pub struct StatusSnapshot {
     pub live: Option<Live>,
 }
 
+/// What an integration measures right now, for a live display in the app.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct Live {
     /// Grams on the scale.
     pub grams: f64,
-    /// Seconds since the brew started while a shot is measured; `None`
-    /// otherwise.
+    /// The shot's time: running while `measuring`, afterwards the last
+    /// measured shot's, until the next one starts; `None` before any.
     pub shot_s: Option<f64>,
+    /// Whether a shot is being measured right now.
+    pub measuring: bool,
     /// How often the app should refresh while showing this, in ms (the
     /// integration's setting).
     pub refresh_ms: u32,
@@ -587,10 +645,11 @@ mod tests {
         assert_eq!(snap.subject, "thing");
         assert_eq!(snap.detail, "fine");
         assert_eq!(snap.last_error, None);
-        s.live(Some(Live { grams: 18.2, shot_s: Some(4.5), refresh_ms: 250 }));
+        s.live(Some(Live { grams: 18.2, shot_s: Some(4.5), measuring: true, refresh_ms: 250 }));
         assert_eq!(s.snapshot().live.unwrap().grams, 18.2);
         s.error("gone");
         assert_eq!(s.snapshot().live, None);
+        
     }
 
     #[test]
@@ -610,8 +669,14 @@ mod tests {
         let mut brews = l.brews();
         l.server.with(|m, now| m.start_brew(now)).unwrap();
         assert_eq!(brews.next().await, Some(BrewStart::Manual));
+        assert_eq!(l.brewing(), Some(BrewStart::Manual));
         assert!(!l.grinder_waiting());
-        l.server.with(|m, now| m.abort(now)).unwrap();
+        // A knob-press report is refused, a test result ends the brew.
+        let t = Duration::from_secs(27);
+        assert_eq!(l.report(t, Some((36.0, "scale".into()))), ReportOutcome::NotWaiting);
+        assert!(matches!(l.finish_manual(t, 36.0, "scale"), ReportOutcome::Reported { .. }));
+        assert_eq!(l.brewing(), None);
+        assert_eq!(l.status.snapshot().reports, 0);
 
         let later = Instant::now() + Duration::from_secs(30);
         l.server.with(|m, _| m.on_start_request(later, Some(9)));

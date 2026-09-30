@@ -31,6 +31,7 @@ docker run -d --name gbs-anywhere --restart unless-stopped --net=host \
 | leave the timer alone | `--precisa-no-timer` | `PRECISA_NO_TIMER` | off |
 | Seconds without a rise | `--precisa-stable-s` | `PRECISA_STABLE_S` | 3 |
 | Minimum grams | `--precisa-min-g` | `PRECISA_MIN_G` | 5 |
+| Live display refresh (ms) | `--precisa-live-ms` | `PRECISA_LIVE_MS` | 250 |
 
 ## How it works
 
@@ -43,10 +44,32 @@ gbs-anywhere tares the scale and resets and starts its timer.
 - **Time from the knob press.** Measured by gbs-anywhere, not by the scale,
   whose timer only counts whole seconds.
 - **The first second is ignored**, while the tare settles.
+- **Test without the grinder.** A brew started by hand (without a knob press)
+  is measured the same way; when the scale ends it, the brew ends with the
+  scale's time and weight, as if typed in the app. The grinder sees a flush.
 - **Only after a knob press.** Weighing while the grinder is not waiting is
   never reported, and presses while the scale was off do not count later.
 - **One app at a time.** The scale takes one Bluetooth connection; a phone
   app connected to it keeps gbs-anywhere out, and the other way round.
 - **The phone still works.** You can still enter a shot on your phone;
   whichever comes first wins.
+- **Live display.** While a shot runs, the app shows the scale's weight and
+  time instead of the entry fields and refreshes every 250 ms (100 to 2000,
+  the setting above). The scale itself sends at its own rate.
 - A switched-off scale is looked for again at least every minute.
+
+## Building it in
+
+The integration is listed in `src/integration/mod.rs` like La Marzocco. It
+needs these crates in `Cargo.toml`:
+
+```toml
+btleplug = "0.11"
+uuid = "1"
+futures = "0.3"
+dbus = { version = "0.9", features = ["vendored"] }
+```
+
+`dbus` with `vendored` builds libdbus into the binary, so the distroless
+Docker image needs nothing extra. Bluetooth in Docker needs `--net=host` and
+`-v /run/dbus:/run/dbus:ro` (see above).
