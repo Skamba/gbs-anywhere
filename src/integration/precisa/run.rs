@@ -25,7 +25,8 @@ use crate::integration::{
 const SCAN_POLL: Duration = Duration::from_millis(250);
 /// Without a notification for this long, check the scale is still connected.
 const SILENCE: Duration = Duration::from_secs(5);
-/// Give up on a shot whose end is never seen.
+/// Give up on a shot whose end is never seen: after this, or a minute past
+/// the minimum time if that is later.
 const MAX_SHOT: Duration = Duration::from_secs(120);
 const READY: &str = "ready, waiting for a knob press";
 /// Pause between commands: sent back to back, the scale drops some.
@@ -145,6 +146,7 @@ async fn shot(
     let mut last_start = Instant::now();
 
     let mut tracker = ShotTracker::new(cfg.end_rule());
+    let give_up = MAX_SHOT.max(cfg.min_time + Duration::from_secs(60));
     let mut tick = tokio::time::interval(cfg.live_every);
     let mut grams_now = 0.0;
     let end: End = loop {
@@ -187,9 +189,9 @@ async fn shot(
                     aborted(cfg, scale).await;
                     return Ok(None);
                 }
-                if at > MAX_SHOT {
+                if at > give_up {
                     tracing::info!("{TITLE}: no end of the shot after {} s, giving up",
-                        MAX_SHOT.as_secs());
+                        give_up.as_secs());
                     link.status.connected(READY);
                     aborted(cfg, scale).await;
                     return Ok(None);
@@ -197,6 +199,19 @@ async fn shot(
             }
         }
     };
+    if end.time < cfg.min_time {
+        // The scale's timer was stopped early: not a shot to report. The brew
+        // keeps running, so it can still be entered by hand or aborted.
+        let secs = end.time.as_secs_f64();
+        let min = cfg.min_time.as_secs_f64();
+        tracing::info!("{TITLE}: shot stopped after {secs:.1} s, below the minimum \
+            {min:.0} s: not reported");
+        show(link, cfg, end.grams, Some(end.time), false);
+        link.status
+            .connected(format!("shot stopped after {secs:.1} s, under {min:.0} s: not reported"));
+        aborted(cfg, scale).await;
+        return Ok(Some(end.time));
+    }
     if cfg.drive_timer {
         // Only for the display; the shot is measured already.
         let _ = scale.send(&precisa::STOP_TIMER).await;

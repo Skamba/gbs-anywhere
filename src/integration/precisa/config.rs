@@ -43,10 +43,19 @@ pub const FIELDS: &[Field] = &[
         default: "5",
     },
     Field {
+        key: "min_time_s",
+        label: "Minimum seconds",
+        help: "A shot is not over before this: a pause in the flow earlier does not end \
+               it, and stopping the scale's timer earlier aborts it. 0 to 200.",
+        input: Input::Number,
+        required: false,
+        default: "20",
+    },
+    Field {
         key: "start_delay_ms",
         label: "Milliseconds to start the machine",
         help: "After the knob press (or a test start) the scale waits this long before it \
-               tares and times the shot, so there is time to start the machine. 0 to 30000.",
+               tares and times the shot, so there is time to start the machine. 0 to 10000.",
         input: Input::Number,
         required: false,
         default: "2000",
@@ -64,7 +73,7 @@ pub const FIELDS: &[Field] = &[
         key: "live_ms",
         label: "Live display refresh (ms)",
         help: "How often the app updates weight and time during a shot: lower is smoother, \
-               higher means less traffic. 100 to 2000.",
+               higher means less traffic. 50 to 2000.",
         input: Input::Number,
         required: false,
         default: "100",
@@ -73,6 +82,7 @@ pub const FIELDS: &[Field] = &[
 
 const DEFAULT_STABLE_S: f64 = 3.0;
 const DEFAULT_MIN_G: f64 = 5.0;
+const DEFAULT_MIN_TIME_S: f64 = 20.0;
 const DEFAULT_LIVE_MS: f64 = 100.0;
 const DEFAULT_START_DELAY_MS: f64 = 2000.0;
 const DEFAULT_RECONNECT_MS: f64 = 500.0;
@@ -96,6 +106,8 @@ pub struct Config {
     pub stable_for: Duration,
     /// ... with at least this many grams in the cup.
     pub min_weight_g: f64,
+    /// A shot is not over before this; a timer stopped earlier aborts it.
+    pub min_time: Duration,
     /// How often the app refreshes the live display during a shot, and how
     /// often a running shot is checked here.
     pub live_every: Duration,
@@ -114,6 +126,10 @@ impl Config {
         if !(1.0..=15.0).contains(&stable_s) {
             bail!("seconds without a rise must be between 1 and 15");
         }
+        let min_time_s = s.number("min_time_s")?.unwrap_or(DEFAULT_MIN_TIME_S);
+        if !(0.0..=200.0).contains(&min_time_s) {
+            bail!("minimum seconds must be between 0 and 200");
+        }
         let min_g = s.number("min_g")?.unwrap_or(DEFAULT_MIN_G);
         if min_g <= 0.0 {
             bail!("minimum grams must be above 0");
@@ -121,16 +137,16 @@ impl Config {
         let start_delay_ms = s
             .number("start_delay_ms")?
             .unwrap_or(DEFAULT_START_DELAY_MS);
-        if !(0.0..=30_000.0).contains(&start_delay_ms) {
-            bail!("milliseconds to start the machine must be between 0 and 30000");
+        if !(0.0..=10_000.0).contains(&start_delay_ms) {
+            bail!("milliseconds to start the machine must be between 0 and 10000");
         }
         let reconnect_ms = s.number("reconnect_ms")?.unwrap_or(DEFAULT_RECONNECT_MS);
         if !(500.0..=3000.0).contains(&reconnect_ms) {
             bail!("reconnect pause must be between 500 and 3000 ms");
         }
         let live_ms = s.number("live_ms")?.unwrap_or(DEFAULT_LIVE_MS);
-        if !(100.0..=2000.0).contains(&live_ms) {
-            bail!("live display refresh must be between 100 and 2000 ms");
+        if !(50.0..=2000.0).contains(&live_ms) {
+            bail!("live display refresh must be between 50 and 2000 ms");
         }
         Ok(Self {
             address: s.text("address").map(str::to_owned),
@@ -139,6 +155,7 @@ impl Config {
             beep: s.text("beep") != Some("off"),
             stable_for: Duration::from_secs_f64(stable_s),
             min_weight_g: min_g,
+            min_time: Duration::from_secs_f64(min_time_s),
             live_every: Duration::from_secs_f64(live_ms / 1000.0),
             start_delay: Duration::from_secs_f64(start_delay_ms / 1000.0),
             reconnect_every: Duration::from_secs_f64(reconnect_ms / 1000.0),
@@ -150,6 +167,7 @@ impl Config {
         EndRule {
             stable_for: self.stable_for,
             min_weight_g: self.min_weight_g,
+            min_time: self.min_time,
             ..EndRule::default()
         }
     }
@@ -191,13 +209,18 @@ pub struct Args {
     #[arg(long, env = "PRECISA_MIN_G", default_value_t = DEFAULT_MIN_G)]
     pub precisa_min_g: f64,
 
+    /// Seconds before which a shot is not over; stopping the scale's timer
+    /// earlier aborts it (0 to 200).
+    #[arg(long, env = "PRECISA_MIN_TIME_S", default_value_t = DEFAULT_MIN_TIME_S)]
+    pub precisa_min_time_s: f64,
+
     /// Milliseconds between live display updates in the app during a shot
-    /// (100 to 2000).
+    /// (50 to 2000).
     #[arg(long, env = "PRECISA_LIVE_MS", default_value_t = DEFAULT_LIVE_MS)]
     pub precisa_live_ms: f64,
 
     /// Milliseconds after the knob press (or a test start) before the scale
-    /// tares and times the shot, to start the machine by hand (0 to 30000).
+    /// tares and times the shot, to start the machine by hand (0 to 10000).
     #[arg(long, env = "PRECISA_START_DELAY_MS", default_value_t = DEFAULT_START_DELAY_MS)]
     pub precisa_start_delay_ms: f64,
 
@@ -221,6 +244,7 @@ impl Args {
                 .with("beep", self.precisa_no_beep.then_some("off"))
                 .with("stable_s", Some(self.precisa_stable_s))
                 .with("min_g", Some(self.precisa_min_g))
+                .with("min_time_s", Some(self.precisa_min_time_s))
                 .with("live_ms", Some(self.precisa_live_ms))
                 .with("start_delay_ms", Some(self.precisa_start_delay_ms))
                 .with("reconnect_ms", Some(self.precisa_reconnect_ms)),
@@ -243,6 +267,7 @@ mod tests {
             precisa_no_beep: true,
             precisa_stable_s: 4.0,
             precisa_min_g: 8.0,
+            precisa_min_time_s: 0.0,
             precisa_live_ms: 500.0,
             precisa_start_delay_ms: 1500.0,
             precisa_reconnect_ms: 1000.0,
@@ -253,6 +278,7 @@ mod tests {
         assert!(!cfg.beep);
         assert_eq!(cfg.stable_for, Duration::from_secs(4));
         assert_eq!(cfg.min_weight_g, 8.0);
+        assert_eq!(cfg.min_time, Duration::ZERO);
         assert_eq!(cfg.live_every, Duration::from_millis(500));
         assert_eq!(cfg.start_delay, Duration::from_millis(1500));
         assert_eq!(cfg.reconnect_every, Duration::from_secs(1));
@@ -268,6 +294,7 @@ mod tests {
         assert_eq!(cfg.stable_for, Duration::from_secs(3));
         assert_eq!(cfg.live_every, Duration::from_millis(100));
         assert_eq!(cfg.start_delay, Duration::from_secs(2));
+        assert_eq!(cfg.min_time, Duration::from_secs(20));
         assert_eq!(cfg.reconnect_every, Duration::from_millis(500));
 
         let off = Args {
@@ -279,13 +306,15 @@ mod tests {
         assert!(Config::from_settings(&too_quick).is_err());
         let no_grams = Settings::new().with("min_g", Some("0"));
         assert!(Config::from_settings(&no_grams).is_err());
-        let too_often = Settings::new().with("live_ms", Some("50"));
+        let too_often = Settings::new().with("live_ms", Some("40"));
         assert!(Config::from_settings(&too_often).is_err());
         for bad in ["400", "3500"] {
             let reconnect = Settings::new().with("reconnect_ms", Some(bad));
             assert!(Config::from_settings(&reconnect).is_err());
         }
-        let too_late = Settings::new().with("start_delay_ms", Some("45000"));
+        let too_long = Settings::new().with("min_time_s", Some("250"));
+        assert!(Config::from_settings(&too_long).is_err());
+        let too_late = Settings::new().with("start_delay_ms", Some("10001"));
         assert!(Config::from_settings(&too_late).is_err());
     }
 }

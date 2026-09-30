@@ -4,7 +4,10 @@
 //! A shot ends when the scale's timer, once running, is stopped (someone
 //! pressed the timer button, or the scale stopped it), or when the weight in
 //! the cup has stopped rising. In the second case the shot's time is the
-//! moment the weight last rose, not the moment that was noticed.
+//! moment the weight last rose, not the moment that was noticed, and it must
+//! be at least the minimum time: a pause before that (preinfusion) is not the
+//! end. A timer stopped before the minimum time still ends the shot; the
+//! caller decides what a too short shot means.
 
 use std::time::Duration;
 
@@ -20,8 +23,10 @@ pub struct EndRule {
     pub stable_for: Duration,
     /// ... by this much or more (smaller steps are noise and drips) ...
     pub rise_g: f64,
-    /// ... with at least this much in the cup.
+    /// ... with at least this much in the cup ...
     pub min_weight_g: f64,
+    /// ... and not before this time.
+    pub min_time: Duration,
 }
 
 impl Default for EndRule {
@@ -31,6 +36,7 @@ impl Default for EndRule {
             stable_for: Duration::from_secs(3),
             rise_g: 0.3,
             min_weight_g: 5.0,
+            min_time: Duration::from_secs(20),
         }
     }
 }
@@ -87,7 +93,9 @@ impl ShotTracker {
     /// send when the weight changes).
     pub fn tick(&self, at: Duration) -> Option<End> {
         let rose = self.last_rise?;
-        (self.peak >= self.rule.min_weight_g && at.saturating_sub(rose) >= self.rule.stable_for)
+        (self.peak >= self.rule.min_weight_g
+            && rose >= self.rule.min_time
+            && at.saturating_sub(rose) >= self.rule.stable_for)
             .then_some(End {
                 time: rose,
                 grams: self.grams,
@@ -154,6 +162,44 @@ mod tests {
             assert_eq!(t.reading(ms(i * 250), reading(grams, false)), None);
         }
         assert_eq!(t.tick(ms(60_000)), None);
+    }
+
+    #[test]
+    fn a_pause_before_the_minimum_time_is_not_the_end() {
+        let mut t = ShotTracker::new(EndRule::default());
+        // 2 g/s from 5 s, a pause at 12 g from 11 s to 16 s, then on to 40 g.
+        let grams = |at: u64| -> f64 {
+            let flowing = at.saturating_sub(5_000).min(6_000) + at.saturating_sub(16_000);
+            (flowing as f64 / 500.0).min(40.0)
+        };
+        let mut end = None;
+        for i in 0..200 {
+            if let Some(e) = t.reading(ms(i * 250), reading(grams(i * 250), false)) {
+                end = Some(e);
+                break;
+            }
+        }
+        // Not at 11 s (below 20 s), but after the flow stops at 30 s.
+        assert_eq!(end, Some(End { time: ms(30_000), grams: 40.0 }));
+    }
+
+    #[test]
+    fn no_minimum_time_allows_short_shots() {
+        let rule = EndRule {
+            min_time: Duration::ZERO,
+            ..EndRule::default()
+        };
+        let mut t = ShotTracker::new(rule);
+        for i in 4..=44 {
+            // 2 g/s from 1 s to 6 s, then 10 g.
+            let at = i * 250;
+            let g = (at.saturating_sub(1_000) as f64 / 500.0).min(10.0);
+            if let Some(e) = t.reading(ms(at), reading(g, false)) {
+                assert_eq!(e, End { time: ms(6_000), grams: 10.0 });
+                return;
+            }
+        }
+        panic!("short shot should end without a minimum time");
     }
 
     #[test]

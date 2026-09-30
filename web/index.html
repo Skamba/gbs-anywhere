@@ -714,11 +714,11 @@
   });
 
   // Once a second; while a shot runs with live readings, as often as the
-  // integration's "live display refresh" setting asks (100 to 2000 ms).
+  // integration's "live display refresh" setting asks (50 to 2000 ms).
   async function loop() {
     await tick();
     const src = state && state.phase.phase === "brewing" && liveSource();
-    const every = src ? Math.min(2000, Math.max(100, src.live.refresh_ms || 100)) : 1000;
+    const every = src ? Math.min(2000, Math.max(50, src.live.refresh_ms || 100)) : 1000;
     setTimeout(loop, every);
   }
   loop();
