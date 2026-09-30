@@ -6,6 +6,8 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-30
+
 ### Fixed
 
 - A shot entered without a weight now gets the recipe weight, as shots from
