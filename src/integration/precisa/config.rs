@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 
-use super::precisa::DEFAULT_NAME_PREFIX;
+use super::protocol::DEFAULT_NAME_PREFIX;
 use super::shot::EndRule;
 use crate::integration::{Field, Input, Settings};
 

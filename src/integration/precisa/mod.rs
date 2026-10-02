@@ -10,12 +10,12 @@
 //! scale, and the scale not held by another app.
 //!
 //! * [`config`]: the setup form, the `--precisa*` flags, [`config::Config`].
-//! * [`precisa`]: the scale's protocol.
+//! * [`protocol`]: the scale's protocol.
 //! * [`shot`]: finding the end of a shot in the readings.
 //! * [`run`]: the task.
 
 pub mod config;
-pub mod precisa;
+pub mod protocol;
 pub mod run;
 pub mod shot;
 
