@@ -1,7 +1,7 @@
 //! The task: keep the scale connected, and after each knob press tare it,
 //! start its timer, watch the cup fill and report time and weight.
 //!
-//! With a pump sensor connected (the vibration integration), the pump times
+//! With a pump sensor integration connected (none included yet), the pump times
 //! the shot instead: it starts when the pump starts and ends when the pump
 //! stops; the scale then weighs the cup once the last drops have landed.
 

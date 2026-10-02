@@ -15,10 +15,21 @@
 //! [`Integrations`] runs them all, so several can run side by side. The
 //! first one to report a shot wins.
 //!
-//! Included: [`la_marzocco`], which reads the La Marzocco cloud's coffee log.
-//! and [`precisa`], which weighs and times the shot with a Eureka
-//! Precisa scale over Bluetooth
-
+//! Included: [`la_marzocco`], which reads the La Marzocco cloud's coffee log,
+//! and [`precisa`], which weighs and times the shot with a Eureka Precisa
+//! scale over Bluetooth.
+//!
+//! A pump sensor integration (none included yet) can share what it sees
+//! through [`Link::set_pump`]; the scale follows it with [`Link::pump`] to
+//! time the shot by the pump and adds the weight. With nobody listening
+//! ([`Link::pump_listened`]) a sensor would report the time itself. Without a
+//! sensor the pump state stays unsensed and the scale times shots alone.
+//!
+//! Integrations that see the shot as it happens (a scale) can also watch
+//! brews started by hand ([`Link::brews`]) as tests, end them with what they
+//! measured ([`Link::finish_manual`]), and show live readings in the app
+//! ([`Status::live`]).
+//!
 //! # Adding one
 //!
 //! Every integration is a folder `src/integration/<id>/` with this layout:
@@ -64,7 +75,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{MachineError, MachineEvent, Phase, ShotResult};
@@ -86,6 +97,7 @@ pub struct CliArgs {
 }
 
 impl CliArgs {
+    /// The integrations whose flags are set, with their settings.
     pub fn configured(&self) -> Vec<(&'static Kind, Settings)> {
         [
             (&la_marzocco::KIND, self.la_marzocco.settings()),
@@ -129,6 +141,21 @@ pub enum BrewStart {
     Manual,
 }
 
+/// The machine's pump as a sensor integration sees it, shared with the
+/// others. See [`Link::pump`].
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Pump {
+    /// A sensor is connected and reporting.
+    pub sensed: bool,
+    /// The pump runs.
+    pub running: bool,
+    /// Pump starts seen so far: a new run is a new number.
+    pub runs: u64,
+    /// How long the last finished run took, by the sensor's clock; `None`
+    /// while one runs or before any.
+    pub last_run: Option<Duration>,
+}
+
 /// What happened to a reported shot.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReportOutcome {
@@ -154,16 +181,6 @@ impl Link {
         })
     }
 
-    /// The moments the grinder asks for a brew (knob presses), from now on.
-    pub fn grinder_brews(&self) -> GrinderBrews {
-        GrinderBrews(self.server.subscribe())
-    }
-    /// Every brew start from now on, knob presses and manual ones.
-    /// Every brew start from now on, knob presses and manual ones.
-    pub fn brews(&self) -> Brews {
-        Brews(self.server.subscribe())
-    }
-
     /// Who started the running brew; `None` when no brew runs.
     pub fn brewing(&self) -> Option<BrewStart> {
         self.server.with(|m, now| match m.phase(now) {
@@ -177,6 +194,82 @@ impl Link {
             }),
             _ => None,
         })
+    }
+
+    /// The moments the grinder asks for a brew (knob presses), from now on.
+    pub fn grinder_brews(&self) -> GrinderBrews {
+        GrinderBrews(self.server.subscribe())
+    }
+
+    /// Every brew start from now on, knob presses and manual ones.
+    pub fn brews(&self) -> Brews {
+        Brews(self.server.subscribe())
+    }
+
+    /// The pump as a sensor integration reports it, and its changes. Holding
+    /// the receiver tells the sensor that someone times shots by it
+    /// ([`Link::pump_listened`]).
+    pub fn pump(&self) -> watch::Receiver<Pump> {
+        self.server.integrations().pump().subscribe()
+    }
+
+    /// For a pump sensor: changes the shared pump state.
+    pub fn set_pump(&self, change: impl FnOnce(&mut Pump)) {
+        self.server.integrations().pump().send_modify(change);
+    }
+
+    /// Whether another integration (a scale) follows the pump and reports
+    /// the shot; if not, the sensor reports it.
+    pub fn pump_listened(&self) -> bool {
+        self.server.integrations().pump().receiver_count() > 0
+    }
+
+    /// Reports a measured shot: `time` as the machine ran it, `weight` in
+    /// grams with a label saying where it came from (`None` when the
+    /// integration has no weight: the grinder's recipe weight is used).
+    /// Applies the rules and logs the outcome under this integration's name.
+    pub fn report(&self, time: Duration, weight: Option<(f64, String)>) -> ReportOutcome {
+        let title = self.status.title();
+        let secs = time.as_secs_f64();
+        let outcome = self.server.with(|m, now| {
+            if !matches!(
+                m.phase(now),
+                Phase::Brewing {
+                    requested_by_grinder: true,
+                    ..
+                }
+            ) {
+                return ReportOutcome::NotWaiting;
+            }
+            let (grams, source) = match weight {
+                Some((g, source)) if g.is_finite() && g > 0.0 => (g, source),
+                _ => match m.last_grind().and_then(|g| g.beverage_weight_g) {
+                    Some(g) => (g, "grinder recipe weight".to_owned()),
+                    None => (0.0, "no weight known".to_owned()),
+                },
+            };
+            let shot = ShotResult::from_grams(time, grams);
+            match m.report_shot(now, shot) {
+                Ok(()) => {
+                    self.status.note_report(shot);
+                    ReportOutcome::Reported { grams, source }
+                }
+                Err(e) => ReportOutcome::Refused(e),
+            }
+        });
+        match &outcome {
+            ReportOutcome::Reported { grams, source } => {
+                tracing::info!("{title}: reported {secs:.1} s, {grams:.1} g ({source})");
+            }
+            ReportOutcome::NotWaiting => tracing::info!(
+                "{title}: {secs:.1} s shot seen but grinder not waiting (press the knob after \
+                 grinding)"
+            ),
+            ReportOutcome::Refused(e) => {
+                tracing::warn!("{title}: {secs:.1} s shot not reported: {e}");
+            }
+        }
+        outcome
     }
 
     /// Ends a brew started by hand with measured numbers, like entering them
@@ -217,56 +310,6 @@ impl Link {
         }
         outcome
     }
-
-    /// Reports a measured shot: `time` as the machine ran it, `weight` in
-    /// grams with a label saying where it came from (`None` when the
-    /// integration has no weight: the grinder's recipe weight is used).
-    /// Applies the rules and logs the outcome under this integration's name.
-    pub fn report(&self, time: Duration, weight: Option<(f64, String)>) -> ReportOutcome {
-        let title = self.status.title();
-        let secs = time.as_secs_f64();
-        let outcome = self.server.with(|m, now| {
-            if !matches!(
-                m.phase(now),
-                Phase::Brewing {
-                    requested_by_grinder: true,
-                    ..
-                }
-            ) {
-                return ReportOutcome::NotWaiting;
-            }
-            let (grams, source) = match weight {
-                Some((g, source)) if g.is_finite() && g > 0.0 => (g, source),
-                // `report_shot` refuses the shot when there is no recipe
-                // weight either.
-                _ => (
-                    m.recipe_weight_g().unwrap_or(0.0),
-                    "grinder recipe weight".to_owned(),
-                ),
-            };
-            let shot = ShotResult::from_grams(time, grams);
-            match m.report_shot(now, shot) {
-                Ok(()) => {
-                    self.status.note_report(shot);
-                    ReportOutcome::Reported { grams, source }
-                }
-                Err(e) => ReportOutcome::Refused(e),
-            }
-        });
-        match &outcome {
-            ReportOutcome::Reported { grams, source } => {
-                tracing::info!("{title}: reported {secs:.1} s, {grams:.1} g ({source})");
-            }
-            ReportOutcome::NotWaiting => tracing::info!(
-                "{title}: {secs:.1} s shot seen but grinder not waiting (press the knob after \
-                 grinding)"
-            ),
-            ReportOutcome::Refused(e) => {
-                tracing::warn!("{title}: {secs:.1} s shot not reported: {e}");
-            }
-        }
-        outcome
-    }
 }
 
 /// Knob presses as they happen. See [`Link::grinder_brews`].
@@ -296,7 +339,8 @@ impl GrinderBrews {
     }
 }
 
-/// Brew starts as they happen. See [`Link::brews`].
+/// Brew starts as they happen, knob presses and manual ones. See
+/// [`Link::brews`].
 pub struct Brews(broadcast::Receiver<EventRecord>);
 
 impl Brews {
@@ -344,6 +388,21 @@ pub enum Health {
     Stopped,
 }
 
+/// What an integration measures right now, for a live display in the app.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct Live {
+    /// Grams on the scale.
+    pub grams: f64,
+    /// The shot's time: running while `measuring`, afterwards the last
+    /// measured shot's, until the next one starts; `None` before any.
+    pub shot_s: Option<f64>,
+    /// Whether a shot is being measured right now.
+    pub measuring: bool,
+    /// How often the app should refresh while showing this, in ms (the
+    /// integration's setting).
+    pub refresh_ms: u32,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusSnapshot {
     /// This integration, e.g. `la_marzocco` or `la_marzocco-2`.
@@ -364,21 +423,6 @@ pub struct StatusSnapshot {
     /// The current reading, for integrations that have one and are
     /// connected; `None` otherwise.
     pub live: Option<Live>,
-}
-
-/// What an integration measures right now, for a live display in the app.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-pub struct Live {
-    /// Grams on the scale.
-    pub grams: f64,
-    /// The shot's time: running while `measuring`, afterwards the last
-    /// measured shot's, until the next one starts; `None` before any.
-    pub shot_s: Option<f64>,
-    /// Whether a shot is being measured right now.
-    pub measuring: bool,
-    /// How often the app should refresh while showing this, in ms (the
-    /// integration's setting).
-    pub refresh_ms: u32,
 }
 
 #[derive(Debug)]
@@ -480,9 +524,9 @@ impl Status {
         s.detail = detail;
         if health != Health::Error {
             s.last_error = None;
-            if matches!(health, Health::Error | Health::Stopped) {
+        }
+        if matches!(health, Health::Error | Health::Stopped) {
             s.live = None;
-            }    
         }
     }
 
@@ -611,10 +655,12 @@ mod tests {
         let l = link();
         let later = Instant::now() + Duration::from_secs(30);
         l.server.with(|m, _| m.on_start_request(later, Some(9)));
-        // No weight and no recipe weight: refused rather than sending 0 g.
         assert_eq!(
             l.report(Duration::from_secs(30), None),
-            ReportOutcome::Refused(MachineError::NoWeight)
+            ReportOutcome::Reported {
+                grams: 0.0,
+                source: "no weight known".into()
+            }
         );
 
         let l = link();
@@ -632,6 +678,62 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn brews_tell_knob_presses_from_manual_starts() {
+        let l = link();
+        let mut brews = l.brews();
+        l.server.with(|m, now| m.start_brew(now)).unwrap();
+        assert_eq!(brews.next().await, Some(BrewStart::Manual));
+        assert_eq!(l.brewing(), Some(BrewStart::Manual));
+        assert!(!l.grinder_waiting());
+        // A knob-press report is refused, a test result ends the brew.
+        let t = Duration::from_secs(27);
+        assert_eq!(
+            l.report(t, Some((36.0, "scale".into()))),
+            ReportOutcome::NotWaiting
+        );
+        assert!(matches!(
+            l.finish_manual(t, 36.0, "scale"),
+            ReportOutcome::Reported { .. }
+        ));
+        assert_eq!(l.brewing(), None);
+        assert_eq!(l.status.snapshot().reports, 0);
+
+        let later = Instant::now() + Duration::from_secs(30);
+        l.server.with(|m, _| m.on_start_request(later, Some(9)));
+        assert_eq!(brews.next().await, Some(BrewStart::Grinder));
+        assert_eq!(l.brewing(), Some(BrewStart::Grinder));
+        // A test result does not answer the grinder.
+        assert_eq!(l.finish_manual(t, 36.0, "scale"), ReportOutcome::NotWaiting);
+    }
+
+    #[tokio::test]
+    async fn the_pump_is_shared() {
+        let sensor = link();
+        let scale = Link {
+            server: sensor.server.clone(),
+            status: Status::new("scale", "scale", "Scale"),
+        };
+        assert!(!sensor.pump_listened());
+        let mut pump = scale.pump();
+        assert!(sensor.pump_listened());
+        sensor.set_pump(|p| {
+            p.sensed = true;
+            p.running = true;
+            p.runs += 1;
+        });
+        pump.changed().await.unwrap();
+        assert_eq!(pump.borrow_and_update().runs, 1);
+        sensor.set_pump(|p| {
+            p.running = false;
+            p.last_run = Some(Duration::from_secs(27));
+        });
+        pump.changed().await.unwrap();
+        assert_eq!(pump.borrow().last_run, Some(Duration::from_secs(27)));
+        drop(pump);
+        assert!(!sensor.pump_listened());
+    }
+
     #[test]
     fn status_tracks_health_and_errors() {
         let s = Status::new("x", "x", "X");
@@ -645,11 +747,16 @@ mod tests {
         assert_eq!(snap.subject, "thing");
         assert_eq!(snap.detail, "fine");
         assert_eq!(snap.last_error, None);
-        s.live(Some(Live { grams: 18.2, shot_s: Some(4.5), measuring: true, refresh_ms: 250 }));
+
+        s.live(Some(Live {
+            grams: 18.2,
+            shot_s: Some(4.5),
+            measuring: true,
+            refresh_ms: 250,
+        }));
         assert_eq!(s.snapshot().live.unwrap().grams, 18.2);
         s.error("gone");
         assert_eq!(s.snapshot().live, None);
-        
     }
 
     #[test]
@@ -661,25 +768,5 @@ mod tests {
         assert_eq!(b.peek(), Duration::from_secs(5));
         b.reset();
         assert_eq!(b.advance(), Duration::from_secs(2));
-    }
-
-    #[tokio::test]
-    async fn brews_tell_knob_presses_from_manual_starts() {
-        let l = link();
-        let mut brews = l.brews();
-        l.server.with(|m, now| m.start_brew(now)).unwrap();
-        assert_eq!(brews.next().await, Some(BrewStart::Manual));
-        assert_eq!(l.brewing(), Some(BrewStart::Manual));
-        assert!(!l.grinder_waiting());
-        // A knob-press report is refused, a test result ends the brew.
-        let t = Duration::from_secs(27);
-        assert_eq!(l.report(t, Some((36.0, "scale".into()))), ReportOutcome::NotWaiting);
-        assert!(matches!(l.finish_manual(t, 36.0, "scale"), ReportOutcome::Reported { .. }));
-        assert_eq!(l.brewing(), None);
-        assert_eq!(l.status.snapshot().reports, 0);
-
-        let later = Instant::now() + Duration::from_secs(30);
-        l.server.with(|m, _| m.on_start_request(later, Some(9)));
-        assert_eq!(brews.next().await, Some(BrewStart::Grinder));
     }
 }

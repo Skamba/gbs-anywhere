@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
-use super::{Integration, Kind, Link, Settings, Status, StatusSnapshot};
+use super::{Integration, Kind, Link, Pump, Settings, Status, StatusSnapshot};
 use crate::server::Server;
 
 /// Where an integration came from.
@@ -88,15 +89,32 @@ impl Entry {
 }
 
 /// All integrations, in the order they were started.
-#[derive(Default)]
 pub struct Integrations {
     entries: Mutex<Vec<Entry>>,
     file: OnceLock<PathBuf>,
+    /// The pump as a sensor integration sees it, for the others. See
+    /// [`Link::pump`].
+    pump: watch::Sender<Pump>,
+}
+
+impl Default for Integrations {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::default(),
+            file: OnceLock::new(),
+            pump: watch::channel(Pump::default()).0,
+        }
+    }
 }
 
 impl Integrations {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The shared pump state. See [`Link::pump`].
+    pub fn pump(&self) -> &watch::Sender<Pump> {
+        &self.pump
     }
 
     pub fn list(&self) -> Vec<View> {

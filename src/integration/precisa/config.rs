@@ -268,7 +268,7 @@ impl Args {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::integration::eureka_precisa::KIND;
+    use crate::integration::precisa::KIND;
 
     #[test]
     fn flags_and_form_give_the_same_config() {
