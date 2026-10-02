@@ -261,7 +261,10 @@ mod tests {
         // the saved one when settings change.
         assert_eq!(KIND.secret_keys().collect::<Vec<_>>(), ["pass"]);
         let shown = ok.without(&["pass"]);
-        assert_eq!((shown.text("user"), shown.secret("pass")), (Some("me"), None));
+        assert_eq!(
+            (shown.text("user"), shown.secret("pass")),
+            (Some("me"), None)
+        );
         let changed = Settings::new()
             .with("user", Some("you"))
             .with("pass", Some(""))

@@ -209,7 +209,14 @@ mod tests {
             }
         }
         let (seen_at, e) = end.expect("shot should end");
-        assert_eq!(e, End { time: ms(25_000), grams: 40.0, at_target: false });
+        assert_eq!(
+            e,
+            End {
+                time: ms(25_000),
+                grams: 40.0,
+                at_target: false
+            }
+        );
         assert_eq!(seen_at, 28_000);
     }
 
@@ -217,11 +224,21 @@ mod tests {
     fn tick_ends_a_shot_when_the_scale_goes_quiet() {
         let mut t = ShotTracker::new(EndRule::default());
         for i in 0..=100 {
-            assert_eq!(t.reading(ms(i * 250), reading(shot_weight(i * 250), false)), None);
+            assert_eq!(
+                t.reading(ms(i * 250), reading(shot_weight(i * 250), false)),
+                None
+            );
         }
         // Last reading at 25 s; no more notifications.
         assert_eq!(t.tick(ms(27_000)), None);
-        assert_eq!(t.tick(ms(28_000)), Some(End { time: ms(25_000), grams: 40.0, at_target: false }));
+        assert_eq!(
+            t.tick(ms(28_000)),
+            Some(End {
+                time: ms(25_000),
+                grams: 40.0,
+                at_target: false
+            })
+        );
     }
 
     #[test]
@@ -250,7 +267,14 @@ mod tests {
             }
         }
         // Not at 11 s (below 20 s), but after the flow stops at 30 s.
-        assert_eq!(end, Some(End { time: ms(30_000), grams: 40.0, at_target: false }));
+        assert_eq!(
+            end,
+            Some(End {
+                time: ms(30_000),
+                grams: 40.0,
+                at_target: false
+            })
+        );
     }
 
     #[test]
@@ -265,7 +289,14 @@ mod tests {
             let at = i * 250;
             let g = (at.saturating_sub(1_000) as f64 / 500.0).min(10.0);
             if let Some(e) = t.reading(ms(at), reading(g, false)) {
-                assert_eq!(e, End { time: ms(6_000), grams: 10.0, at_target: false });
+                assert_eq!(
+                    e,
+                    End {
+                        time: ms(6_000),
+                        grams: 10.0,
+                        at_target: false
+                    }
+                );
                 return;
             }
         }
@@ -323,7 +354,11 @@ mod tests {
         assert_eq!(t.reading(ms(20_000), reading(30.0, true)), None);
         assert_eq!(
             t.reading(ms(27_500), reading(36.2, false)),
-            Some(End { time: ms(27_500), grams: 36.2, at_target: false })
+            Some(End {
+                time: ms(27_500),
+                grams: 36.2,
+                at_target: false
+            })
         );
     }
 

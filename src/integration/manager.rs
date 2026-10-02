@@ -541,7 +541,9 @@ mod tests {
         tokio::task::yield_now().await;
         assert_eq!(m.list()[1].status.health, Health::Connected);
         let text = std::fs::read_to_string(&path).unwrap();
-        assert!(text.contains("\"you\"") && text.contains("\"secret\"") && !text.contains("\"me\""));
+        assert!(
+            text.contains("\"you\"") && text.contains("\"secret\"") && !text.contains("\"me\"")
+        );
 
         // Settings that do not work change nothing.
         let broken = Settings::new().with("pass", Some("x"));

@@ -299,7 +299,9 @@ impl Link {
         });
         match &outcome {
             ReportOutcome::Reported { .. } => {
-                tracing::info!("{title}: test shot {secs:.1} s, {grams:.1} g ended the manual brew");
+                tracing::info!(
+                    "{title}: test shot {secs:.1} s, {grams:.1} g ended the manual brew"
+                );
             }
             ReportOutcome::NotWaiting => {
                 tracing::info!("{title}: {secs:.1} s test shot seen but no manual brew running");

@@ -157,10 +157,15 @@ async fn shot(
     let what = if test { "test" } else { "grinder is waiting" };
     tracing::info!(
         "{TITLE}: {what}, timing by {}",
-        if sensed { "the pump sensor" } else { "the scale" }
+        if sensed {
+            "the pump sensor"
+        } else {
+            "the scale"
+        }
     );
     if sensed {
-        link.status.watching(format!("{what} · waiting for the pump"));
+        link.status
+            .watching(format!("{what} · waiting for the pump"));
         return by_pump(link, cfg, scale, test, pump).await;
     }
     link.status.watching(format!("{what} · watching the scale"));
@@ -183,9 +188,15 @@ async fn by_scale(
     scale.send(&precisa::TARE).await.context("tare")?;
     if cfg.drive_timer {
         tokio::time::sleep(COMMAND_GAP).await;
-        scale.send(&precisa::RESET_TIMER).await.context("reset timer")?;
+        scale
+            .send(&precisa::RESET_TIMER)
+            .await
+            .context("reset timer")?;
         tokio::time::sleep(COMMAND_GAP).await;
-        scale.send(&precisa::START_TIMER).await.context("start timer")?;
+        scale
+            .send(&precisa::START_TIMER)
+            .await
+            .context("start timer")?;
     }
     // Whether the scale has confirmed its timer runs; retried if not.
     let mut timer_confirmed = !cfg.drive_timer;
@@ -306,9 +317,15 @@ async fn by_pump(
     let start = Instant::now();
     link.status.watching(format!("{what} · pump running"));
     if cfg.drive_timer {
-        scale.send(&precisa::RESET_TIMER).await.context("reset timer")?;
+        scale
+            .send(&precisa::RESET_TIMER)
+            .await
+            .context("reset timer")?;
         tokio::time::sleep(COMMAND_GAP).await;
-        scale.send(&precisa::START_TIMER).await.context("start timer")?;
+        scale
+            .send(&precisa::START_TIMER)
+            .await
+            .context("start timer")?;
     }
 
     // Reaching the recipe weight ends the shot at that moment, pump running
@@ -360,11 +377,13 @@ async fn by_pump(
     }
 
     // 3. The last drops: weigh once the weight stops rising.
-    link.status.watching(format!("{what} · pump stopped, weighing"));
+    link.status
+        .watching(format!("{what} · pump stopped, weighing"));
     let settling = Instant::now();
     let mut peak = grams;
     let mut last_rise = Instant::now();
-    while last_rise.elapsed() < cfg.stable_for && settling.elapsed() < cfg.stable_for + SETTLE_EXTRA {
+    while last_rise.elapsed() < cfg.stable_for && settling.elapsed() < cfg.stable_for + SETTLE_EXTRA
+    {
         tokio::select! {
             reading = scale.next_reading() => {
                 grams = reading?.grams;
@@ -428,8 +447,10 @@ fn target_weight(link: &Link, cfg: &Config) -> Option<f64> {
         .filter(|g| g.is_finite() && *g > 0.0);
     match target {
         Some(g) => tracing::info!("{TITLE}: the shot ends at the recipe weight, {g:.1} g"),
-        None => tracing::info!("{TITLE}: no recipe weight from the grinder; the shot ends \
-            when the flow stops"),
+        None => tracing::info!(
+            "{TITLE}: no recipe weight from the grinder; the shot ends \
+            when the flow stops"
+        ),
     }
     target
 }
@@ -454,10 +475,13 @@ async fn finish(
     }
     if time < cfg.min_time && !at_target {
         let min = cfg.min_time.as_secs_f64();
-        tracing::info!("{TITLE}: shot ended after {secs:.1} s, below the minimum \
-            {min:.0} s: not reported");
-        link.status
-            .connected(format!("shot ended after {secs:.1} s, under {min:.0} s: not reported"));
+        tracing::info!(
+            "{TITLE}: shot ended after {secs:.1} s, below the minimum \
+            {min:.0} s: not reported"
+        );
+        link.status.connected(format!(
+            "shot ended after {secs:.1} s, under {min:.0} s: not reported"
+        ));
         aborted(cfg, scale).await;
         return;
     }
@@ -486,7 +510,11 @@ async fn finish(
     };
     link.status.connected(line);
     if cfg.beep {
-        let times = if matches!(outcome, ReportOutcome::Reported { .. }) { 2 } else { 4 };
+        let times = if matches!(outcome, ReportOutcome::Reported { .. }) {
+            2
+        } else {
+            4
+        };
         beep(scale, times).await;
     }
 }
@@ -503,8 +531,9 @@ async fn countdown(
     let secs = cfg.start_delay.as_secs_f64();
     tracing::info!("{TITLE}: measuring starts in {secs:.1} s");
     let what = if test { "test" } else { "grinder is waiting" };
-    link.status
-        .watching(format!("{what} · start the machine, measuring in {secs:.0} s"));
+    link.status.watching(format!(
+        "{what} · start the machine, measuring in {secs:.0} s"
+    ));
     let until = Instant::now() + cfg.start_delay;
     let mut tick = tokio::time::interval(cfg.live_every);
     let mut grams = 0.0;
@@ -674,7 +703,10 @@ async fn connect(adapter: &Adapter, cfg: &Config) -> anyhow::Result<Scale> {
     let _ = adapter.stop_scan().await;
     let (peripheral, name) = found?;
 
-    peripheral.connect().await.context("connecting to the scale")?;
+    peripheral
+        .connect()
+        .await
+        .context("connecting to the scale")?;
     match set_up(peripheral.clone(), name).await {
         Ok(scale) => Ok(scale),
         Err(e) => {
@@ -729,7 +761,10 @@ async fn set_up(peripheral: Peripheral, name: String) -> anyhow::Result<Scale> {
         notifications,
         name,
     };
-    scale.send(&precisa::UNIT_GRAMS).await.context("set grams")?;
+    scale
+        .send(&precisa::UNIT_GRAMS)
+        .await
+        .context("set grams")?;
     Ok(scale)
 }
 
