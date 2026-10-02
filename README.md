@@ -1,7 +1,7 @@
 # gbs-anywhere-bt
 
 Grind-by-Sync for the Mahlkönig **E64 WS** with any espresso machine, with a
-Bluetooth scale (see integration list for models) that times and weighs the shot for you.
+Bluetooth scale that times and weighs the shot for you.
 
 Grind-by-Sync (GbS) lets the E64 WS dial itself in: after each shot it
 compares the extraction time with the recipe's target and adjusts its grind
@@ -100,8 +100,11 @@ A blue chain icon on the recipe means GbS is active.
 knob. The scale tares, and after a short start delay (2 s by default, time to
 start the machine) its timer runs. The app shows the weight and the time
 live instead of the entry fields; its clock waits out the start delay too.
-When the flow stops (or you stop the scale's timer), time and weight go to
-the grinder and the scale beeps twice. Four beeps mean the shot was not
+When the cup reaches the recipe's Brew Weight, the shot ends there like on a
+Xenia: that moment's time and the weight go to the grinder and the scale
+beeps twice, the sign to stop your machine. What runs on afterwards does not
+count. Without a recipe weight the shot ends when the flow stops (or you stop
+the scale's timer). Four beeps mean the shot was not
 reported: aborted, too short, or no end seen. **Enter by hand instead** under
 the live values brings back the entry fields for that shot.
 
@@ -154,7 +157,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 
 | flag | default | what |
 |---|---|---|
-| `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever) |
+| `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long |
 | `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for the integrations added in the app; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs |
 | `--log <file>` | off | append every grinder request to a file |
@@ -174,7 +177,7 @@ JSON on the same port as the app, for scripts or another front end:
 | GET | `/api/state` | version, phase, machine state, last shot, grinder connection, integrations (with a scale's live reading) |
 | GET | `/api/events?after=N` | events with `seq > N` |
 | GET | `/api/events/stream` | the same, live, as server-sent events |
-| POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` reports the running shot (time up to 600 s; without a weight, the recipe weight is sent) |
+| POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` reports the running shot |
 | POST | `/api/shot/abort` | aborts the running shot (the grinder skips it) |
 | POST | `/api/shot/start` | starts a brew without the grinder (a test; the grinder sees a flush) |
 | GET | `/api/integrations/kinds` | the integrations that can be added, with their setup forms |

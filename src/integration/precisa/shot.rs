@@ -8,6 +8,11 @@
 //! be at least the minimum time: a pause before that (preinfusion) is not the
 //! end. A timer stopped before the minimum time still ends the shot; the
 //! caller decides what a too short shot means.
+//!
+//! With a target weight (the grinder's recipe weight) the shot ends as soon
+//! as the cup reaches it, like a Xenia stopping at the target: its time is
+//! the moment of reaching it, so what runs on afterwards does not make the
+//! shot look slow. See [`TargetWatch`].
 
 use std::time::Duration;
 
@@ -27,6 +32,8 @@ pub struct EndRule {
     pub min_weight_g: f64,
     /// ... and not before this time.
     pub min_time: Duration,
+    /// Reaching this weight ends the shot at once.
+    pub target_g: Option<f64>,
 }
 
 impl Default for EndRule {
@@ -37,6 +44,7 @@ impl Default for EndRule {
             rise_g: 0.3,
             min_weight_g: 5.0,
             min_time: Duration::from_secs(20),
+            target_g: None,
         }
     }
 }
@@ -46,11 +54,61 @@ impl Default for EndRule {
 pub struct End {
     pub time: Duration,
     pub grams: f64,
+    /// Ended by reaching the target weight: `time` is the moment it was
+    /// reached and `grams` the target.
+    pub at_target: bool,
+}
+
+/// Watches the weight for the moment it reaches the target. A single reading
+/// over it is not enough (a knock on the cup, a hand on the scale): the next
+/// one must be over it too. The moment is interpolated between the last
+/// reading under the target and the first one over it.
+#[derive(Debug)]
+pub struct TargetWatch {
+    pub target: f64,
+    below: Option<(Duration, f64)>,
+    crossed: Option<Duration>,
+}
+
+impl TargetWatch {
+    pub fn new(target: f64) -> Self {
+        Self {
+            target,
+            below: None,
+            crossed: None,
+        }
+    }
+
+    /// A reading `at` this long into the shot; the moment the target was
+    /// reached, once that is sure.
+    pub fn reading(&mut self, at: Duration, grams: f64) -> Option<Duration> {
+        if grams < self.target {
+            self.below = Some((at, grams));
+            self.crossed = None;
+            return None;
+        }
+        match self.crossed {
+            // Second reading over the target: sure.
+            Some(crossed) => Some(crossed),
+            None => {
+                self.crossed = Some(match self.below {
+                    Some((t0, g0)) if grams > g0 => {
+                        t0 + at
+                            .saturating_sub(t0)
+                            .mul_f64((self.target - g0) / (grams - g0))
+                    }
+                    _ => at,
+                });
+                None
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct ShotTracker {
     rule: EndRule,
+    target: Option<TargetWatch>,
     timer_ran: bool,
     peak: f64,
     last_rise: Option<Duration>,
@@ -61,6 +119,7 @@ impl ShotTracker {
     pub fn new(rule: EndRule) -> Self {
         Self {
             rule,
+            target: rule.target_g.map(TargetWatch::new),
             timer_ran: false,
             peak: 0.0,
             last_rise: None,
@@ -74,12 +133,22 @@ impl ShotTracker {
             return None;
         }
         self.grams = r.grams;
+        if let Some(watch) = &mut self.target
+            && let Some(time) = watch.reading(at, r.grams)
+        {
+            return Some(End {
+                time,
+                grams: watch.target,
+                at_target: true,
+            });
+        }
         if r.timer_running {
             self.timer_ran = true;
         } else if self.timer_ran {
             return Some(End {
                 time: at,
                 grams: r.grams,
+                at_target: false,
             });
         }
         if r.grams >= self.peak + self.rule.rise_g {
@@ -99,6 +168,7 @@ impl ShotTracker {
             .then_some(End {
                 time: rose,
                 grams: self.grams,
+                at_target: false,
             })
     }
 }
@@ -139,7 +209,7 @@ mod tests {
             }
         }
         let (seen_at, e) = end.expect("shot should end");
-        assert_eq!(e, End { time: ms(25_000), grams: 40.0 });
+        assert_eq!(e, End { time: ms(25_000), grams: 40.0, at_target: false });
         assert_eq!(seen_at, 28_000);
     }
 
@@ -151,7 +221,7 @@ mod tests {
         }
         // Last reading at 25 s; no more notifications.
         assert_eq!(t.tick(ms(27_000)), None);
-        assert_eq!(t.tick(ms(28_000)), Some(End { time: ms(25_000), grams: 40.0 }));
+        assert_eq!(t.tick(ms(28_000)), Some(End { time: ms(25_000), grams: 40.0, at_target: false }));
     }
 
     #[test]
@@ -180,7 +250,7 @@ mod tests {
             }
         }
         // Not at 11 s (below 20 s), but after the flow stops at 30 s.
-        assert_eq!(end, Some(End { time: ms(30_000), grams: 40.0 }));
+        assert_eq!(end, Some(End { time: ms(30_000), grams: 40.0, at_target: false }));
     }
 
     #[test]
@@ -195,11 +265,55 @@ mod tests {
             let at = i * 250;
             let g = (at.saturating_sub(1_000) as f64 / 500.0).min(10.0);
             if let Some(e) = t.reading(ms(at), reading(g, false)) {
-                assert_eq!(e, End { time: ms(6_000), grams: 10.0 });
+                assert_eq!(e, End { time: ms(6_000), grams: 10.0, at_target: false });
                 return;
             }
         }
         panic!("short shot should end without a minimum time");
+    }
+
+    #[test]
+    fn reaching_the_target_ends_the_shot_at_that_moment() {
+        let rule = EndRule {
+            target_g: Some(36.0),
+            ..EndRule::default()
+        };
+        let mut t = ShotTracker::new(rule);
+        let mut end = None;
+        // 2 g/s from 5 s: 36 g at 23 s, the reading after it confirms.
+        for i in 0..200 {
+            let at = i * 250;
+            if let Some(e) = t.reading(ms(at), reading(shot_weight(at), false)) {
+                end = Some((at, e));
+                break;
+            }
+        }
+        let (seen_at, e) = end.expect("target should end the shot");
+        assert_eq!(
+            e,
+            End {
+                time: ms(23_000),
+                grams: 36.0,
+                at_target: true
+            }
+        );
+        assert_eq!(seen_at, 23_250);
+    }
+
+    #[test]
+    fn the_target_moment_is_interpolated_and_confirmed() {
+        let mut w = TargetWatch::new(44.0);
+        assert_eq!(w.reading(ms(20_000), 42.0), None);
+        // Over it between two readings: 44 g a quarter of the way.
+        assert_eq!(w.reading(ms(20_400), 50.0), None);
+        assert_eq!(w.reading(ms(20_600), 51.0), Some(ms(20_100)));
+
+        // A single knock over the target does not count.
+        let mut w = TargetWatch::new(44.0);
+        assert_eq!(w.reading(ms(10_000), 20.0), None);
+        assert_eq!(w.reading(ms(10_200), 60.0), None);
+        assert_eq!(w.reading(ms(10_400), 21.0), None);
+        assert_eq!(w.reading(ms(10_600), 22.0), None);
     }
 
     #[test]
@@ -209,7 +323,7 @@ mod tests {
         assert_eq!(t.reading(ms(20_000), reading(30.0, true)), None);
         assert_eq!(
             t.reading(ms(27_500), reading(36.2, false)),
-            Some(End { time: ms(27_500), grams: 36.2 })
+            Some(End { time: ms(27_500), grams: 36.2, at_target: false })
         );
     }
 

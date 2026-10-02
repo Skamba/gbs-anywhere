@@ -1,5 +1,9 @@
 //! The task: keep the scale connected, and after each knob press tare it,
 //! start its timer, watch the cup fill and report time and weight.
+//!
+//! With a pump sensor connected (the vibration integration), the pump times
+//! the shot instead: it starts when the pump starts and ends when the pump
+//! stops; the scale then weighs the cup once the last drops have landed.
 
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -11,14 +15,15 @@ use btleplug::api::{
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use futures::{Stream, StreamExt};
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use super::TITLE;
 use super::config::Config;
 use super::precisa::{self, Reading};
-use super::shot::{End, ShotTracker};
+use super::shot::{End, ShotTracker, TargetWatch};
 use crate::integration::{
-    Backoff, BoxFuture, BrewStart, Integration, Link, Live, ReportOutcome,
+    Backoff, BoxFuture, BrewStart, Integration, Link, Live, Pump, ReportOutcome,
 };
 
 /// How often a running scan looks at what it has found.
@@ -38,6 +43,9 @@ const TIMER_RETRY: Duration = Duration::from_millis(800);
 const TIMER_TRIES: u32 = 3;
 /// Between two double beeps, so four beeps are heard as four.
 const BEEP_GAP: Duration = Duration::from_millis(700);
+/// After the pump stops, the weight is taken once it has not risen for the
+/// "seconds without a rise", or after that plus this at the latest.
+const SETTLE_EXTRA: Duration = Duration::from_secs(5);
 
 /// The integration. See the module docs.
 pub struct Precisa {
@@ -71,6 +79,9 @@ async fn run(link: Link, cfg: Config) {
             }
         }
     };
+    // Held for the whole run: a pump sensor sees someone listens and leaves
+    // reporting to this integration.
+    let mut pump = link.pump();
     loop {
         link.status.starting("looking for the scale");
         match connect(&bt.adapter, &cfg).await {
@@ -79,7 +90,7 @@ async fn run(link: Link, cfg: Config) {
                 tracing::info!("{TITLE}: connected to {}", scale.name);
                 link.status.subject(&scale.name);
                 link.status.connected(READY);
-                let served = serve(&link, &cfg, &mut scale).await;
+                let served = serve(&link, &cfg, &mut scale, &mut pump).await;
                 scale.disconnect().await;
                 match served {
                     // The server is gone.
@@ -101,7 +112,12 @@ async fn run(link: Link, cfg: Config) {
 }
 
 /// Runs while the scale stays connected. `Ok` once the server is gone.
-async fn serve(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<()> {
+async fn serve(
+    link: &Link,
+    cfg: &Config,
+    scale: &mut Scale,
+    pump: &mut watch::Receiver<Pump>,
+) -> anyhow::Result<()> {
     // Subscribed per connection: brews started while the scale was away must
     // not start a shot now.
     let mut brews = link.brews();
@@ -113,7 +129,7 @@ async fn serve(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<(
                 let Some(started) = started else {
                     return Ok(());
                 };
-                last_time = shot(link, cfg, scale, started).await?;
+                last_time = shot(link, cfg, scale, started, pump).await?;
             }
             // Idle: show what is on the scale.
             reading = scale.next_reading() => {
@@ -123,8 +139,8 @@ async fn serve(link: &Link, cfg: &Config, scale: &mut Scale) -> anyhow::Result<(
     }
 }
 
-/// One shot, from the brew start to its end. Returns the shot's time once the
-/// scale saw it end.
+/// One shot, from the brew start to its end. Returns the shot's time once it
+/// was seen to end.
 ///
 /// A knob press is reported to the grinder. A manual start is a test: the
 /// shot is measured the same way and ends the manual brew with the scale's
@@ -134,15 +150,31 @@ async fn shot(
     cfg: &Config,
     scale: &mut Scale,
     started: BrewStart,
+    pump: &mut watch::Receiver<Pump>,
 ) -> anyhow::Result<Option<Duration>> {
     let test = started == BrewStart::Manual;
-    if test {
-        tracing::info!("{TITLE}: test brew started by hand, watching the scale");
-        link.status.watching("test · watching the scale, the grinder sees a flush");
-    } else {
-        tracing::info!("{TITLE}: grinder is waiting, watching the scale");
-        link.status.watching("grinder is waiting · watching the scale");
+    let sensed = pump.borrow_and_update().sensed;
+    let what = if test { "test" } else { "grinder is waiting" };
+    tracing::info!(
+        "{TITLE}: {what}, timing by {}",
+        if sensed { "the pump sensor" } else { "the scale" }
+    );
+    if sensed {
+        link.status.watching(format!("{what} · waiting for the pump"));
+        return by_pump(link, cfg, scale, test, pump).await;
     }
+    link.status.watching(format!("{what} · watching the scale"));
+    by_scale(link, cfg, scale, test).await
+}
+
+/// Timed by the scale: after the start delay, until the weight stops rising
+/// or the scale's timer is stopped.
+async fn by_scale(
+    link: &Link,
+    cfg: &Config,
+    scale: &mut Scale,
+    test: bool,
+) -> anyhow::Result<Option<Duration>> {
     if !cfg.start_delay.is_zero() && !countdown(link, cfg, scale, test).await? {
         aborted(cfg, scale).await;
         return Ok(None);
@@ -160,7 +192,9 @@ async fn shot(
     let mut start_tries = 1;
     let mut last_start = Instant::now();
 
-    let mut tracker = ShotTracker::new(cfg.end_rule());
+    let mut rule = cfg.end_rule();
+    rule.target_g = target_weight(link, cfg);
+    let mut tracker = ShotTracker::new(rule);
     let give_up = MAX_SHOT.max(cfg.min_time + Duration::from_secs(60));
     let mut tick = tokio::time::interval(cfg.live_every);
     let mut grams_now = 0.0;
@@ -214,31 +248,234 @@ async fn shot(
             }
         }
     };
-    if end.time < cfg.min_time {
-        // The scale's timer was stopped early: not a shot to report. The brew
-        // keeps running, so it can still be entered by hand or aborted.
-        let secs = end.time.as_secs_f64();
+    finish(link, cfg, scale, test, end.time, end.grams, end.at_target).await;
+    Ok(Some(end.time))
+}
+
+/// Timed by the pump sensor: from the pump starting to it stopping. The
+/// scale is tared at once (the cup is on it) and weighs the cup when the last
+/// drops have landed. If the sensor goes away before the pump starts, the
+/// scale times the shot after all.
+async fn by_pump(
+    link: &Link,
+    cfg: &Config,
+    scale: &mut Scale,
+    test: bool,
+    pump: &mut watch::Receiver<Pump>,
+) -> anyhow::Result<Option<Duration>> {
+    let what = if test { "test" } else { "grinder is waiting" };
+    let give_up = MAX_SHOT.max(cfg.min_time + Duration::from_secs(60));
+    let waiting = Instant::now();
+    let mut tick = tokio::time::interval(cfg.live_every);
+    let mut grams = 0.0;
+    scale.send(&precisa::TARE).await.context("tare")?;
+
+    // 1. Until the pump starts (it may already run).
+    while !pump.borrow_and_update().running {
+        tokio::select! {
+            changed = pump.changed() => {
+                changed.context("pump sensor gone")?;
+                if !pump.borrow().sensed {
+                    tracing::info!("{TITLE}: pump sensor lost before the pump started; \
+                        timing by the scale");
+                    link.status.watching(format!("{what} · watching the scale"));
+                    return by_scale(link, cfg, scale, test).await;
+                }
+            }
+            reading = scale.next_reading() => {
+                grams = reading?.grams;
+                show(link, cfg, grams, Some(Duration::ZERO), true);
+            }
+            _ = tick.tick() => {
+                show(link, cfg, grams, Some(Duration::ZERO), true);
+                if !brew_still_on(link, test) {
+                    tracing::info!("{TITLE}: brew ended before the pump started");
+                    link.status.connected(READY);
+                    aborted(cfg, scale).await;
+                    return Ok(None);
+                }
+                if waiting.elapsed() > give_up {
+                    tracing::info!("{TITLE}: the pump did not start, giving up");
+                    link.status.connected(READY);
+                    aborted(cfg, scale).await;
+                    return Ok(None);
+                }
+            }
+        }
+    }
+    let start = Instant::now();
+    link.status.watching(format!("{what} · pump running"));
+    if cfg.drive_timer {
+        scale.send(&precisa::RESET_TIMER).await.context("reset timer")?;
+        tokio::time::sleep(COMMAND_GAP).await;
+        scale.send(&precisa::START_TIMER).await.context("start timer")?;
+    }
+
+    // Reaching the recipe weight ends the shot at that moment, pump running
+    // or not.
+    let mut watch = target_weight(link, cfg).map(TargetWatch::new);
+
+    // 2. Until the pump stops. Its run time comes from the sensor's clock.
+    let time = loop {
+        tokio::select! {
+            changed = pump.changed() => {
+                changed.context("pump sensor gone")?;
+                let p = *pump.borrow_and_update();
+                if !p.sensed {
+                    tracing::warn!("{TITLE}: pump sensor lost during the shot; \
+                        the time ends here");
+                    break start.elapsed();
+                }
+                if !p.running {
+                    break p.last_run.unwrap_or_else(|| start.elapsed());
+                }
+            }
+            reading = scale.next_reading() => {
+                grams = reading?.grams;
+                let at = start.elapsed();
+                show(link, cfg, grams, Some(at), true);
+                if let Some(target) = target_reached(&mut watch, at, grams) {
+                    return at_target(link, cfg, scale, test, target).await;
+                }
+            }
+            _ = tick.tick() => {
+                show(link, cfg, grams, Some(start.elapsed()), true);
+                if !brew_still_on(link, test) {
+                    tracing::info!("{TITLE}: brew ended while the pump ran");
+                    link.status.connected(READY);
+                    aborted(cfg, scale).await;
+                    return Ok(None);
+                }
+                if start.elapsed() > give_up {
+                    tracing::info!("{TITLE}: the pump did not stop, giving up");
+                    link.status.connected(READY);
+                    aborted(cfg, scale).await;
+                    return Ok(None);
+                }
+            }
+        }
+    };
+    if cfg.drive_timer {
+        let _ = scale.send(&precisa::STOP_TIMER).await;
+    }
+
+    // 3. The last drops: weigh once the weight stops rising.
+    link.status.watching(format!("{what} · pump stopped, weighing"));
+    let settling = Instant::now();
+    let mut peak = grams;
+    let mut last_rise = Instant::now();
+    while last_rise.elapsed() < cfg.stable_for && settling.elapsed() < cfg.stable_for + SETTLE_EXTRA {
+        tokio::select! {
+            reading = scale.next_reading() => {
+                grams = reading?.grams;
+                if grams >= peak + 0.3 {
+                    peak = grams;
+                    last_rise = Instant::now();
+                }
+                if let Some(target) = target_reached(&mut watch, start.elapsed(), grams) {
+                    return at_target(link, cfg, scale, test, target).await;
+                }
+            }
+            _ = tick.tick() => {}
+        }
+        show(link, cfg, grams, Some(time), true);
+        if !brew_still_on(link, test) {
+            tracing::info!("{TITLE}: brew ended while weighing");
+            link.status.connected(READY);
+            aborted(cfg, scale).await;
+            return Ok(None);
+        }
+    }
+    finish(link, cfg, scale, test, time, grams, false).await;
+    Ok(Some(time))
+}
+
+/// The moment and weight at which the cup reached the target, if it now has.
+fn target_reached(
+    watch: &mut Option<TargetWatch>,
+    at: Duration,
+    grams: f64,
+) -> Option<(Duration, f64)> {
+    let watch = watch.as_mut()?;
+    let time = watch.reading(at, grams)?;
+    Some((time, watch.target))
+}
+
+/// Pump mode: the cup reached the target, the shot ends there.
+async fn at_target(
+    link: &Link,
+    cfg: &Config,
+    scale: &mut Scale,
+    test: bool,
+    (time, grams): (Duration, f64),
+) -> anyhow::Result<Option<Duration>> {
+    if cfg.drive_timer {
+        let _ = scale.send(&precisa::STOP_TIMER).await;
+    }
+    finish(link, cfg, scale, test, time, grams, true).await;
+    Ok(Some(time))
+}
+
+/// The grinder's recipe weight, when stopping there is on and the grinder
+/// sent one with its last grind.
+fn target_weight(link: &Link, cfg: &Config) -> Option<f64> {
+    if !cfg.stop_at_target {
+        return None;
+    }
+    let target = link
+        .server
+        .with(|m, _| m.last_grind().and_then(|g| g.beverage_weight_g))
+        .filter(|g| g.is_finite() && *g > 0.0);
+    match target {
+        Some(g) => tracing::info!("{TITLE}: the shot ends at the recipe weight, {g:.1} g"),
+        None => tracing::info!("{TITLE}: no recipe weight from the grinder; the shot ends \
+            when the flow stops"),
+    }
+    target
+}
+
+/// A shot that was seen to end: too short ones are dropped (four beeps, the
+/// brew keeps running for entering it by hand), the rest reported (two
+/// beeps). Reaching the target weight always counts, however quick: a fast
+/// shot is what the grinder must hear about. Shows the result.
+async fn finish(
+    link: &Link,
+    cfg: &Config,
+    scale: &mut Scale,
+    test: bool,
+    time: Duration,
+    grams: f64,
+    at_target: bool,
+) {
+    let secs = time.as_secs_f64();
+    show(link, cfg, grams, Some(time), false);
+    if at_target {
+        tracing::info!("{TITLE}: recipe weight {grams:.1} g reached after {secs:.1} s");
+    }
+    if time < cfg.min_time && !at_target {
         let min = cfg.min_time.as_secs_f64();
-        tracing::info!("{TITLE}: shot stopped after {secs:.1} s, below the minimum \
+        tracing::info!("{TITLE}: shot ended after {secs:.1} s, below the minimum \
             {min:.0} s: not reported");
-        show(link, cfg, end.grams, Some(end.time), false);
         link.status
-            .connected(format!("shot stopped after {secs:.1} s, under {min:.0} s: not reported"));
+            .connected(format!("shot ended after {secs:.1} s, under {min:.0} s: not reported"));
         aborted(cfg, scale).await;
-        return Ok(Some(end.time));
+        return;
     }
     if cfg.drive_timer {
         // Only for the display; the shot is measured already.
         let _ = scale.send(&precisa::STOP_TIMER).await;
     }
 
-    let grams = tenth(end.grams);
-    let secs = end.time.as_secs_f64();
-    show(link, cfg, end.grams, Some(end.time), false);
-    let outcome = if test {
-        link.finish_manual(end.time, grams, "weighed by the scale (test)")
+    let grams = tenth(grams);
+    let source = if at_target {
+        "recipe weight reached on the scale"
     } else {
-        link.report(end.time, Some((grams, "weighed by the scale".to_owned())))
+        "weighed by the scale"
+    };
+    let outcome = if test {
+        link.finish_manual(time, grams, &format!("{source} (test)"))
+    } else {
+        link.report(time, Some((grams, source.to_owned())))
     };
     let line = match &outcome {
         ReportOutcome::Reported { grams, .. } if test => {
@@ -252,7 +489,6 @@ async fn shot(
         let times = if matches!(outcome, ReportOutcome::Reported { .. }) { 2 } else { 4 };
         beep(scale, times).await;
     }
-    Ok(Some(end.time))
 }
 
 /// Waits `cfg.start_delay` after the brew start, so there is time to start
