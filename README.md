@@ -20,7 +20,7 @@ Or on the command line / in Docker, which needs the host's Bluetooth:
 docker run -d --name gbs-anywhere --restart unless-stopped --net=host \
   --user 0:0 -v /run/dbus:/run/dbus:ro -v gbs-anywhere:/data \
   -e PRECISA=true \
-  ghcr.io/skamba/gbs-anywhere
+  ghcr.io/panterro/gbs-anywhere-bt
 ```
 
 | setting | flag | env | default |
