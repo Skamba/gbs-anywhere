@@ -92,6 +92,13 @@
     font: inherit; font-size: 28px; font-weight: 600; padding: 10px 0; font-variant-numeric: tabular-nums; outline: none;
   }
   .input span { color: var(--muted); font-size: 16px; }
+  /* Live values from a scale: the same boxes as the inputs, read-only. */
+  .input.live { border-style: dashed; }
+  .input.live output {
+    flex: 1 1 0; min-width: 0; font-size: 28px; font-weight: 600; padding: 10px 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .input.live.on { border-style: solid; border-color: var(--ok); }
   .hint { font-size: 14px; min-height: 1.45em; margin: 0 0 12px; color: var(--muted); }
   .hint.warn { color: var(--warn); }
   button {
@@ -140,6 +147,8 @@
   .integ.error .integ-detail { color: var(--bad); }
   .integ.watching .integ-detail { color: var(--accent); }
   .integ-foot { margin: 6px 0 0; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .integ-actions { display: flex; gap: 4px; }
+  .integ-live { margin: 8px 0 0; font-size: 24px; font-weight: 650; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
   .auto { color: var(--ok); font-size: 14px; margin: 8px 0 0; }
   .integ-foot { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
   .integ-foot button.quiet { width: auto; padding: 4px 0; font-size: 13px; }
@@ -240,7 +249,17 @@
     <p class="sub" id="brew-left">since the knob press</p>
     <p class="auto" id="auto-hint" hidden></p>
     <form id="shot-form" autocomplete="off">
-      <div class="fields">
+      <div class="fields" id="live-fields" hidden>
+        <div>
+          <label for="l-time">Time (scale)</label>
+          <div class="input live" id="l-time-box"><output id="l-time">–</output><span>s</span></div>
+        </div>
+        <div>
+          <label for="l-weight">Weight in cup</label>
+          <div class="input live" id="l-weight-box"><output id="l-weight">–</output><span>g</span></div>
+        </div>
+      </div>
+      <div class="fields" id="manual-fields">
         <div>
           <label for="f-time">Time (machine)</label>
           <div class="input"><input id="f-time" size="1" inputmode="decimal" enterkeyhint="next" placeholder=""><span>s</span></div>
@@ -253,6 +272,7 @@
       <p class="hint" id="form-hint">Always use the same timer, from the moment the pump starts.</p>
       <div class="row">
         <button class="primary" id="send" type="submit" disabled>Enter the time first</button>
+        <button id="manual" class="quiet" type="button" hidden>Enter by hand instead</button>
         <button id="abort" class="quiet" type="button">Abort shot</button>
       </div>
     </form>
@@ -288,6 +308,9 @@
   const MAX_MS = 80000;   // grinder rejects shots over 80 s
   let state = null, events = [], lastSeq = -1, step = null, busy = false;
   let weightTouched = false;
+  // Set for this brew by "Enter by hand instead": show the inputs even with
+  // a scale connected.
+  let manualOverride = false;
   // Titles of integrations that will report the shot themselves.
   let autoTitles = [];
   const joinTitles = (t) => t.join(" and ");
@@ -310,6 +333,13 @@
   }
   const num = (v) => { const n = parseFloat(String(v).replace(",", ".")); return isFinite(n) ? n : NaN; };
   const g = (w) => (w == null ? "–" : (Math.round(w * 10) / 10) + " g");
+
+  // A connected integration with live readings (a scale), if any.
+  function liveSource() {
+    return (state && state.integrations || []).find((i) =>
+      i.live && (i.health === "connected" || i.health === "watching")) || null;
+  }
+  const one = (x) => (Math.round(x * 10) / 10).toFixed(1);
 
   function currentStep() {
     const phase = state.phase.phase;
@@ -377,6 +407,12 @@
     detail.textContent = i.health === "error" ? (i.last_error || i.detail || "error")
       : i.health === "stopped" ? "stopped" : (i.detail || "");
     card.append(head, detail);
+    if (i.live) {
+      const live = document.createElement("p"); live.className = "integ-live";
+      live.textContent = one(i.live.grams) + " g" + (i.live.shot_s != null ? "  ·  " + one(i.live.shot_s) + " s"
+        + (i.live.measuring ? "" : " last shot") : "");
+      card.append(live);
+    }
     const foot = document.createElement("div"); foot.className = "integ-foot";
     const stats = document.createElement("span");
     if (i.reports > 0 && i.last_report) {
@@ -387,9 +423,13 @@
     }
     foot.append(stats);
     if (i.source === "app") {
+      const actions = document.createElement("span"); actions.className = "integ-actions";
+      const edit = document.createElement("button"); edit.type = "button"; edit.className = "quiet"; edit.textContent = "Configure";
+      edit.addEventListener("click", () => openEdit(i));
       const rm = document.createElement("button"); rm.type = "button"; rm.className = "quiet"; rm.textContent = "Remove";
       rm.addEventListener("click", () => removeIntegration(i));
-      foot.append(rm);
+      actions.append(edit, rm);
+      foot.append(actions);
     }
     if (foot.textContent) card.append(foot);
     return card;
@@ -403,6 +443,7 @@
 
   // --- Add integration ---------------------------------------------------------
   let adding = null;  // the kind whose form is open
+  let editing = null; // the id of the integration being changed, or null when adding
 
   async function loadKinds() {
     try {
@@ -415,13 +456,13 @@
   function openAdd(open) {
     $("add-panel").hidden = !open;
     $("add-integration").setAttribute("aria-expanded", String(open));
-    if (!open) { adding = null; return; }
+    if (!open) { adding = null; editing = null; return; }
     showPick();
     $("add-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
   function showPick() {
-    adding = null;
+    adding = null; editing = null;
     $("add-pick").hidden = false; $("add-form").hidden = true;
     $("kind-list").replaceChildren(...(kinds || []).map((k) => {
       const li = document.createElement("li");
@@ -438,14 +479,32 @@
     }));
   }
 
-  function showForm(k) {
+  // Opens the form of one added in the app, filled with its settings
+  // (GET /api/integrations/<id>; passwords are never sent back).
+  async function openEdit(i) {
+    try {
+      const r = await api("/api/integrations/" + encodeURIComponent(i.id));
+      const k = (kinds || []).find((k) => k.id === r.kind);
+      if (!k) { alert("This version has no form for " + r.kind + "."); return; }
+      $("add-panel").hidden = false;
+      $("add-integration").setAttribute("aria-expanded", "true");
+      showForm(k, r.settings || {}, i.id);
+      $("add-panel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } catch (err) { alert("Could not open its settings: " + err.message); }
+  }
+
+  function showForm(k, values, id) {
     adding = k;
+    editing = id || null;
+    document.querySelector(".add-head-step").textContent = editing ? "Configure integration" : "Add integration";
+    $("add-submit").textContent = editing ? "Save" : "Add";
+    $("add-back").textContent = editing ? "Cancel" : "Back";
     $("add-pick").hidden = true; $("add-form").hidden = false;
     $("add-icon").replaceWith(Object.assign(iconFor(k.id), { id: "add-icon" }));
     $("add-title").textContent = k.title;
     $("add-summary").textContent = k.summary;
     $("add-error").textContent = "";
-    $("add-note").hidden = persistent;
+    $("add-note").hidden = persistent || !!editing;
     $("add-note").textContent = "Not saved: gbs-anywhere runs without a settings file (--config), so this integration is gone after a restart.";
     $("add-fields").replaceChildren(...k.fields.map((f) => {
       const box = document.createElement("div"); box.className = "form-field";
@@ -462,6 +521,12 @@
       if (f.input === "password") input.autocomplete = "current-password";
       input.autocapitalize = "off"; input.spellcheck = false;
       if (f.default) input.placeholder = f.default;
+      if (editing && f.input === "password") {
+        // Left empty, the saved password stays.
+        input.required = false; input.placeholder = "unchanged";
+      } else if (values && values[f.key] != null) {
+        input.value = values[f.key];
+      }
       box.append(label, input);
       if (f.help) {
         const help = document.createElement("p"); help.className = "help"; help.textContent = f.help;
@@ -475,7 +540,7 @@
 
   $("add-integration").addEventListener("click", () => openAdd($("add-panel").hidden));
   $("add-cancel").addEventListener("click", () => openAdd(false));
-  $("add-back").addEventListener("click", showPick);
+  $("add-back").addEventListener("click", () => (editing ? openAdd(false) : showPick()));
   $("add-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!adding || busy) return;
@@ -486,7 +551,11 @@
     }
     busy = true; $("add-submit").disabled = true; $("add-error").textContent = "";
     try {
-      await api("/api/integrations", { method: "POST", body: JSON.stringify({ kind: adding.id, settings }) });
+      if (editing) {
+        await api("/api/integrations/" + encodeURIComponent(editing), { method: "PUT", body: JSON.stringify({ settings }) });
+      } else {
+        await api("/api/integrations", { method: "POST", body: JSON.stringify({ kind: adding.id, settings }) });
+      }
       openAdd(false);
       await tick();
     } catch (err) {
@@ -526,7 +595,7 @@
     const s = currentStep();
     if (s !== step) {
       if (s === "brew" && navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (_) {} }
-      if (s === "brew") { $("f-time").value = ""; weightTouched = false; setHint(); }
+      if (s === "brew") { $("f-time").value = ""; weightTouched = false; manualOverride = false; setHint(); }
       step = s;
     }
     for (const id of ["grind", "knob", "brew", "sent"]) $("s-" + id).hidden = id !== s;
@@ -537,14 +606,37 @@
     $("knob-target").textContent = g(target);
     if (s === "brew") {
       const ms = state.mako.REAL_EXTRACTION_TIME_MS || 0;
-      $("brew-timer").textContent = fmtClock(ms);
+      const src = liveSource();
+      const live = !!src && !manualOverride;
+      // With a scale, the clock shows the scale's shot time: it waits out the
+      // scale's start delay (held at 0) like the scale does.
+      const scaleMs = live && src.live.shot_s != null ? Math.max(0, src.live.shot_s) * 1000 : null;
+      $("brew-timer").textContent = fmtClock(scaleMs != null ? scaleMs : ms);
       const limit = state.config.brew_timeout ? state.config.brew_timeout.secs * 1000 : null;
-      $("brew-left").textContent = "since the knob press" + (limit ? " · " + fmtClock(limit - ms) + " left to enter it" : "");
+      $("brew-left").textContent = (scaleMs != null ? "timed by " + src.title : "since the knob press")
+        + (limit ? " · " + fmtClock(limit - ms) + " left to enter it" : "");
       if (!weightTouched && target && !$("f-weight").value) $("f-weight").value = target;
       const ah = $("auto-hint");
-      ah.hidden = !auto;
+      ah.hidden = !auto || live;
       ah.textContent = joinTitles(autoTitles) + " will send the time and weight when the shot ends."
         + " Enter them by hand only if that doesn't happen.";
+      $("live-fields").hidden = !live;
+      $("manual-fields").hidden = live;
+      $("send").hidden = live;
+      $("manual").hidden = !live;
+      if (live) {
+        const measuring = !!src.live.measuring;
+        // After the scale stops, its last time stays until the next shot.
+        $("l-time").textContent = src.live.shot_s != null ? one(src.live.shot_s) : "–";
+        $("l-weight").textContent = one(src.live.grams);
+        $("l-time-box").classList.toggle("on", measuring);
+        $("l-weight-box").classList.toggle("on", measuring);
+        const h = $("form-hint");
+        h.className = "hint";
+        h.textContent = measuring
+          ? src.title + " measures the shot and sends it when the scale ends it."
+          : src.title + " is not measuring this shot. Enter it by hand if it doesn't start.";
+      }
     }
     if (s === "sent" && state.phase.result) {
       const r = state.phase.result;
@@ -643,6 +735,13 @@
     } finally { busy = false; setHint(); }
   });
 
+  $("manual").addEventListener("click", () => {
+    manualOverride = true;
+    render();
+    setHint();
+    $("f-time").focus();
+  });
+
   $("abort").addEventListener("click", async () => {
     if (busy || !confirm("Abort the shot? The grinder will ignore it.")) return;
     busy = true;
@@ -651,8 +750,15 @@
     finally { busy = false; }
   });
 
-  tick();
-  setInterval(tick, 1000);
+  // Once a second; while a shot runs with live readings, as often as the
+  // integration's "live display refresh" setting asks (50 to 2000 ms).
+  async function loop() {
+    await tick();
+    const src = state && state.phase.phase === "brewing" && liveSource();
+    const every = src ? Math.min(2000, Math.max(50, src.live.refresh_ms || 100)) : 1000;
+    setTimeout(loop, every);
+  }
+  loop();
 })();
 </script>
 </body>

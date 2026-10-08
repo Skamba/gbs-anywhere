@@ -27,11 +27,17 @@ that adds:
 
 On any computer on the same network as the grinder, with Docker.
 
+**Without a Bluetooth scale** (PC, NAS, Raspberry Pi):
+
+```sh
+docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 -v gbs-anywhere:/data ghcr.io/panterro/gbs-anywhere-bt:latest
+```
+
 **With the Eureka Precisa**, on a Linux computer with Bluetooth near the
 scale, e.g. a Raspberry Pi next to the machine (BlueZ must be running):
 
 ```sh
-docker run -d --name gbs-anywhere-bt --restart unless-stopped --net=host --user 0:0 -v /run/dbus:/run/dbus:ro -v gbs-anywhere:/data ghcr.io/panterro/gbs-anywhere-bt:latest
+docker run -d --name gbs-anywhere --restart unless-stopped --net=host --user 0:0 -v /run/dbus:/run/dbus:ro -v gbs-anywhere:/data ghcr.io/panterro/gbs-anywhere-bt:latest
 ```
 
 `--net=host` and the D-Bus mount give the container the host's Bluetooth;

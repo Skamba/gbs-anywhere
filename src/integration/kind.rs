@@ -90,6 +90,14 @@ impl Kind {
     pub fn field(&self, key: &str) -> Option<&Field> {
         self.fields.iter().find(|f| f.key == key)
     }
+
+    /// The keys of its password fields: never sent back by the API.
+    pub fn secret_keys(&self) -> impl Iterator<Item = &'static str> {
+        self.fields
+            .iter()
+            .filter(|f| f.input == Input::Password)
+            .map(|f| f.key)
+    }
 }
 
 /// Filled-in form values by field key. Everything is a string, as typed.
@@ -140,6 +148,29 @@ impl Settings {
 
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// A copy without `keys`, e.g. without the passwords before settings go
+    /// out to the app.
+    pub fn without(&self, keys: &[&str]) -> Self {
+        Self(
+            self.0
+                .iter()
+                .filter(|(k, _)| !keys.contains(&k.as_str()))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        )
+    }
+
+    /// Takes `key` from `old` where it is missing or empty here: a password
+    /// left empty when changing settings keeps the saved one.
+    pub fn keep(mut self, key: &str, old: &Settings) -> Self {
+        if self.secret(key).is_none()
+            && let Some(v) = old.0.get(key)
+        {
+            self.0.insert(key.to_owned(), v.clone());
+        }
+        self
     }
 }
 
@@ -222,8 +253,24 @@ mod tests {
             Some(2.5)
         );
         // Keys outside the form: command line only.
-        let hidden = ok.with("base_url", Some("http://x"));
+        let hidden = ok.clone().with("base_url", Some("http://x"));
         assert_eq!(err(&hidden, true), "unknown setting `base_url`");
         assert!(KIND.create(&hidden, false).is_ok());
+
+        // Passwords stay out of what goes to the app, and an empty one keeps
+        // the saved one when settings change.
+        assert_eq!(KIND.secret_keys().collect::<Vec<_>>(), ["pass"]);
+        let shown = ok.without(&["pass"]);
+        assert_eq!(
+            (shown.text("user"), shown.secret("pass")),
+            (Some("me"), None)
+        );
+        let changed = Settings::new()
+            .with("user", Some("you"))
+            .with("pass", Some(""))
+            .keep("pass", &ok);
+        assert_eq!(changed.secret("pass"), Some(" x "));
+        let typed = Settings::new().with("pass", Some("new")).keep("pass", &ok);
+        assert_eq!(typed.secret("pass"), Some("new"));
     }
 }

@@ -8,6 +8,8 @@
 //! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
+//! | GET | `/api/integrations/<id>` | one added in the app: `{"id","kind","settings"}`, without passwords |
+//! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes its settings and restarts it; an empty password keeps the saved one |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
 //! | GET | `/api/events?after=N` | events with `seq > N` |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
@@ -27,7 +29,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{get, post, put};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use tokio::sync::broadcast::error::RecvError;
@@ -50,7 +52,12 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
         .route("/api/shot/start", post(shot_start))
         .route("/api/integrations", post(add_integration))
         .route("/api/integrations/kinds", get(integration_kinds))
-        .route("/api/integrations/{id}", delete(remove_integration))
+        .route(
+            "/api/integrations/{id}",
+            get(get_integration)
+                .put(update_integration)
+                .delete(remove_integration),
+        )
         .route("/api/machine", post(patch_machine))
         .route("/api/overrides", put(put_overrides).delete(clear_overrides))
         .with_state(state)
@@ -197,6 +204,37 @@ async fn add_integration(
     };
     match x.integrations().add(&x, kind, req.settings) {
         Ok(id) => (StatusCode::CREATED, Json(json!({ "id": id }))).into_response(),
+        Err(e) => change_error(&e),
+    }
+}
+
+/// The settings of one added in the app, for the app's form; passwords left
+/// out.
+async fn get_integration(State(x): State<Arc<Server>>, Path(id): Path<String>) -> Response {
+    match x.integrations().settings(&id, integration::KINDS) {
+        Ok((kind, settings)) => {
+            Json(json!({ "id": id, "kind": kind, "settings": settings })).into_response()
+        }
+        Err(e) => change_error(&e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateIntegration {
+    #[serde(default)]
+    settings: Settings,
+}
+
+async fn update_integration(
+    State(x): State<Arc<Server>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateIntegration>,
+) -> Response {
+    match x
+        .integrations()
+        .update(&x, &id, req.settings, integration::KINDS)
+    {
+        Ok(()) => Json(json!({ "id": id })).into_response(),
         Err(e) => change_error(&e),
     }
 }

@@ -1,0 +1,7 @@
+[Unit]
+Description=Restart Bluetooth when the controller hangs
+After=bluetooth.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/bt-watchdog.sh

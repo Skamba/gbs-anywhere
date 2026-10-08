@@ -11,7 +11,10 @@ publish = false
 anyhow = "1.0.104"
 axum = "0.8.9"
 base64 = "0.23.1"
+btleplug = "0.13.3"
 clap = { version = "4.6.7", features = ["derive", "env"] }
+dbus = "0.9.12"
+futures = "0.3.34"
 futures-util = "0.3.34"
 p256 = "0.14"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json"] }
@@ -24,6 +27,7 @@ tokio = { version = "1.53.1", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.26.1", features = ["v4"] }
+
 
 [lints.rust]
 unsafe_code = "forbid"

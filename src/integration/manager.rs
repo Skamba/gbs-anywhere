@@ -8,9 +8,10 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 use tokio::task::AbortHandle;
 
-use super::{Integration, Kind, Link, Settings, Status, StatusSnapshot};
+use super::{Integration, Kind, Link, Pump, Settings, Status, StatusSnapshot};
 use crate::server::Server;
 
 /// Where an integration came from.
@@ -19,7 +20,7 @@ use crate::server::Server;
 pub enum Source {
     /// Flags or environment variables; only those can turn it off.
     CommandLine,
-    /// Added in the app; can be removed there.
+    /// Added in the app; can be changed and removed there.
     App,
 }
 
@@ -31,13 +32,13 @@ pub struct View {
     pub source: Source,
 }
 
-/// Why adding or removing failed.
+/// Why adding, changing or removing failed.
 #[derive(Debug, PartialEq)]
 pub enum ChangeError {
     /// The settings do not work for this integration.
     Invalid(String),
     NotFound,
-    /// Set on the command line, so it can't be removed from the app.
+    /// Set on the command line, so it can't be changed or removed from the app.
     CommandLine,
     /// The settings file could not be written; nothing changed.
     Save(String),
@@ -49,7 +50,7 @@ impl std::fmt::Display for ChangeError {
             Self::Invalid(e) => f.write_str(e),
             Self::NotFound => f.write_str("no such integration"),
             Self::CommandLine => {
-                f.write_str("set on the command line: remove its flags to turn it off")
+                f.write_str("set on the command line: change or remove its flags there")
             }
             Self::Save(e) => write!(f, "could not save the settings: {e}"),
         }
@@ -88,15 +89,32 @@ impl Entry {
 }
 
 /// All integrations, in the order they were started.
-#[derive(Default)]
 pub struct Integrations {
     entries: Mutex<Vec<Entry>>,
     file: OnceLock<PathBuf>,
+    /// The pump as a sensor integration sees it, for the others. See
+    /// [`Link::pump`].
+    pump: watch::Sender<Pump>,
+}
+
+impl Default for Integrations {
+    fn default() -> Self {
+        Self {
+            entries: Mutex::default(),
+            file: OnceLock::new(),
+            pump: watch::channel(Pump::default()).0,
+        }
+    }
 }
 
 impl Integrations {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The shared pump state. See [`Link::pump`].
+    pub fn pump(&self) -> &watch::Sender<Pump> {
+        &self.pump
     }
 
     pub fn list(&self) -> Vec<View> {
@@ -174,6 +192,85 @@ impl Integrations {
         last.task = Some(spawn(server, integration, status));
         tracing::info!("{}: added in the app as {id}", kind.title);
         Ok(id)
+    }
+
+    /// The kind and settings of one added in the app, for the app's form to
+    /// change them. Passwords are left out; of a kind this version does not
+    /// have (so its passwords are unknown), nothing is shown.
+    pub fn settings(
+        &self,
+        id: &str,
+        catalog: &[&'static Kind],
+    ) -> Result<(String, Settings), ChangeError> {
+        let entries = self.lock();
+        let entry = entries
+            .iter()
+            .find(|e| e.id() == id)
+            .ok_or(ChangeError::NotFound)?;
+        let saved = entry.saved.as_ref().ok_or(ChangeError::CommandLine)?;
+        let shown = match catalog.iter().find(|k| k.id == saved.kind) {
+            Some(kind) => saved
+                .settings
+                .without(&kind.secret_keys().collect::<Vec<_>>()),
+            None => Settings::new(),
+        };
+        Ok((saved.kind.clone(), shown))
+    }
+
+    /// Changes the settings of one added in the app: checks them, saves them
+    /// and restarts it under the same id. A password left empty keeps the
+    /// saved one. On any error the running integration stays as it was.
+    pub fn update(
+        &self,
+        server: &Arc<Server>,
+        id: &str,
+        settings: Settings,
+        catalog: &[&'static Kind],
+    ) -> Result<(), ChangeError> {
+        let mut entries = self.lock();
+        let i = entries
+            .iter()
+            .position(|e| e.id() == id)
+            .ok_or(ChangeError::NotFound)?;
+        let Some(old) = entries[i].saved.clone() else {
+            return Err(ChangeError::CommandLine);
+        };
+        let kind = catalog
+            .iter()
+            .copied()
+            .find(|k| k.id == old.kind)
+            .ok_or_else(|| {
+                ChangeError::Invalid(format!(
+                    "this version of gbs-anywhere has no `{}` integration",
+                    old.kind
+                ))
+            })?;
+        let settings = kind
+            .secret_keys()
+            .fold(settings, |s, key| s.keep(key, &old.settings));
+        let integration = kind
+            .create(&settings, true)
+            .map_err(|e| ChangeError::Invalid(format!("{e:#}")))?;
+
+        entries[i].saved = Some(Saved {
+            id: id.to_owned(),
+            kind: old.kind.clone(),
+            settings,
+        });
+        if let Err(e) = self.save(&entries) {
+            entries[i].saved = Some(old);
+            return Err(ChangeError::Save(format!("{e:#}")));
+        }
+        // Stop the old one before the new one starts, so they never share a
+        // device (a Bluetooth scale takes one connection).
+        if let Some(task) = entries[i].task.take() {
+            task.abort();
+        }
+        let status = Status::new(id.to_owned(), kind.id, kind.title);
+        entries[i].status = status.clone();
+        entries[i].task = Some(spawn(server, integration, status));
+        tracing::info!("{}: settings changed in the app ({id})", kind.title);
+        Ok(())
     }
 
     /// Stops and forgets one that was added in the app.
@@ -347,6 +444,32 @@ mod tests {
         build: |_| Ok(Box::new(Idle)),
     };
 
+    static LOGIN: Kind = Kind {
+        id: "login",
+        title: "Test login",
+        summary: "",
+        icon: "",
+        fields: &[
+            Field {
+                key: "user",
+                label: "User",
+                help: "",
+                input: Input::Text,
+                required: true,
+                default: "",
+            },
+            Field {
+                key: "pass",
+                label: "Password",
+                help: "",
+                input: Input::Password,
+                required: true,
+                default: "",
+            },
+        ],
+        build: |_| Ok(Box::new(Idle)),
+    };
+
     fn host(h: &str) -> Settings {
         Settings::new().with("host", Some(h))
     }
@@ -390,6 +513,59 @@ mod tests {
         assert_eq!(ids(&x), ["scale", "scale-3"]);
         // A freed id is reused.
         assert_eq!(m.add(&x, &SCALE, host("d")).unwrap(), "scale-2");
+    }
+
+    #[tokio::test]
+    async fn settings_can_be_changed_in_the_app() {
+        let path = temp_file("update");
+        let catalog: &[&'static Kind] = &[&SCALE, &LOGIN];
+        let x = Server::new(MachineConfig::default());
+        let m = x.integrations();
+        m.start_cli(&x, &SCALE, &host("cli")).unwrap();
+        m.load(&x, &path, catalog).unwrap();
+        let login = Settings::new()
+            .with("user", Some("me"))
+            .with("pass", Some("secret"));
+        let id = m.add(&x, &LOGIN, login).unwrap();
+
+        // The form gets everything but the password.
+        let (kind, shown) = m.settings(&id, catalog).unwrap();
+        assert_eq!(kind, "login");
+        assert_eq!(shown.text("user"), Some("me"));
+        assert_eq!(shown.secret("pass"), None);
+
+        // No password typed: the saved one stays. Same id, same place.
+        let changed = Settings::new().with("user", Some("you"));
+        m.update(&x, &id, changed, catalog).unwrap();
+        assert_eq!(ids(&x), ["scale", "login"]);
+        tokio::task::yield_now().await;
+        assert_eq!(m.list()[1].status.health, Health::Connected);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("\"you\"") && text.contains("\"secret\"") && !text.contains("\"me\"")
+        );
+
+        // Settings that do not work change nothing.
+        let broken = Settings::new().with("pass", Some("x"));
+        assert!(matches!(
+            m.update(&x, &id, broken, catalog),
+            Err(ChangeError::Invalid(_))
+        ));
+        assert!(std::fs::read_to_string(&path).unwrap().contains("\"you\""));
+
+        assert_eq!(
+            m.update(&x, "scale", host("b"), catalog),
+            Err(ChangeError::CommandLine)
+        );
+        assert!(matches!(
+            m.settings("scale", catalog),
+            Err(ChangeError::CommandLine)
+        ));
+        assert_eq!(
+            m.update(&x, "nope", host("b"), catalog),
+            Err(ChangeError::NotFound)
+        );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
     #[tokio::test]
