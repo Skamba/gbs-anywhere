@@ -1,102 +1,213 @@
-# Eureka Precisa
+# gbs-anywhere-bt
 
-The Eureka Precisa (a Krell CFS-9002 sold by Eureka) sends its weight and
-timer over Bluetooth. With the cup on the scale, gbs-anywhere can time and
-weigh every shot itself and report it the moment it ends, so nothing needs to
-be typed and no machine cloud is involved.
+Grind-by-Sync for the Mahlkönig **E64 WS** with any espresso machine, with a
+Bluetooth scale that times and weighs the shot for you.
 
-## Set it up
+Grind-by-Sync (GbS) lets the E64 WS dial itself in: after each shot it
+compares the extraction time with the recipe's target and adjusts its grind
+setting. Normally that needs Mahlkönig's own Xenia machine, with its built-in
+scale, to report the shot. gbs-anywhere takes that place: you pull the shot on
+your own machine, and either enter time and weight on your phone or let a
+connected scale (the Eureka Precisa) measure and send them, and the grinder
+adjusts as usual.
 
-The computer running gbs-anywhere needs Bluetooth (a Raspberry Pi has it; most
-NAS do not, a USB dongle helps) and must be within reach of the scale. On
-Linux, BlueZ must be running.
+This is a fork of [skamba/gbs-anywhere](https://github.com/skamba/gbs-anywhere)
+that adds:
 
-In the app: the green **+** at the top right → **Eureka Precisa**. Nothing
-needs to be filled in with one scale in range.
+- the **Eureka Precisa** Bluetooth scale as an integration: it tares, starts
+  its timer, sees the shot end and reports time and weight by itself;
+- a **live display** in the app: the scale's weight and the shot's time
+  instead of the entry fields while it measures;
+- a **test mode** without the grinder;
+- **Configure** on each integration's card, to change its settings in the app.
 
-Or on the command line / in Docker, which needs the host's Bluetooth:
+> Not affiliated with Mahlkönig, Hemro or Eureka.
+
+## Run it
+
+On any computer on the same network as the grinder, with Docker.
+
+**With the Eureka Precisa**, on a Linux computer with Bluetooth near the
+scale, e.g. a Raspberry Pi next to the machine (BlueZ must be running):
 
 ```sh
-docker run -d --name gbs-anywhere --restart unless-stopped --net=host \
-  --user 0:0 -v /run/dbus:/run/dbus:ro -v gbs-anywhere:/data \
-  -e PRECISA=true \
-  ghcr.io/panterro/gbs-anywhere-bt
+docker run -d --name gbs-anywhere-bt --restart unless-stopped --net=host --user 0:0 -v /run/dbus:/run/dbus:ro -v gbs-anywhere:/data ghcr.io/panterro/gbs-anywhere-bt:latest
 ```
 
-| setting | flag | env | default |
-|---|---|---|---|
-| on | `--precisa` | `PRECISA` | off |
-| Bluetooth address | `--precisa-address` | `PRECISA_ADDRESS` | first scale found by name |
-| Bluetooth name | `--precisa-name` | `PRECISA_NAME` | `CFS-9002` |
-| leave the timer alone | `--precisa-no-timer` | `PRECISA_NO_TIMER` | off |
-| no beeps | `--precisa-no-beep` | `PRECISA_NO_BEEP` | off |
-| whole shot, not to the recipe weight | `--precisa-full-shot` | `PRECISA_FULL_SHOT` | off |
-| Seconds without a rise | `--precisa-stable-s` | `PRECISA_STABLE_S` | 3 |
-| Minimum grams | `--precisa-min-g` | `PRECISA_MIN_G` | 5 |
-| Minimum seconds | `--precisa-min-time-s` | `PRECISA_MIN_TIME_S` | 20 |
-| Milliseconds to start the machine | `--precisa-start-delay-ms` | `PRECISA_START_DELAY_MS` | 2000 |
-| Reconnect pause (ms) | `--precisa-reconnect-ms` | `PRECISA_RECONNECT_MS` | 500 |
-| Live display refresh (ms) | `--precisa-live-ms` | `PRECISA_LIVE_MS` | 100 |
+`--net=host` and the D-Bus mount give the container the host's Bluetooth;
+`--user 0:0` is needed because BlueZ only lets root in by default, and to
+open the host's port 80. Docker Desktop on macOS and Windows has no
+Bluetooth, so the scale needs Linux.
 
-## How it works
+The `/data` volume keeps the integrations you add in the app (see
+[Integrations](#integrations)). The app shows the version at the bottom of
+the page; what changed is in [CHANGELOG.md](CHANGELOG.md).
 
-Put the cup on the scale, grind, press the knob and start the machine within
-the "milliseconds to start the machine" (2000 ms by default, 0 to 10000; the
-time and the clock in the app stay at 0 until then).
-Then gbs-anywhere tares the scale and resets and starts its timer; the shot
-is timed from that moment. With 0 it starts right at the knob press.
+You'll need that computer's IP address on your network (e.g. `192.168.1.20`)
+for the grinder and your phone. It must stay the same, so give it a fixed IP
+or a DHCP reservation in your router. Port 80 must be free and reachable from
+the grinder (allow it in the firewall).
 
-- **The end of the shot.** Stopping the timer on the scale ends it at once.
-  Otherwise it ends when the weight has not risen by 0.3 g for 3 s with at
-  least 5 g in the cup; the time is then the moment the weight last rose.
-- **Time from the end of the countdown.** Measured by gbs-anywhere, not by
-  the scale, whose timer only counts whole seconds.
-- **Ends at the recipe weight.** Like a Xenia, the shot ends the moment the
-  cup reaches the weight the grinder's recipe asks for (Brew Weight): that
-  moment is the shot's time, and the scale beeps twice right away, the sign
-  to stop the machine. Whatever runs into the cup afterwards does not count,
-  so stopping late does not make the shot look slow and grind coarser. Two
-  readings over the target are needed, so a knock on the cup does not end
-  it. Without a recipe weight, or with `--precisa-full-shot`, the shot ends
-  when the flow stops, as below.
-- **Minimum time.** Before "minimum seconds" (20 s by default, 0 to 200) a
-  shot is not over: a pause in the flow does not end it. Stopping the scale's
-  timer before then aborts it (four beeps, nothing reported); the brew keeps
-  running, so it can still be entered by hand. Reaching the recipe weight
-  counts even before then: a fast shot is what the grinder needs to hear.
-- **The first second is ignored**, while the tare settles.
-- **Beeps.** The scale beeps twice when a shot goes to the grinder (or ends a
-  test), and four times when one ends without a result: aborted, answered
-  in the app, or no end seen after 120 s. `--precisa-no-beep` turns this off.
-- **Test without the grinder.** A brew started by hand (without a knob press)
-  is measured the same way; when the scale ends it, the brew ends with the
-  scale's time and weight, as if typed in the app. The grinder sees a flush.
-- **Only after a knob press.** Weighing while the grinder is not waiting is
-  never reported, and presses while the scale was off do not count later.
-- **One app at a time.** The scale takes one Bluetooth connection; a phone
-  app connected to it keeps gbs-anywhere out, and the other way round.
-- **The phone still works.** You can still enter a shot on your phone;
-  whichever comes first wins.
-- **Live display.** While a shot runs, the app shows the scale's weight and
-  time instead of the entry fields and refreshes every 100 ms (50 to 2000,
-  the setting above). The scale itself sends at its own rate.
-- **Reconnecting.** While the scale is off or out of reach, gbs-anywhere
-  searches for it over and over with the "reconnect pause" in between
-  (500 ms by default, 500 to 3000), so it connects within about a second of
-  switching the scale on.
+Or from source, with Rust installed (on Linux, `libdbus-1-dev` and
+`pkg-config` are needed for Bluetooth):
 
-## Building it in
-
-The integration is listed in `src/integration/mod.rs` like La Marzocco. It
-needs these crates in `Cargo.toml`:
-
-```toml
-btleplug = "0.11"
-uuid = "1"
-futures = "0.3"
+```sh
+cargo run --release
 ```
 
-btleplug links the system's libdbus. The Docker image therefore builds with
-`libdbus-1-dev` and runs on Debian slim with `libdbus-1-3` (distroless has no
-libdbus). Bluetooth in Docker needs `--net=host`, `--user 0:0` and
-`-v /run/dbus:/run/dbus:ro` (see above).
+## Set up the E64 WS
+
+The grinder treats gbs-anywhere as a Xenia, so the menus below say "Xenia".
+
+**Connect the grinder**
+
+1. Put the grinder on the same network as the computer running gbs-anywhere.
+   The E64 WS only supports 2.4 GHz WiFi.
+2. On the grinder, open **Settings** (lower-left button on the home screen).
+3. Go to **Connectivity → Machine To Machine → Enable Xenia**.
+4. Open **Configuration**. The scan will not find gbs-anywhere, so enter the
+   hostname by hand: the computer's IP address, e.g. `192.168.1.20`. An IP is
+   more reliable than a `.local` name.
+5. Within a few seconds the app shows **grinder connected**. The grinder polls
+   every 2 seconds from then on.
+
+**Make a recipe use Grind-by-Sync**
+
+- New recipe: **Settings → Setup Assistance → Assisted Dial-in**, follow the
+  steps, save the recipe in a slot, answer **yes** to "Fine-tune with GbS?"
+  and choose **GbS**.
+- Existing recipe: open the recipe's menu and turn on **Enable GbS**, then set
+  **Brew Time** (target time), **Brew Weight** (target weight in the cup) and
+  **GbS start DD** (the grind setting to start from).
+
+A blue chain icon on the recipe means GbS is active.
+
+## Pull a shot
+
+1. Open `http://<that IP>/` on your phone, e.g. `http://192.168.1.20/`. The
+   header shows "grinder connected" while the grinder is polling.
+2. Grind with a GbS recipe.
+3. When the grinder says "Press grinder rotary knob to start brewing.", press
+   the knob and start the shot on your machine.
+
+**With the Eureka Precisa**, put the cup on the scale before pressing the
+knob. The scale tares, and after a short start delay (2 s by default, time to
+start the machine) its timer runs. The app shows the weight and the time
+live instead of the entry fields; its clock waits out the start delay too.
+When the cup reaches the recipe's Brew Weight, the shot ends there like on a
+Xenia: that moment's time and the weight go to the grinder and the scale
+beeps twice, the sign to stop your machine. What runs on afterwards does not
+count. Without a recipe weight the shot ends when the flow stops (or you stop
+the scale's timer). Four beeps mean the shot was not
+reported: aborted, too short, or no end seen. **Enter by hand instead** under
+the live values brings back the entry fields for that shot.
+
+**Without a scale**, time the shot from pump start (always use the same
+timer), weigh the cup, and enter both in the app. Tap **Send to grinder**.
+
+The grinder then shows its new grind setting. Shots of 10 s or less and over
+80 s are ignored by the grinder, as is an aborted shot.
+
+### Test without the grinder
+
+A brew can be started without the grinder: `s` in the console (without
+Docker) or `POST /api/shot/start`. The grinder sees it as a flush. With the
+Precisa connected, the scale measures it like a real shot and ends the brew
+with its time and weight, so scale, thresholds and live display can be tried
+without grinding.
+
+## Integrations
+
+Entering the numbers on your phone is the default and needs no setup.
+Optionally, let an *integration* report the shot instead: a connected scale,
+a vendor cloud, a home-automation hub. After the knob press it waits for the
+shot, then sends its time and weight to the grinder by itself. You can still
+enter or correct a shot on your phone; whichever comes first wins, also when
+several integrations run at once.
+
+Tap the green **+** at the top right of the app, pick one and fill in its
+form. Each integration gets a card showing whether it is connected and what
+it last sent; a scale's card also shows its weight live. **Configure** opens
+the form again with the current settings (passwords stay as they are unless
+you type a new one) and restarts the integration with the changes;
+**Remove** stops it.
+
+Integrations added in the app are saved in the settings file (`--config`,
+`/data/gbs-anywhere.json` in Docker, holding their passwords), so keep the
+`/data` volume. Without a settings file they last until the next restart.
+
+Integrations can also be set with flags or environment variables. Those show
+"Set on the command line" and can only be changed or turned off by changing
+the flags.
+
+| integration | reads | setup |
+|---|---|---|
+| Eureka Precisa | time and weight from a Eureka Precisa scale over Bluetooth, live in the app | [src/integration/precisa](src/integration/precisa/README.md) |
+| La Marzocco cloud | time and weight from a connected La Marzocco's coffee log | [src/integration/la_marzocco](src/integration/la_marzocco/README.md) |
+
+## Options
+
+Extra flags go after the image name (Docker) or after `--` (cargo):
+
+| flag | default | what |
+|---|---|---|
+| `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long |
+| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for the integrations added in the app; also `CONFIG_FILE` |
+| `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs |
+| `--log <file>` | off | append every grinder request to a file |
+| `-p, --ports <list>` | 80 | ports to serve on |
+| `--precisa*` | off | Eureka Precisa, see [its README](src/integration/precisa/README.md) |
+| `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
+
+Without Docker you can also type the shot into the console: `30 36` means
+30 s, 36 g. `h` lists the other commands.
+
+## Control API
+
+JSON on the same port as the app, for scripts or another front end:
+
+| method | path | what |
+|---|---|---|
+| GET | `/api/state` | version, phase, machine state, last shot, grinder connection, integrations (with a scale's live reading) |
+| GET | `/api/events?after=N` | events with `seq > N` |
+| GET | `/api/events/stream` | the same, live, as server-sent events |
+| POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` reports the running shot |
+| POST | `/api/shot/abort` | aborts the running shot (the grinder skips it) |
+| POST | `/api/shot/start` | starts a brew without the grinder (a test; the grinder sees a flush) |
+| GET | `/api/integrations/kinds` | the integrations that can be added, with their setup forms |
+| POST | `/api/integrations` | `{"kind":"eureka_precisa","settings":{}}` adds an integration |
+| GET | `/api/integrations/<id>` | the settings of one added in the app, without passwords |
+| PUT | `/api/integrations/<id>` | `{"settings":{…}}` changes them and restarts it; an empty password keeps the saved one |
+| DELETE | `/api/integrations/<id>` | removes an integration added in the app |
+
+The API has no login: anyone on your network who can open the app can add,
+change or remove integrations, as they can report shots. Passwords are never
+sent back.
+
+## Build
+
+```sh
+cargo build --release     # binary: target/release/gbs-anywhere
+cargo test
+docker build -t gbs-anywhere-bt .
+```
+
+The Docker image runs on Debian slim rather than distroless, because the
+Bluetooth stack needs the system's libdbus.
+
+### Adding an integration
+
+Each integration is one folder under `src/integration/`; `la_marzocco/` (a
+cloud) and `precisa/` (a Bluetooth device) are complete examples. The
+layout and the rules every integration follows are in the
+[`integration` module docs](src/integration/mod.rs) (`cargo doc --open`).
+The app builds its list behind **+** and the setup form from the folder's
+`KIND`, so nothing in `web/` changes.
+
+## License
+
+Copyright 2026 Skamba and the gbs-anywhere contributors.
+
+[GNU AGPL v3 or later](LICENSE): anyone, cafés included, may use, change and
+share it. If you share a changed version, or let other people use one over a
+network, you must offer them its source code under the same license.
