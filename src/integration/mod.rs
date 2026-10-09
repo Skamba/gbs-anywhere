@@ -15,7 +15,8 @@
 //! [`Integrations`] runs them all, so several can run side by side. The
 //! first one to report a shot wins.
 //!
-//! Included: [`la_marzocco`], which reads the La Marzocco cloud's coffee log.
+//! Included: [`la_marzocco`], which reads the La Marzocco cloud's coffee
+//! log, and [`half_decent`], which weighs the shot on a Half Decent Scale.
 //!
 //! # Adding one
 //!
@@ -72,22 +73,27 @@ pub use kind::{Field, Input, Kind, Settings};
 pub use manager::{ChangeError, Integrations, Source, View};
 
 /// Every integration, in the order the app lists them.
-pub static KINDS: &[&Kind] = &[&la_marzocco::KIND];
+pub static KINDS: &[&Kind] = &[&la_marzocco::KIND, &half_decent::KIND];
 
 /// The command-line flags of every integration.
 #[derive(Debug, Clone, clap::Args)]
 pub struct CliArgs {
     #[command(flatten)]
     la_marzocco: la_marzocco::config::Args,
+    #[command(flatten)]
+    half_decent: half_decent::config::Args,
 }
 
 impl CliArgs {
     /// The integrations whose flags are set, with their settings.
     pub fn configured(&self) -> Vec<(&'static Kind, Settings)> {
-        [(&la_marzocco::KIND, self.la_marzocco.settings())]
-            .into_iter()
-            .filter_map(|(kind, settings)| Some((kind, settings?)))
-            .collect()
+        [
+            (&la_marzocco::KIND, self.la_marzocco.settings()),
+            (&half_decent::KIND, self.half_decent.settings()),
+        ]
+        .into_iter()
+        .filter_map(|(kind, settings)| Some((kind, settings?)))
+        .collect()
     }
 }
 
