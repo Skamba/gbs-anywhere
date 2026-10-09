@@ -13,11 +13,14 @@
 //!    for a second; the shot starts at the last reading still at the
 //!    baseline.
 //! 3. **Flowing**: the flow has stopped once the weight rose less than
-//!    0.5 g in 3 s (after at least 5 g). It ended in the middle of the last
-//!    second in which the weight still rose 0.6 g. A drop of more than 10 g
-//!    is the cup being lifted: the shot ends there.
+//!    0.5 g in 3 s, with at least 5 g in the cup, or half the recipe weight
+//!    when the grinder sent one ([`Detector::expecting`]), so a pause after
+//!    pre-infusion is not taken for the end. It ended in the middle of the
+//!    last second in which the weight still rose 0.6 g. A drop of more than
+//!    10 g is the cup being lifted: the shot ends there.
 //!
-//! A "shot" under 5 s is a bump or a press, not coffee: start over.
+//! A stop under 5 s or 5 g is a pause, not the end: keep watching from the
+//! same start. Weight that goes back to the baseline was a hand, not coffee.
 //!
 //! [`Detector::after_tare`] is for a detector started together with a tare:
 //! it waits for the tare to land (a reading near zero) so the jump to zero
@@ -74,8 +77,10 @@ const DROPS_RESET_G: f64 = 0.5;
 /// Flow stopped: less than `STOP_RISE_G` more over `STOP_WINDOW_MS` ...
 const STOP_WINDOW_MS: u64 = 3000;
 const STOP_RISE_G: f64 = 0.5;
-/// ... once at least this much is in the cup.
+/// ... once at least this much is in the cup (or `RECIPE_SHARE` of the
+/// recipe weight, if more).
 const MIN_SHOT_G: f64 = 5.0;
+const RECIPE_SHARE: f64 = 0.5;
 /// Still flowing while it rises `FLOW_RISE_G` within `FLOW_WINDOW_MS`.
 const FLOW_WINDOW_MS: u64 = 1000;
 const FLOW_RISE_G: f64 = 0.6;
@@ -93,7 +98,7 @@ const TARE_ZERO_G: f64 = 0.5;
 const TARE_MAX_MS: u64 = 3000;
 
 /// Finds one shot. See the module docs.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Detector {
     /// The last three readings as they came, for the median.
     raw: VecDeque<Reading>,
@@ -102,6 +107,20 @@ pub struct Detector {
     state: State,
     /// Waiting for a tare to land: `Some(first reading's ms)` once one came.
     tare: Option<Option<u64>>,
+    /// The flow can only stop with this much in the cup.
+    min_grams: f64,
+}
+
+impl Default for Detector {
+    fn default() -> Self {
+        Self {
+            raw: VecDeque::new(),
+            history: VecDeque::new(),
+            state: State::default(),
+            tare: None,
+            min_grams: MIN_SHOT_G,
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -127,6 +146,19 @@ impl Detector {
         Self::default()
     }
 
+    /// With the grinder's recipe weight: the flow only stops once half of
+    /// it is in the cup.
+    pub fn expecting(mut self, recipe_g: Option<f64>) -> Self {
+        let share = recipe_g.filter(|g| g.is_finite()).unwrap_or(0.0) * RECIPE_SHARE;
+        self.min_grams = MIN_SHOT_G.max(share);
+        self
+    }
+
+    fn with_min_grams(mut self, g: f64) -> Self {
+        self.min_grams = g;
+        self
+    }
+
     /// For a detector started together with a tare: readings count only
     /// from the first one near zero (at most `TARE_MAX_MS` later).
     pub fn after_tare() -> Self {
@@ -140,7 +172,7 @@ impl Detector {
     pub fn push(&mut self, r: Reading) -> Progress {
         let restarted = self.raw.back().is_some_and(|last| r.ms <= last.ms);
         if restarted || matches!(self.state, State::Done) {
-            *self = Self::new();
+            *self = Self::new().with_min_grams(self.min_grams);
         }
         if let Some(first) = &mut self.tare {
             let first = *first.get_or_insert(r.ms);
@@ -235,7 +267,7 @@ impl Detector {
                     };
                     return Progress::Ready;
                 }
-                let stopped = s.grams - baseline >= MIN_SHOT_G
+                let stopped = s.grams - baseline >= self.min_grams
                     && s.ms >= start_ms + STOP_WINDOW_MS
                     && self
                         .grams_at(s.ms - STOP_WINDOW_MS)
@@ -272,8 +304,9 @@ impl Detector {
         let in_cup = last.get(last.len() / 2).map_or(0.0, |g| g - baseline);
         let time_ms = end_ms.saturating_sub(start_ms);
         if time_ms < MIN_SHOT_MS || in_cup < MIN_SHOT_G {
-            self.state = State::Settling;
-            return Progress::Settling;
+            // A pause, not the end (or a lift too early to be a shot): keep
+            // the start and watch on.
+            return Progress::Flowing { grams: in_cup };
         }
         self.state = State::Done;
         Progress::Done(Shot {
@@ -361,11 +394,26 @@ pub(crate) mod synth {
             rate * flow_s + 0.1 * (t - end).min(3.0)
         }
     }
+
+    /// Like [`espresso`] with a profile: from 2 s, each `(seconds, g/s)` in
+    /// turn (a rate of 0 is a pause), then the same drips.
+    pub(crate) fn profile(t: f64, phases: &[(f64, f64)]) -> f64 {
+        let mut at = 2.0;
+        let mut g = 0.0;
+        for &(secs, rate) in phases {
+            if t < at + secs {
+                return g + rate * (t - at).max(0.0);
+            }
+            at += secs;
+            g += rate * secs;
+        }
+        g + 0.1 * (t - at).min(3.0)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::synth::{espresso, readings};
+    use super::synth::{espresso, profile, readings};
     use super::*;
 
     /// Feeds everything; the shot if one finished.
@@ -552,6 +600,25 @@ mod tests {
                 .any(|&r| matches!(d.push(r), Progress::Flowing { .. })),
             "the test should show why after_tare exists"
         );
+    }
+
+    #[test]
+    fn a_pause_after_preinfusion_is_not_the_end() {
+        // 3 s of drops (6 g), 4 s pause, then the main flow to 36 g.
+        let short = [(3.0, 2.0), (4.0, 0.0), (15.0, 2.0)];
+        let rs = readings(0, 36.0, |t| profile(t, &short));
+        assert_shot(run(&rs), 22.0, 36.3);
+
+        // 6 s of slow drops (7.2 g), 4 s pause, main flow: only the recipe
+        // weight tells this pause from the end of a small shot.
+        let long = [(6.0, 1.2), (4.0, 0.0), (14.4, 2.0)];
+        let rs = readings(0, 38.0, |t| profile(t, &long));
+        let mut d = Detector::new().expecting(Some(36.0));
+        let shot = rs.iter().find_map(|&r| match d.push(r) {
+            Progress::Done(s) => Some(s),
+            _ => None,
+        });
+        assert_shot(shot, 24.4, 36.3);
     }
 
     #[test]

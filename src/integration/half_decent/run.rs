@@ -16,7 +16,8 @@ use super::shot::{Detector, Progress, Reading, Shot};
 use crate::integration::{Backoff, BoxFuture, Integration, Link};
 
 const MIN_BACKOFF: Duration = Duration::from_secs(2);
-const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// Short, so a scale that wakes up after a knob press is back in time.
+const MAX_BACKOFF: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The scale sends 10 readings a second; this much silence means it is gone.
 const SILENCE: Duration = Duration::from_secs(5);
@@ -79,6 +80,11 @@ fn idle_line(last: Option<Shot>) -> String {
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// The grinder's recipe weight, which tells a pause from the end of a shot.
+fn recipe_weight(link: &Link) -> Option<f64> {
+    link.server.with(|m, _| m.recipe_weight_g())
+}
+
 async fn run(link: Link, cfg: Config) {
     let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
     let mut last = None;
@@ -140,6 +146,12 @@ async fn watch(
     let mut brews = link.grinder_brews();
     link.status.connected(idle_line(*last));
     let mut detector: Option<Detector> = None;
+    if link.grinder_waiting() {
+        // Pressed while the scale was away. No tare: the shot may already
+        // be running.
+        detector = Some(Detector::new().expecting(recipe_weight(link)));
+        link.status.watching(SETTLING);
+    }
     loop {
         let text = tokio::select! {
             pressed = brews.next() => {
@@ -150,7 +162,7 @@ async fn watch(
                 ws.send(Message::text(r#"{"command":"tare"}"#))
                     .await
                     .context("could not tare the scale")?;
-                detector = Some(Detector::after_tare());
+                detector = Some(Detector::after_tare().expecting(recipe_weight(link)));
                 link.status.watching(SETTLING);
                 continue;
             }
@@ -340,6 +352,30 @@ mod tests {
         assert!(snap.detail.starts_with("last shot: "), "{}", snap.detail);
         // Short enough to fit the card at phone width.
         assert_eq!(snap.subject, format!("{host} · v3.1.14"));
+    }
+
+    #[tokio::test]
+    async fn a_knob_press_before_the_scale_connects_is_watched() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let (go, went) = oneshot::channel();
+        let tared = Arc::new(AtomicBool::new(false));
+        let l = link();
+        // The knob is pressed while the scale is still asleep.
+        knob_press(&l);
+        tokio::spawn(fake_scale(listener, went, tared.clone()));
+        tokio::spawn(run(l.clone(), Config { host }));
+
+        wait_for("watching", || {
+            l.status.snapshot().health == Health::Watching
+        })
+        .await;
+        go.send(()).unwrap();
+        wait_for("the report", || l.status.snapshot().reports == 1).await;
+        // Coffee may already be in the cup: no tare this late.
+        assert!(!tared.load(Ordering::SeqCst));
+        let shot = l.status.snapshot().last_report.unwrap();
+        assert!((i64::from(shot.time_ms) - 18_000).abs() <= 400, "{shot:?}");
     }
 
     #[tokio::test]

@@ -44,6 +44,9 @@ the grinder a few seconds later.
 - **Put the cup on before the coffee comes.** Placing or lifting the cup is
   recognised and not counted as coffee; press the knob and start the shot
   before the first drops reach the cup.
+- **A pause is not the end.** The shot only ends once at least half the
+  recipe weight is in the cup, so the flow pausing after pre-infusion is
+  timed as part of the shot.
 - **Lifting the cup ends the shot** at the last moment coffee was flowing.
 - **The scale is tared at the knob press,** so its display counts the
   coffee from zero. Put the cup on before pressing the knob. Avoid taring
@@ -52,7 +55,8 @@ the grinder a few seconds later.
 - **The phone still works.** You can still enter or correct a shot on your
   phone; whichever comes first wins.
 - Up to four apps can read the scale at once. If the scale sleeps or loses
-  WiFi, gbs-anywhere reconnects by itself.
+  WiFi, gbs-anywhere reconnects by itself within about 10 seconds; a knob
+  press made meanwhile is still watched, without the tare.
 
 ## Official logo
 
