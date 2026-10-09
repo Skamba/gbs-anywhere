@@ -10,8 +10,9 @@ a minor release may change behaviour.
 
 - Half Decent Scale integration: reports each shot weighed on a Half Decent
   Scale over WiFi (firmware 3.0 or newer), timed from the first drops to the
-  flow stopping. It tares the scale at the knob press. Add it with the
-  green + or `--hds-host`.
+  flow stopping. It tares the scale at the knob press, and is connected only
+  while the grinder waits, so the scale still switches itself off. Add it
+  with the green + or `--hds-host`.
 
 ## [0.1.1] - 2026-09-30
 

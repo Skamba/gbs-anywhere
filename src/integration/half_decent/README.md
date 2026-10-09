@@ -54,9 +54,12 @@ the grinder a few seconds later.
 - **Only after a knob press.** Weighing at other times is never reported.
 - **The phone still works.** You can still enter or correct a shot on your
   phone; whichever comes first wins.
-- Up to four apps can read the scale at once. If the scale sleeps or loses
-  WiFi, gbs-anywhere reconnects by itself within about 10 seconds; a knob
-  press made meanwhile is still watched, without the tare.
+- **The scale still switches itself off.** A connected app keeps the scale
+  awake, so gbs-anywhere only connects from the knob press until the shot
+  is reported. If the scale is off at the knob press, turn it on:
+  gbs-anywhere looks for it every few seconds while the grinder waits and
+  watches the shot without the tare.
+- Up to four apps can read the scale at once.
 
 ## Official logo
 

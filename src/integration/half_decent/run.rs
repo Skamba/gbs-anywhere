@@ -1,5 +1,7 @@
-//! The task: stay connected to the scale and, after each knob press, watch
-//! its readings for the shot.
+//! The task: after each knob press, connect to the scale, watch its
+//! readings for the shot, and let go again. A connected app keeps the scale
+//! from switching itself off, so it is only connected while the grinder
+//! waits.
 
 use std::time::Duration;
 
@@ -13,17 +15,20 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use super::TITLE;
 use super::config::Config;
 use super::shot::{Detector, Progress, Reading, Shot};
-use crate::integration::{Backoff, BoxFuture, Integration, Link};
+use crate::integration::{Backoff, BoxFuture, GrinderBrews, Integration, Link};
 
 const MIN_BACKOFF: Duration = Duration::from_secs(2);
-/// Short, so a scale that wakes up after a knob press is back in time.
+/// Short, so a scale switched on after the knob press is found in time.
 const MAX_BACKOFF: Duration = Duration::from_secs(10);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// The scale sends 10 readings a second; this much silence means it is gone.
 const SILENCE: Duration = Duration::from_secs(5);
+const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 const SETTLING: &str = "grinder is waiting · waiting for a steady weight";
 const READY: &str = "grinder is waiting · watching for the first drops";
+/// When the scale could not be reached at startup.
+const AWAY: &str = "scale is off or out of reach; looked for at each knob press";
 
 /// The integration. See the module docs.
 pub struct HalfDecent {
@@ -86,29 +91,100 @@ fn recipe_weight(link: &Link) -> Option<f64> {
 }
 
 async fn run(link: Link, cfg: Config) {
-    let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
     let mut last = None;
     link.status.subject(&cfg.host);
+    // Subscribe first, so no knob press slips by.
+    let mut brews = link.grinder_brews();
+    if !link.grinder_waiting() {
+        link.status.starting(format!("connecting to {}", cfg.host));
+        match first_look(&link, &cfg).await {
+            Ok(()) => link.status.connected(idle_line(last)),
+            Err(e) => {
+                tracing::info!("{TITLE}: {e:#}");
+                link.status.connected(AWAY);
+            }
+        }
+    }
+    loop {
+        // A press seen now, not one already waiting: the cup is on and the
+        // shot has not started, so the scale can be tared.
+        let fresh = !link.grinder_waiting();
+        if fresh {
+            if !brews.next().await {
+                return;
+            }
+            if !link.grinder_waiting() {
+                // A press from a brew that is already over.
+                continue;
+            }
+        }
+        if !brew(&link, &cfg, &mut brews, fresh, &mut last).await {
+            return;
+        }
+    }
+}
+
+/// Connects once, to check the address and show the firmware version, then
+/// lets go so the scale can still switch itself off.
+async fn first_look(link: &Link, cfg: &Config) -> anyhow::Result<()> {
+    let mut ws = connect(&cfg.host).await?;
+    let firmware = tokio::time::timeout(SILENCE, async {
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Text(t) = msg
+                && let FromScale::Firmware(fw) = parse(&t)
+            {
+                return Some(fw);
+            }
+        }
+        None
+    })
+    .await;
+    close(ws).await;
+    let Ok(Some(fw)) = firmware else {
+        bail!("the scale at {} did not answer", cfg.host);
+    };
+    tracing::info!("{TITLE}: found the scale at {}, firmware {fw}", cfg.host);
+    link.status.subject(format!("{} · v{fw}", cfg.host));
+    Ok(())
+}
+
+/// Watches one brew: connects, retrying while the grinder waits, and
+/// lets go of the scale once the shot is reported or the grinder stops
+/// waiting. `false` once the server is gone.
+async fn brew(
+    link: &Link,
+    cfg: &Config,
+    brews: &mut GrinderBrews,
+    mut tare: bool,
+    last: &mut Option<Shot>,
+) -> bool {
+    let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
     loop {
         link.status.starting(format!("connecting to {}", cfg.host));
         let result = match connect(&cfg.host).await {
-            Ok(ws) => {
-                backoff.reset();
-                tracing::info!("{TITLE}: connected to {}", cfg.host);
-                watch(&link, &cfg, ws, &mut last).await
-            }
+            Ok(ws) => watch(link, cfg, ws, brews, tare, last).await,
             Err(e) => Err(e),
         };
         match result {
+            Ok(true) => {
+                link.status.connected(idle_line(*last));
+                return true;
+            }
             // The server is shutting down.
-            Ok(()) => return,
+            Ok(false) => return false,
             Err(e) => {
                 tracing::warn!("{TITLE}: {e:#}");
                 link.status.error(format!("{e:#}"));
             }
         }
+        // Once the shot may be running, a tare would hide coffee.
+        tare = false;
         tracing::info!("{TITLE}: retrying in {} s", backoff.peek().as_secs());
         backoff.wait().await;
+        if !link.grinder_waiting() {
+            link.status.connected(idle_line(*last));
+            return true;
+        }
     }
 }
 
@@ -133,36 +209,48 @@ async fn connect(host: &str) -> anyhow::Result<Socket> {
     Ok(ws)
 }
 
-/// Reads the scale until the connection fails (an error) or the server is
-/// gone (`Ok`). After a knob press, feeds a fresh detector until it finds
-/// the shot or the grinder stops waiting.
+/// Says goodbye to the scale. A scale that is already gone is fine.
+async fn close(mut ws: Socket) {
+    let _ = tokio::time::timeout(CLOSE_TIMEOUT, ws.close(None)).await;
+}
+
+async fn send_tare(ws: &mut Socket) -> anyhow::Result<()> {
+    tracing::info!("{TITLE}: grinder is waiting, taring the scale");
+    ws.send(Message::text(r#"{"command":"tare"}"#))
+        .await
+        .context("could not tare the scale")
+}
+
+/// Reads the scale for one brew, tared first if `tare`. `Ok(true)` once the
+/// shot is reported or the grinder stops waiting, `Ok(false)` when the
+/// server is gone; either way the connection is closed. An error when the
+/// connection fails.
 async fn watch(
     link: &Link,
     cfg: &Config,
     mut ws: Socket,
+    brews: &mut GrinderBrews,
+    tare: bool,
     last: &mut Option<Shot>,
-) -> anyhow::Result<()> {
-    // Subscribe before saying "connected", so no knob press slips between.
-    let mut brews = link.grinder_brews();
-    link.status.connected(idle_line(*last));
-    let mut detector: Option<Detector> = None;
-    if link.grinder_waiting() {
-        // Pressed while the scale was away. No tare: the shot may already
-        // be running.
-        detector = Some(Detector::new().expecting(recipe_weight(link)));
-        link.status.watching(SETTLING);
+) -> anyhow::Result<bool> {
+    let mut detector = if tare {
+        send_tare(&mut ws).await?;
+        Detector::after_tare()
+    } else {
+        // Pressed while the scale was away: the shot may already be running.
+        Detector::new()
     }
-    loop {
+    .expecting(recipe_weight(link));
+    link.status.watching(SETTLING);
+    let ended = loop {
         let text = tokio::select! {
             pressed = brews.next() => {
                 if !pressed {
-                    return Ok(());
+                    break false;
                 }
-                tracing::info!("{TITLE}: grinder is waiting, taring the scale");
-                ws.send(Message::text(r#"{"command":"tare"}"#))
-                    .await
-                    .context("could not tare the scale")?;
-                detector = Some(Detector::after_tare().expecting(recipe_weight(link)));
+                // Pressed again: a new brew.
+                send_tare(&mut ws).await?;
+                detector = Detector::after_tare().expecting(recipe_weight(link));
                 link.status.watching(SETTLING);
                 continue;
             }
@@ -186,16 +274,11 @@ async fn watch(
             }
             FromScale::Other => continue,
         };
-        let Some(d) = detector.as_mut() else {
-            continue;
-        };
         if !link.grinder_waiting() {
             // Typed on the phone, aborted or timed out.
-            detector = None;
-            link.status.connected(idle_line(*last));
-            continue;
+            break true;
         }
-        match d.push(r) {
+        match detector.push(r) {
             Progress::Settling => link.status.watching(SETTLING),
             Progress::Ready => link.status.watching(READY),
             Progress::Flowing { grams } => {
@@ -207,11 +290,12 @@ async fn watch(
                     Some((shot.grams, "weighed by the scale".to_owned())),
                 );
                 *last = Some(shot);
-                detector = None;
-                link.status.connected(idle_line(*last));
+                break true;
             }
         }
-    }
+    };
+    close(ws).await;
+    Ok(ended)
 }
 
 #[cfg(test)]
@@ -221,8 +305,7 @@ mod tests {
     use std::time::Instant;
 
     use futures_util::{SinkExt, StreamExt};
-    use tokio::net::TcpListener;
-    use tokio::sync::oneshot;
+    use tokio::net::{TcpListener, TcpStream};
     use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
@@ -258,45 +341,78 @@ mod tests {
         Message::text(format!(r#"{{"grams":{grams:.2},"ms":{ms}}}"#))
     }
 
-    /// A scale on a local port with a 150 g cup on it: readings until `go`,
-    /// then an 18 s shot at 2 g/s all at once, then quiet (connection kept
-    /// open). It reads 150 g until it gets a tare, 0 g after; `tared` says
-    /// whether one came.
-    async fn fake_scale(
-        listener: TcpListener,
-        mut go: oneshot::Receiver<()>,
-        tared: Arc<AtomicBool>,
-    ) {
-        let (tcp, _) = listener.accept().await.unwrap();
+    /// What the fake scale saw, and when to pour.
+    #[derive(Default)]
+    struct Fake {
+        /// Connections accepted so far, and how many are open now.
+        connects: AtomicU32,
+        open: AtomicU32,
+        /// Whether a tare came.
+        tared: AtomicBool,
+        /// Set to pour the shot on the open connection.
+        go: AtomicBool,
+    }
+
+    /// A scale on a local port with a 150 g cup on it. Each connection gets
+    /// the firmware version, then readings: 150 g until a tare, 0 g after.
+    /// Once `go` is set: an 18 s shot at 2 g/s all at once, then the cup's
+    /// final weight.
+    async fn fake_scale(listener: TcpListener, fake: Arc<Fake>) {
+        loop {
+            let (tcp, _) = listener.accept().await.unwrap();
+            fake.connects.fetch_add(1, Ordering::SeqCst);
+            fake.open.fetch_add(1, Ordering::SeqCst);
+            let fake = fake.clone();
+            tokio::spawn(async move {
+                serve(tcp, &fake).await;
+                fake.open.fetch_sub(1, Ordering::SeqCst);
+            });
+        }
+    }
+
+    async fn serve(tcp: TcpStream, fake: &Fake) {
         let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
         let first = ws.next().await.unwrap().unwrap();
         assert_eq!(first.to_text().unwrap(), r#"{"rate_hz":10}"#);
-        ws.send(Message::text(
-            r#"{"type":"status","status":"ok","firmware_version":"FW: 3.1.14"}"#,
-        ))
-        .await
-        .unwrap();
+        let status = r#"{"type":"status","status":"ok","firmware_version":"FW: 3.1.14"}"#;
+        if ws.send(Message::text(status)).await.is_err() {
+            return;
+        }
         let mut ms = 60_000;
+        let mut poured = None;
         loop {
             tokio::select! {
-                _ = &mut go => break,
-                msg = ws.next() => {
-                    let msg = msg.unwrap().unwrap();
-                    if msg.to_text().unwrap() == r#"{"command":"tare"}"# {
-                        tared.store(true, Ordering::SeqCst);
+                msg = ws.next() => match msg {
+                    Some(Ok(Message::Text(t))) => {
+                        if t.as_str() == r#"{"command":"tare"}"# {
+                            fake.tared.store(true, Ordering::SeqCst);
+                        }
                     }
-                }
+                    Some(Ok(Message::Close(_)) | Err(_)) | None => return,
+                    Some(Ok(_)) => {}
+                },
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                    if fake.go.load(Ordering::SeqCst) && poured.is_none() {
+                        for r in readings(ms + 100, 32.0, |t| espresso(t, 18.0, 2.0)) {
+                            if ws.send(reading(r.ms, r.grams)).await.is_err() {
+                                return;
+                            }
+                            (ms, poured) = (r.ms, Some(r.grams));
+                        }
+                        continue;
+                    }
                     ms += 100;
-                    let g = if tared.load(Ordering::SeqCst) { 0.0 } else { 150.0 };
-                    ws.send(reading(ms, g)).await.unwrap();
+                    let g = match poured {
+                        Some(g) => g,
+                        None if fake.tared.load(Ordering::SeqCst) => 0.0,
+                        None => 150.0,
+                    };
+                    if ws.send(reading(ms, g)).await.is_err() {
+                        return;
+                    }
                 }
             }
         }
-        for r in readings(ms + 100, 32.0, |t| espresso(t, 18.0, 2.0)) {
-            ws.send(reading(r.ms, r.grams)).await.unwrap();
-        }
-        tokio::time::sleep(Duration::from_secs(4)).await;
     }
 
     async fn wait_for(what: &str, cond: impl Fn() -> bool) {
@@ -321,27 +437,38 @@ mod tests {
         link.server.with(|m, _| m.on_start_request(later, Some(9)));
     }
 
-    #[tokio::test]
-    async fn reports_a_shot_from_a_fake_scale() {
+    /// A fake scale and the integration reading it, idle and disconnected
+    /// after its first look at the scale.
+    async fn start() -> (Link, String, Arc<Fake>) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let host = listener.local_addr().unwrap().to_string();
-        let (go, went) = oneshot::channel();
-        let tared = Arc::new(AtomicBool::new(false));
-        tokio::spawn(fake_scale(listener, went, tared.clone()));
+        let fake = Arc::new(Fake::default());
+        tokio::spawn(fake_scale(listener, fake.clone()));
         let l = link();
         tokio::spawn(run(l.clone(), Config { host: host.clone() }));
-
         wait_for("connected", || {
             l.status.snapshot().health == Health::Connected
         })
         .await;
+        wait_for("the first look to end", || {
+            fake.connects.load(Ordering::SeqCst) == 1 && fake.open.load(Ordering::SeqCst) == 0
+        })
+        .await;
+        (l, host, fake)
+    }
+
+    #[tokio::test]
+    async fn reports_a_shot_from_a_fake_scale() {
+        let (l, host, fake) = start().await;
         assert!(
-            !tared.load(Ordering::SeqCst),
+            !fake.tared.load(Ordering::SeqCst),
             "no tare before the knob press"
         );
+        // Short enough to fit the card at phone width.
+        assert_eq!(l.status.snapshot().subject, format!("{host} · v3.1.14"));
         knob_press(&l);
-        wait_for("the tare", || tared.load(Ordering::SeqCst)).await;
-        go.send(()).unwrap();
+        wait_for("the tare", || fake.tared.load(Ordering::SeqCst)).await;
+        fake.go.store(true, Ordering::SeqCst);
         wait_for("the report", || l.status.snapshot().reports == 1).await;
 
         let shot = l.status.snapshot().last_report.unwrap();
@@ -350,59 +477,64 @@ mod tests {
         let snap = l.status.snapshot();
         assert_eq!(snap.health, Health::Connected);
         assert!(snap.detail.starts_with("last shot: "), "{}", snap.detail);
-        // Short enough to fit the card at phone width.
-        assert_eq!(snap.subject, format!("{host} · v3.1.14"));
+    }
+
+    #[tokio::test]
+    async fn the_scale_is_only_connected_while_the_grinder_waits() {
+        // Connected apps keep the scale from switching itself off.
+        let (l, _, fake) = start().await;
+        knob_press(&l);
+        wait_for("the tare", || fake.tared.load(Ordering::SeqCst)).await;
+        assert_eq!(fake.open.load(Ordering::SeqCst), 1);
+        fake.go.store(true, Ordering::SeqCst);
+        wait_for("the report", || l.status.snapshot().reports == 1).await;
+        wait_for("the connection to close", || {
+            fake.open.load(Ordering::SeqCst) == 0
+        })
+        .await;
+        assert_eq!(fake.connects.load(Ordering::SeqCst), 2);
+        assert_eq!(l.status.snapshot().health, Health::Connected);
     }
 
     #[tokio::test]
     async fn a_knob_press_before_the_scale_connects_is_watched() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let host = listener.local_addr().unwrap().to_string();
-        let (go, went) = oneshot::channel();
-        let tared = Arc::new(AtomicBool::new(false));
+        let fake = Arc::new(Fake::default());
         let l = link();
         // The knob is pressed while the scale is still asleep.
         knob_press(&l);
-        tokio::spawn(fake_scale(listener, went, tared.clone()));
+        tokio::spawn(fake_scale(listener, fake.clone()));
         tokio::spawn(run(l.clone(), Config { host }));
 
         wait_for("watching", || {
             l.status.snapshot().health == Health::Watching
         })
         .await;
-        go.send(()).unwrap();
+        fake.go.store(true, Ordering::SeqCst);
         wait_for("the report", || l.status.snapshot().reports == 1).await;
         // Coffee may already be in the cup: no tare this late.
-        assert!(!tared.load(Ordering::SeqCst));
+        assert!(!fake.tared.load(Ordering::SeqCst));
         let shot = l.status.snapshot().last_report.unwrap();
         assert!((i64::from(shot.time_ms) - 18_000).abs() <= 400, "{shot:?}");
     }
 
     #[tokio::test]
     async fn typed_shot_stops_the_watch() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let host = listener.local_addr().unwrap().to_string();
-        let (go, went) = oneshot::channel();
-        let tared = Arc::new(AtomicBool::new(false));
-        tokio::spawn(fake_scale(listener, went, tared.clone()));
-        let l = link();
-        tokio::spawn(run(l.clone(), Config { host: host.clone() }));
-
-        wait_for("connected", || {
-            l.status.snapshot().health == Health::Connected
-        })
-        .await;
+        let (l, _, fake) = start().await;
         knob_press(&l);
-        wait_for("the tare", || tared.load(Ordering::SeqCst)).await;
+        wait_for("the tare", || fake.tared.load(Ordering::SeqCst)).await;
         // Someone typed the shot on the phone first.
         l.report(Duration::from_secs(25), Some((38.0, "typed".into())));
-        go.send(()).unwrap();
-        wait_for("idle again", || {
-            l.status.snapshot().health == Health::Connected
+        wait_for("the connection to close", || {
+            fake.open.load(Ordering::SeqCst) == 0
         })
         .await;
+        fake.go.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(500)).await;
-        assert_eq!(l.status.snapshot().reports, 1, "only the typed one");
+        let snap = l.status.snapshot();
+        assert_eq!(snap.reports, 1, "only the typed one");
+        assert_eq!(snap.health, Health::Connected);
     }
 
     #[tokio::test]
@@ -424,11 +556,19 @@ mod tests {
             }
         });
         let l = link();
+        knob_press(&l);
         tokio::spawn(run(l.clone(), Config { host: host.clone() }));
         wait_for("an error", || l.status.snapshot().health == Health::Error).await;
         let err = l.status.snapshot().last_error.unwrap();
         assert!(err.contains("closed the connection"), "{err}");
         // MIN_BACKOFF later it tries again.
         wait_for("a second attempt", || accepts.load(Ordering::SeqCst) >= 2).await;
+
+        // Once the grinder stops waiting, it stops trying.
+        l.report(Duration::from_secs(25), Some((38.0, "typed".into())));
+        wait_for("idle", || l.status.snapshot().health == Health::Connected).await;
+        let tries = accepts.load(Ordering::SeqCst);
+        tokio::time::sleep(MIN_BACKOFF + Duration::from_millis(500)).await;
+        assert_eq!(accepts.load(Ordering::SeqCst), tries);
     }
 }
