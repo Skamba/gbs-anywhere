@@ -6,6 +6,8 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-09
+
 ### Added
 
 - Half Decent Scale integration: reports each shot weighed on a Half Decent
