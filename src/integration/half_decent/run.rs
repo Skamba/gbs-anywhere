@@ -169,7 +169,7 @@ async fn watch(
         let r = match parse(&text) {
             FromScale::Reading(r) => r,
             FromScale::Firmware(fw) => {
-                link.status.subject(format!("{} · firmware {fw}", cfg.host));
+                link.status.subject(format!("{} · v{fw}", cfg.host));
                 continue;
             }
             FromScale::Other => continue,
@@ -259,6 +259,11 @@ mod tests {
         let mut ws = tokio_tungstenite::accept_async(tcp).await.unwrap();
         let first = ws.next().await.unwrap().unwrap();
         assert_eq!(first.to_text().unwrap(), r#"{"rate_hz":10}"#);
+        ws.send(Message::text(
+            r#"{"type":"status","status":"ok","firmware_version":"FW: 3.1.14"}"#,
+        ))
+        .await
+        .unwrap();
         let mut ms = 60_000;
         loop {
             tokio::select! {
@@ -312,7 +317,7 @@ mod tests {
         let tared = Arc::new(AtomicBool::new(false));
         tokio::spawn(fake_scale(listener, went, tared.clone()));
         let l = link();
-        tokio::spawn(run(l.clone(), Config { host }));
+        tokio::spawn(run(l.clone(), Config { host: host.clone() }));
 
         wait_for("connected", || {
             l.status.snapshot().health == Health::Connected
@@ -333,6 +338,8 @@ mod tests {
         let snap = l.status.snapshot();
         assert_eq!(snap.health, Health::Connected);
         assert!(snap.detail.starts_with("last shot: "), "{}", snap.detail);
+        // Short enough to fit the card at phone width.
+        assert_eq!(snap.subject, format!("{host} · v3.1.14"));
     }
 
     #[tokio::test]
@@ -343,7 +350,7 @@ mod tests {
         let tared = Arc::new(AtomicBool::new(false));
         tokio::spawn(fake_scale(listener, went, tared.clone()));
         let l = link();
-        tokio::spawn(run(l.clone(), Config { host }));
+        tokio::spawn(run(l.clone(), Config { host: host.clone() }));
 
         wait_for("connected", || {
             l.status.snapshot().health == Health::Connected
@@ -381,7 +388,7 @@ mod tests {
             }
         });
         let l = link();
-        tokio::spawn(run(l.clone(), Config { host }));
+        tokio::spawn(run(l.clone(), Config { host: host.clone() }));
         wait_for("an error", || l.status.snapshot().health == Health::Error).await;
         let err = l.status.snapshot().last_error.unwrap();
         assert!(err.contains("closed the connection"), "{err}");
