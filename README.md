@@ -104,6 +104,7 @@ Integrations can also be set with flags or environment variables. Those show
 | integration | reads | setup |
 |---|---|---|
 | La Marzocco cloud | time and weight from a connected La Marzocco's coffee log | [src/integration/la_marzocco](src/integration/la_marzocco/README.md) |
+| Half Decent Scale | time from first drops and weight, from a Half Decent Scale over WiFi | [src/integration/half_decent](src/integration/half_decent/README.md) |
 
 ## Options
 
@@ -117,6 +118,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | `--log <file>` | off | append every grinder request to a file |
 | `-p, --ports <list>` | 80 | ports to serve on |
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
+| `--hds-*` | off | Half Decent Scale, see [its README](src/integration/half_decent/README.md) |
 
 Without Docker you can also type the shot into the console: `30 36` means
 30 s, 36 g. `h` lists the other commands.
