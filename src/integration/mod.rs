@@ -53,6 +53,7 @@
 mod kind;
 mod manager;
 
+pub mod half_decent;
 pub mod la_marzocco;
 
 use std::future::Future;
