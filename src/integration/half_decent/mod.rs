@@ -3,13 +3,14 @@
 //!
 //! The scale (firmware 3.0 or newer, WiFi turned on) serves its readings on
 //! a WebSocket at `ws://<scale>/snapshot`: `{"grams":25.66,"ms":12345}`,
-//! where `ms` is the scale's own clock. This integration keeps that
-//! connection open, asks for 10 readings a second, and after each knob
-//! press watches for the shot: from the first drops in the cup to the flow
-//! stopping, with the weight in the cup. It tares the scale at each knob
-//! press, so the display counts the coffee from zero; nothing else on the
-//! scale is changed. Up to four apps can read the scale at once, so the
-//! Decent app keeps working.
+//! where `ms` is the scale's own clock. After each knob press this
+//! integration connects, asks for 10 readings a second and watches for the
+//! shot: from the first drops in the cup to the flow stopping, with the
+//! weight in the cup. Then it lets go, because a connected app keeps the
+//! scale from switching itself off. It tares the scale at each knob press,
+//! so the display counts the coffee from zero; nothing else on the scale is
+//! changed. Up to four apps can read the scale at once, so the Decent app
+//! keeps working.
 //!
 //! * [`config`]: the setup form, the `--hds-*` flags, [`config::Config`].
 //! * [`shot`]: finds the shot in the readings.
