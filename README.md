@@ -1,7 +1,7 @@
 # gbs-anywhere
 
-Grind-by-Sync for the Mahlkönig **E64 WS** and the **E65/E80 GbS** grinders
-with any espresso machine.
+Grind-by-Sync for the Mahlkönig **E64/E65/E80** GbS grinders
+(**E64WS, E65W, E65T, E80W, E80T**) with any espresso machine
 
 Grind-by-Sync (GbS) lets the grinder dial itself in: after each shot it
 compares the extraction time with the recipe's target and adjusts its grind
