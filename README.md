@@ -92,7 +92,7 @@ several integrations run at once.
 
 Tap the green **+** at the top right of the app, pick one and fill in its
 form. Each
-integration gets a card showing whether it is connected and what it last
+integration gets a card showing whether it is ready and what it last
 sent; **Remove** stops it. Integrations added in the app are saved in the
 settings file (`--config`, `/data/gbs-anywhere.json` in Docker, holding their
 passwords), so keep the `/data` volume. Without a settings file they last

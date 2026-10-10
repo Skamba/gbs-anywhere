@@ -27,8 +27,8 @@ const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
 const SETTLING: &str = "grinder is waiting · waiting for a steady weight";
 const READY: &str = "grinder is waiting · watching for the first drops";
-/// When the scale could not be reached at startup.
-const AWAY: &str = "scale is off or out of reach; looked for at each knob press";
+/// When the scale could not be reached at startup. It may be on by now.
+const AWAY: &str = "not reached at startup; tried again at each knob press";
 
 /// The integration. See the module docs.
 pub struct HalfDecent {
@@ -494,6 +494,21 @@ mod tests {
         .await;
         assert_eq!(fake.connects.load(Ordering::SeqCst), 2);
         assert_eq!(l.status.snapshot().health, Health::Connected);
+    }
+
+    #[tokio::test]
+    async fn a_scale_not_found_at_startup_is_not_an_error() {
+        // A port nothing listens on.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        drop(listener);
+        let l = link();
+        tokio::spawn(run(l.clone(), Config { host }));
+        wait_for("ready", || l.status.snapshot().health == Health::Connected).await;
+        // The scale may be on by now: say what happened, not what it is doing.
+        let detail = l.status.snapshot().detail;
+        assert!(detail.contains("at startup"), "{detail}");
+        assert!(!detail.contains("off"), "{detail}");
     }
 
     #[tokio::test]

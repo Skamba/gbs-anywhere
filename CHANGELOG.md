@@ -6,6 +6,13 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Changed
+
+- Integration cards say "ready" instead of "connected" when idle. The Half
+  Decent Scale is only connected while the grinder waits, so "connected"
+  was wrong between shots. A scale not reached at startup no longer shows
+  as off: it may have been switched on since.
+
 ## [0.2.0] - 2026-10-09
 
 ### Added
