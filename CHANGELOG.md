@@ -6,6 +6,20 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- E65/E80 GbS grinders (E65W, E65T, E80W, E80T): `--grinder <address>`
+  (`GRINDER_HOST` in Docker) pairs gbs-anywhere with the grinder's "Generic
+  WiFi" option. After each Grind-by-Sync grind, the shot entered in the app
+  or reported by an integration goes to the grinder, which adjusts as usual.
+  The pairing is kept next to the settings file (`--grinder-pairing-file`).
+  When the pairing ID is lost (for example if the grinder restarts right
+  after the pairing is accepted), the app asks for the ID the grinder shows
+  (also `--grinder-pairing-id`). The app shows the pairing code while
+  pairing and "grinder connected" once paired. A shot that cannot reach the
+  grinder right away (say, the WiFi drops) is retried for two minutes.
+  Tested with the E65W GbS.
+
 ### Changed
 
 - Unreleased builds are now published once a night as the `nightly` image
