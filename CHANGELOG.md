@@ -6,6 +6,8 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-10
+
 ### Changed
 
 - Integration cards say "ready" instead of "connected" when idle. The Half
