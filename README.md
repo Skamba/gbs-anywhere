@@ -148,12 +148,15 @@ There is no knob press: the Grind-by-Sync grind itself tells gbs-anywhere a
 shot is coming. Pull the shot, then enter its time and weight in the app
 (`http://<computer's IP>/` on your phone, e.g. `http://192.168.1.20/`), or let
 an [integration](#integrations) report it. gbs-anywhere passes it on to
-the grinder, which adjusts as usual. If you grind again before pulling the
-shot, the newer grind is the one the shot counts for. If no shot comes within
-`--brew-timeout-s`, gbs-anywhere tells the grinder the shot was cancelled; if
-the grinder stops waiting first, the app shows the shot as aborted. If a shot
-cannot reach the grinder (say, the WiFi drops), gbs-anywhere keeps trying for
-two minutes and the app shows the problem.
+the grinder, which adjusts as usual. gbs-anywhere keeps the grinder waiting
+for the shot for up to `--brew-timeout-s` (3 minutes unless set), which leaves
+time to tamp and pull; if no shot comes by then, it tells the grinder the shot
+was cancelled. If you grind again before pulling the shot, the newer grind is
+the one the shot counts for, and the grinder is told the older one was
+cancelled. If the grinder stops waiting first (for example, it restarted), the
+app shows the shot as aborted, or, once you report it, that it did not reach
+the grinder. If a shot cannot reach the grinder (say, the WiFi drops),
+gbs-anywhere keeps trying for two minutes and the app shows the problem.
 
 ## Pull a shot on the E64 WS
 

@@ -5,14 +5,16 @@
 //! machine, like the E64 WS's knob press, so the app and the integrations
 //! report the shot exactly as they do there.
 //!
-//! The grinder hands an accepted job back out when no result follows within
-//! about 45 s, which is less than a shot takes. So a job is accepted only once
-//! its shot is measured, right before the result is sent. Until the grinder
-//! has the result, it is retried on every poll (accepting the job again if the
-//! grinder handed it back out), so a short network outage loses no shot.
+//! The grinder drops a job nobody takes within about a minute, and hands a
+//! taken job back out about every 50 s while no result follows. So a job is
+//! taken as soon as it shows up, and again whenever it is listed again: that
+//! keeps it open for as long as the machine waits for the shot
+//! (`--brew-timeout-s`), after which it is answered as cancelled. Until the
+//! grinder has the result, it is retried on every poll, so a short network
+//! outage loses no shot.
 //!
 //! The job that showed up last is the shot being pulled: a newer grind
-//! replaces a job still waiting for its shot, and other open jobs are left
+//! cancels a job still waiting for its shot, and other open jobs are left
 //! for the grinder to time out.
 
 use std::collections::VecDeque;
@@ -36,7 +38,7 @@ use crate::protocol::wifi::{
     self, API_VERSION, BrewAccept, BrewDone, BrewJob, BrewJobsRes, BrewResult, Paired,
     PairingApplication, PairingApplicationRes, PairingStatusRes,
 };
-use crate::protocol::{GrindResult, MachineEvent};
+use crate::protocol::{GrindResult, MachineEvent, Phase};
 use crate::server::Server;
 
 /// Between job requests (and pairing checks). The grinder shows the machine
@@ -52,6 +54,9 @@ const MAX_REPLY_BYTES: usize = 64 * 1024;
 const REFUSALS_TO_FORGET: u32 = 3;
 /// How long a measured shot is retried before it is given up.
 const ANSWER_LIMIT: Duration = Duration::from_secs(120);
+/// How long a cancelled shot is retried. The grinder times the job out by
+/// itself anyway, and a newer grind waits until it is given up.
+const CANCEL_LIMIT: Duration = Duration::from_secs(20);
 /// Jobs remembered as handled or seen, so a late copy of one is never brewed
 /// again and the newest is known.
 const HANDLED_CAP: usize = 16;
@@ -224,13 +229,21 @@ impl Reply {
         match self.status() {
             wifi::STATUS_OK => Ok(()),
             "" => bail!("the grinder answered HTTP {}", self.http),
-            s => bail!("the grinder answered {s}"),
+            s => bail!("the grinder answered {s:?}"),
         }
     }
 
     fn parse<T: DeserializeOwned>(self) -> anyhow::Result<T> {
         serde_json::from_value(self.body).context("unexpected reply from the grinder")
     }
+}
+
+/// The job whose shot is being brewed, held open on the grinder.
+struct Held {
+    job: BrewJob,
+    /// The grinder has it as taken: it is not listed. A listed job is still
+    /// (or again) waiting to be taken.
+    accepted: bool,
 }
 
 /// A measured (or cancelled) shot on its way to the grinder.
@@ -254,7 +267,7 @@ pub struct WifiGrinder {
     /// refuses the saved one.
     spare_id: Option<u32>,
     /// The job whose shot is being brewed.
-    current: Option<BrewJob>,
+    current: Option<Held>,
     answer: Option<Answer>,
     handled: VecDeque<String>,
     /// Each job's grind id with the poll it first showed up in.
@@ -263,6 +276,9 @@ pub struct WifiGrinder {
     refusals: u32,
     /// What went wrong with the last shot (shown in the app).
     problem: Option<String>,
+    /// The grinder could not be reached last time (it is off or in standby):
+    /// further failures are not logged until it answers again.
+    unreachable: bool,
 }
 
 impl WifiGrinder {
@@ -286,6 +302,10 @@ impl WifiGrinder {
             // The grinder only finds the body with `Content-Length` spelled
             // this way; lower-case header names leave it reading an empty one.
             .http1_title_case_headers()
+            // The grinder drops kept-open connections without notice, and a
+            // request sent on one fails with "connection closed before message
+            // completed". A fresh connection for each request avoids that.
+            .pool_max_idle_per_host(0)
             .timeout(REQUEST_TIMEOUT)
             .build()
             .context("building the HTTP client")?;
@@ -301,6 +321,7 @@ impl WifiGrinder {
             polls: 0,
             refusals: 0,
             problem: None,
+            unreachable: false,
         })
     }
 
@@ -321,7 +342,19 @@ impl WifiGrinder {
                 Some(id) => self.serve(&server, id, &mut events).await,
             };
             if let Err(e) = outcome {
-                tracing::warn!("grinder: {e:#}");
+                // Off or in standby for the night: say so once, not every minute.
+                let unreachable = unreachable(&e);
+                if unreachable && self.unreachable {
+                    tracing::debug!("grinder: {e:#}");
+                } else if unreachable {
+                    tracing::warn!(
+                        "grinder: not reachable (off or in standby?), checking again at least \
+                         every minute: {e:#}"
+                    );
+                } else {
+                    tracing::warn!("grinder: {e:#}");
+                }
+                self.unreachable = unreachable;
                 self.status(&server, WifiState::Error, None, format!("{e:#}"));
                 backoff.wait().await;
             } else {
@@ -335,6 +368,7 @@ impl WifiGrinder {
     async fn pair(&mut self, server: &Server, ids: &mut mpsc::Receiver<u32>) -> anyhow::Result<()> {
         let app = PairingApplication::new(&self.pairing.brew_device_id);
         let reply = self.post(wifi::PATH_PAIRING_APPLICATION, &app).await?;
+        self.reached();
         if reply.status() == wifi::STATUS_ALREADY_PAIRED {
             return self.wait_for_pairing_id(server, ids).await;
         }
@@ -398,6 +432,7 @@ impl WifiGrinder {
                 Some(id) = ids.recv() => id,
             };
             let reply = self.post(wifi::PATH_BREW_JOBS, &Paired::new(id)).await?;
+            self.reached();
             if reply.http == StatusCode::FORBIDDEN {
                 detail = format!(
                     "the grinder does not know pairing ID {id}: enter the Pairing ID it shows \
@@ -409,6 +444,13 @@ impl WifiGrinder {
             self.use_pairing_id(id)?;
             tracing::info!("grinder: paired with the given pairing ID");
             return Ok(());
+        }
+    }
+
+    /// The grinder answered: if it could not be reached before, say it is back.
+    fn reached(&mut self) {
+        if std::mem::take(&mut self.unreachable) {
+            tracing::info!("grinder: reachable again");
         }
     }
 
@@ -446,6 +488,7 @@ impl WifiGrinder {
                     let reply = self
                         .post(wifi::PATH_BREW_JOBS, &Paired::new(pairing_id))
                         .await?;
+                    self.reached();
                     if reply.http == StatusCode::FORBIDDEN {
                         self.refusals += 1;
                         if self.refusals >= REFUSALS_TO_FORGET {
@@ -463,7 +506,7 @@ impl WifiGrinder {
                         self.status(server, WifiState::Paired, None, idle);
                     }
                     let jobs = reply.parse::<BrewJobsRes>()?.brew_jobs;
-                    self.on_jobs(server, &jobs).await;
+                    self.on_jobs(server, pairing_id, &jobs).await;
                 }
             }
         }
@@ -484,8 +527,9 @@ impl WifiGrinder {
         self.pairing.save(self.cfg.pairing_file.as_deref())
     }
 
-    /// After each poll: keeps sending a pending answer, else follows the jobs.
-    async fn on_jobs(&mut self, server: &Server, jobs: &[BrewJob]) {
+    /// After each poll: keeps sending a pending answer, else holds the current
+    /// job open or takes a new one.
+    async fn on_jobs(&mut self, server: &Server, pairing_id: u32, jobs: &[BrewJob]) {
         self.polls += 1;
         for job in jobs {
             if !self.first_seen.iter().any(|(id, _)| *id == job.grind_uuid) {
@@ -498,8 +542,17 @@ impl WifiGrinder {
         }
         let listed = |job: &BrewJob| jobs.iter().any(|j| j.grind_uuid == job.grind_uuid);
         if let Some(answer) = &self.answer {
+            let cancel = answer.done.result == BrewResult::Canceled;
+            let limit = if cancel { CANCEL_LIMIT } else { ANSWER_LIMIT };
             let gone = !answer.accepted && !listed(&answer.job);
-            if gone || answer.since.elapsed() > ANSWER_LIMIT {
+            let expired = gone || answer.since.elapsed() > limit;
+            if expired && cancel {
+                // Nothing to adjust: the grinder times the job out by itself.
+                tracing::info!("grinder: gave up telling it the shot was cancelled");
+                self.answer = None;
+                self.problem = None;
+                self.refresh(server);
+            } else if expired {
                 self.answer = None;
                 self.report_problem(server, "the shot did not reach the grinder in time");
             } else {
@@ -507,20 +560,39 @@ impl WifiGrinder {
             }
             return;
         }
-        if let Some(current) = &self.current {
-            let since = self.seen_in(current);
+        if let Some(held) = &self.current {
+            let since = self.seen_in(&held.job);
             let newer = jobs
                 .iter()
                 .any(|j| !self.handled.contains(&j.grind_uuid) && self.seen_in(j) > since);
-            if !listed(current) {
-                self.drop_job(server, "the grinder stopped waiting before the shot came");
-            } else if newer {
-                // Ground again before pulling: that grind is the shot now.
-                self.drop_job(server, "a newer Grind-by-Sync grind replaced it");
+            let waiting = listed(&held.job);
+            if newer {
+                // Ground again before pulling: that grind is the shot now. The
+                // brew ends here, and its event answers this job as cancelled.
+                // If someone reported or aborted it a moment ago, that event
+                // answers it instead; only a brew already over leaves it.
+                let over = server.with(|m, now| {
+                    m.give_up(now, "a newer Grind-by-Sync grind replaced it")
+                        .is_err()
+                        && m.phase(now) == Phase::Ready
+                });
+                if over {
+                    self.current = None;
+                }
+            } else if waiting {
+                // Not taken yet, or handed back out: take it (again).
+                self.take_current(server, pairing_id).await;
+            } else if let Some(held) = self.current.as_mut() {
+                // Not listed: the grinder has it as taken (or forgot it, which
+                // the answer finds out).
+                held.accepted = true;
             }
             return;
         }
         self.take_job(server, jobs);
+        if self.current.is_some() {
+            self.take_current(server, pairing_id).await;
+        }
     }
 
     /// The poll a job first showed up in.
@@ -572,7 +644,44 @@ impl WifiGrinder {
         };
         tracing::info!("grinder: Grind-by-Sync grind, {detail}");
         self.status(server, WifiState::Paired, None, detail);
-        self.current = Some(job.clone());
+        self.current = Some(Held {
+            job: job.clone(),
+            accepted: false,
+        });
+    }
+
+    /// Takes the current job, right after it showed up and whenever the
+    /// grinder lists it again, so it stays open until the shot is measured.
+    /// A job the grinder refuses ends the brew; when taking it fails
+    /// otherwise, it is tried again for as long as it stays listed.
+    async fn take_current(&mut self, server: &Server, pairing_id: u32) {
+        let Some(held) = &self.current else {
+            return;
+        };
+        if held.accepted {
+            tracing::debug!("grinder: it handed the job back out, taking it again");
+        }
+        let accept = BrewAccept::new(pairing_id, &held.job);
+        let accepted = match self.post(wifi::PATH_BREW_ACCEPT, &accept).await {
+            Ok(reply) if reply.status() == wifi::STATUS_OK => true,
+            Ok(reply) if reply.status() == wifi::STATUS_JOB_UNKNOWN => {
+                self.drop_job(server, "the grinder stopped waiting before the shot came");
+                return;
+            }
+            Ok(reply) if refused(&reply) => {
+                tracing::warn!("grinder: it refused the job: {:?}", reply.status());
+                self.drop_job(server, "the grinder refused the job");
+                return;
+            }
+            other => {
+                let why = failure(other);
+                tracing::warn!("grinder: could not take the job yet, trying again: {why}");
+                false
+            }
+        };
+        if let Some(held) = &mut self.current {
+            held.accepted = accepted;
+        }
     }
 
     /// Ends the brew of the current job without answering it.
@@ -588,30 +697,30 @@ impl WifiGrinder {
     /// A reported or aborted shot becomes the answer to the current job.
     /// Returns whether there is one to send.
     fn on_event(&mut self, pairing_id: u32, event: &MachineEvent) -> bool {
-        let (result, time_ms, grams) = match event {
+        let (result, time_ms, grams, reason) = match event {
             MachineEvent::ShotReported { result, .. } => {
-                (BrewResult::Success, result.time_ms, result.volume_ml)
+                (BrewResult::Success, result.time_ms, result.volume_ml, "")
             }
-            MachineEvent::ShotAborted { .. } => (BrewResult::Canceled, 0, 0.0),
+            MachineEvent::ShotAborted { reason } => (BrewResult::Canceled, 0, 0.0, *reason),
             _ => return false,
         };
-        let Some(job) = self.current.take() else {
+        let Some(held) = self.current.take() else {
             return false;
         };
         let event_uuid = uuid::Uuid::new_v4().to_string();
-        let done = BrewDone::new(pairing_id, &job, result, time_ms, grams, event_uuid);
+        let done = BrewDone::new(pairing_id, &held.job, result, time_ms, grams, event_uuid);
         let line = match result {
             BrewResult::Success => format!(
                 "sent {:.1} s, {:.1} g",
                 f64::from(time_ms) / 1000.0,
                 done.mass_final_mg as f64 / 1000.0
             ),
-            BrewResult::Canceled => "told the grinder the shot was cancelled".to_owned(),
+            BrewResult::Canceled => format!("told the grinder the shot was cancelled ({reason})"),
         };
         self.answer = Some(Answer {
-            job,
+            job: held.job,
             done,
-            accepted: false,
+            accepted: held.accepted,
             since: Instant::now(),
             line,
         });
@@ -620,7 +729,8 @@ impl WifiGrinder {
 
     /// One try at getting the pending answer to the grinder: take the job if
     /// not yet taken, then send the result. Kept for the next poll unless it
-    /// went through or the grinder says the job is gone.
+    /// went through or the grinder refuses it; a job the grinder no longer
+    /// has ends on the next poll.
     async fn send_answer(&mut self, server: &Server) {
         let Some(mut answer) = self.answer.take() else {
             return;
@@ -629,12 +739,11 @@ impl WifiGrinder {
             let accept = BrewAccept::new(answer.done.pairing_id, &answer.job);
             match self.post(wifi::PATH_BREW_ACCEPT, &accept).await {
                 Ok(reply) if reply.status() == wifi::STATUS_OK => answer.accepted = true,
-                Ok(reply) if reply.status() == wifi::STATUS_JOB_UNKNOWN => {
-                    self.report_problem(server, "the grinder no longer waited for this shot");
-                    return;
-                }
+                // Not listed: taken already (its reply got lost) or gone. The
+                // result tells which; a job that is gone ends on the next poll.
+                Ok(reply) if reply.status() == wifi::STATUS_JOB_UNKNOWN => {}
                 Ok(reply) if refused(&reply) => {
-                    let why = format!("the grinder refused the shot: {}", reply.status());
+                    let why = format!("the grinder refused the shot: {:?}", reply.status());
                     self.report_problem(server, &why);
                     return;
                 }
@@ -656,7 +765,7 @@ impl WifiGrinder {
                 self.answer = Some(answer);
             }
             Ok(reply) if refused(&reply) => {
-                let why = format!("the grinder refused the shot: {}", reply.status());
+                let why = format!("the grinder refused the shot: {:?}", reply.status());
                 self.report_problem(server, &why);
             }
             other => self.retry_later(server, answer, other),
@@ -664,10 +773,7 @@ impl WifiGrinder {
     }
 
     fn retry_later(&mut self, server: &Server, answer: Answer, outcome: anyhow::Result<Reply>) {
-        let why = match outcome.and_then(|r| r.ok()) {
-            Err(e) => format!("{e:#}"),
-            Ok(()) => "unexpected reply".to_owned(),
-        };
+        let why = failure(outcome);
         tracing::warn!("grinder: the shot has not reached the grinder yet, retrying: {why}");
         self.answer = Some(answer);
         self.problem = Some(format!(
@@ -758,6 +864,22 @@ impl WifiGrinder {
 /// A client error from the grinder, which a retry would only repeat.
 fn refused(reply: &Reply) -> bool {
     reply.status().starts_with("ClientError")
+}
+
+/// Why a request that is tried again did not go through.
+fn failure(outcome: anyhow::Result<Reply>) -> String {
+    match outcome.and_then(|r| r.ok()) {
+        Err(e) => format!("{e:#}"),
+        Ok(()) => "unexpected reply".to_owned(),
+    }
+}
+
+/// Whether the grinder did not answer at all: connecting failed or timed out,
+/// as while it is off, in standby, or gone from the network.
+fn unreachable(e: &anyhow::Error) -> bool {
+    e.chain()
+        .filter_map(|c| c.downcast_ref::<reqwest::Error>())
+        .any(|r| r.is_connect() || r.is_timeout())
 }
 
 /// The job as the grind result the app and the shot rules read (recipe weight).

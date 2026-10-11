@@ -16,9 +16,12 @@ a minor release may change behaviour.
   When the pairing ID is lost (for example if the grinder restarts right
   after the pairing is accepted), the app asks for the ID the grinder shows
   (also `--grinder-pairing-id`). The app shows the pairing code while
-  pairing and "grinder connected" once paired. A shot that cannot reach the
-  grinder right away (say, the WiFi drops) is retried for two minutes.
-  Tested with the E65W GbS.
+  pairing and "grinder connected" once paired. The grinder waits for the
+  shot for up to `--brew-timeout-s` (3 minutes unless set); grinding again
+  before pulling cancels the shot it was waiting for. A shot that cannot
+  reach the grinder right away (say, the WiFi drops) is retried for two
+  minutes. While the grinder is off or in standby, the log says so once
+  rather than every minute. Tested with the E65W GbS.
 
 ### Changed
 

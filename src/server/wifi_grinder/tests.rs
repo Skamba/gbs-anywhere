@@ -33,6 +33,11 @@ struct Fake {
     fail_done: u32,
     /// Hand the job back out on the next `brewDone`, as after its timeout.
     hand_back: bool,
+    /// Answer every `brewAccept` with "no such job", as for a job the
+    /// grinder dropped a moment ago.
+    lose_jobs: bool,
+    /// `brewAccept` requests to fail with HTTP 503, as if the network dropped.
+    fail_accept: u32,
     /// Job requests to refuse with 403, as while starting up.
     refuse_jobs: u32,
     /// `(path, body)` of every `brewAccept` and `brewDone`.
@@ -46,6 +51,14 @@ impl Fake {
             .filter(|(p, _)| p == path)
             .map(|(_, b)| b.clone())
             .collect()
+    }
+
+    /// Lists every taken job again, as the grinder does about every 50 s
+    /// while no result comes.
+    fn hand_back_taken(&mut self) {
+        for uuid in std::mem::take(&mut self.ongoing) {
+            self.jobs.push(job(&uuid, 40_000));
+        }
     }
 }
 
@@ -90,7 +103,14 @@ async fn handle(State(fake): State<Shared>, uri: Uri, Json(body): Json<Value>) -
         }
         wifi::PATH_BREW_ACCEPT => {
             f.calls.push((path.to_owned(), body.clone()));
+            if f.fail_accept > 0 {
+                f.fail_accept -= 1;
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
             let uuid = body["grindUuid"].as_str().unwrap_or_default().to_owned();
+            if f.lose_jobs {
+                f.jobs.retain(|j| j["grindUuid"] != uuid);
+            }
             let Some(i) = f.jobs.iter().position(|j| j["grindUuid"] == uuid) else {
                 return refuse(wifi::STATUS_JOB_UNKNOWN);
             };
@@ -125,6 +145,16 @@ async fn start(
     pairing_file: Option<PathBuf>,
     pairing_id: Option<u32>,
 ) -> (Arc<Server>, Shared) {
+    start_with(fake, MachineConfig::default(), pairing_file, pairing_id).await
+}
+
+/// Like [`start`], with the machine's settings.
+async fn start_with(
+    fake: Fake,
+    machine: MachineConfig,
+    pairing_file: Option<PathBuf>,
+    pairing_id: Option<u32>,
+) -> (Arc<Server>, Shared) {
     let fake = Arc::new(Mutex::new(fake));
     let app = axum::Router::new()
         .fallback(axum::routing::post(handle))
@@ -135,7 +165,7 @@ async fn start(
 
     let server = Server::new(MachineConfig {
         finishing_hold: Duration::from_millis(100),
-        ..MachineConfig::default()
+        ..machine
     });
     let mut cfg = WifiConfig::from_host(&format!("http://{addr}")).unwrap();
     cfg.poll = Duration::from_millis(20);
@@ -217,8 +247,12 @@ fn addresses_get_the_api_port() {
     assert!(WifiConfig::from_host("  ").is_err());
 }
 
+fn taken(fake: &Shared) -> usize {
+    fake.lock().unwrap().calls_to(wifi::PATH_BREW_ACCEPT).len()
+}
+
 #[tokio::test]
-async fn pairs_then_sends_the_shot_once_it_is_measured() {
+async fn pairs_takes_the_job_at_once_then_sends_the_shot() {
     let file = temp_file("pairing");
     let (server, fake) = start(Fake::default(), Some(file.clone()), None).await;
 
@@ -229,15 +263,19 @@ async fn pairs_then_sends_the_shot_once_it_is_measured() {
         "shown as connected"
     );
 
-    // A Grind-by-Sync grind: the grinder now waits for this shot.
+    // A Grind-by-Sync grind: the grinder now waits for this shot, and the job
+    // is taken right away so the grinder keeps it open.
     fake.lock().unwrap().jobs.push(job("g-1", 40_000));
     wait_for("the brew", || brewing(&server)).await;
     let grind = server.with(|m, _| m.last_grind().cloned()).unwrap();
     assert_eq!(grind.beverage_weight_g, Some(40.0), "the recipe weight");
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for("the job taken", || taken(&fake) == 1).await;
     assert!(
-        fake.lock().unwrap().calls.is_empty(),
-        "not accepted before the shot is measured"
+        fake.lock()
+            .unwrap()
+            .calls_to(wifi::PATH_BREW_DONE)
+            .is_empty(),
+        "no result before the shot is measured"
     );
 
     // An integration or the app reports it.
@@ -247,6 +285,7 @@ async fn pairs_then_sends_the_shot_once_it_is_measured() {
     })
     .await;
     let f = fake.lock().unwrap();
+    assert_eq!(f.calls_to(wifi::PATH_BREW_ACCEPT).len(), 1, "taken once");
     let accept = &f.calls_to(wifi::PATH_BREW_ACCEPT)[0];
     assert_eq!(
         (
@@ -319,7 +358,108 @@ async fn a_job_handed_back_out_is_taken_again() {
 }
 
 #[tokio::test]
-async fn an_aborted_shot_is_cancelled_and_a_dropped_job_ends_the_brew() {
+async fn a_job_handed_back_while_waiting_is_taken_again() {
+    let (server, fake) = start(Fake::default(), None, None).await;
+    wait_for("pairing", || paired(&server)).await;
+    fake.lock().unwrap().jobs.push(job("g-1", 40_000));
+    wait_for("the job taken", || taken(&fake) == 1).await;
+
+    // Tamping takes a while: the grinder hands the job back out twice.
+    for n in 2..=3 {
+        fake.lock().unwrap().hand_back_taken();
+        wait_for("the job taken again", || taken(&fake) == n).await;
+        assert!(brewing(&server), "still waiting for the shot");
+    }
+
+    report(&server, 29.5, 39.0);
+    wait_for("the answer", || {
+        wifi(&server).detail == "sent 29.5 s, 39.0 g"
+    })
+    .await;
+    let f = fake.lock().unwrap();
+    assert_eq!(f.calls_to(wifi::PATH_BREW_ACCEPT).len(), 3);
+    let done = f.calls_to(wifi::PATH_BREW_DONE);
+    assert_eq!(done.len(), 1, "the result went straight through");
+    assert_eq!(done[0]["result"], "Success");
+    assert!(f.ongoing.is_empty() && f.jobs.is_empty());
+}
+
+#[tokio::test]
+async fn a_job_that_could_not_be_taken_is_tried_again() {
+    let fake = Fake {
+        fail_accept: 1,
+        ..Fake::default()
+    };
+    let (server, fake) = start(fake, None, None).await;
+    wait_for("pairing", || paired(&server)).await;
+    fake.lock().unwrap().jobs.push(job("g-1", 40_000));
+    wait_for("the job taken", || taken(&fake) == 2).await;
+    assert!(brewing(&server), "still waiting for the shot");
+    assert!(fake.lock().unwrap().jobs.is_empty(), "the grinder has it");
+
+    report(&server, 28.4, 40.1);
+    wait_for("the answer", || {
+        wifi(&server).detail == "sent 28.4 s, 40.1 g"
+    })
+    .await;
+    let f = fake.lock().unwrap();
+    assert_eq!(
+        f.calls_to(wifi::PATH_BREW_ACCEPT).len(),
+        2,
+        "not taken again"
+    );
+    assert_eq!(f.calls_to(wifi::PATH_BREW_DONE).len(), 1);
+}
+
+#[tokio::test]
+async fn a_taken_job_the_grinder_forgot_is_reported_as_not_reached() {
+    let (server, fake) = start(Fake::default(), None, None).await;
+    wait_for("pairing", || paired(&server)).await;
+    fake.lock().unwrap().jobs.push(job("g-1", 40_000));
+    wait_for("the job taken", || taken(&fake) == 1).await;
+
+    // The grinder restarts and forgets the job without listing it again.
+    fake.lock().unwrap().ongoing.clear();
+    report(&server, 27.0, 40.0);
+    wait_for("the problem", || {
+        wifi(&server).problem.as_deref() == Some("the shot did not reach the grinder in time")
+    })
+    .await;
+    let f = fake.lock().unwrap();
+    assert_eq!(
+        f.calls_to(wifi::PATH_BREW_DONE).len(),
+        1,
+        "tried, then given up"
+    );
+    assert_eq!(f.calls_to(wifi::PATH_BREW_ACCEPT).len(), 1);
+}
+
+#[test]
+fn only_a_grinder_that_does_not_answer_is_unreachable() {
+    let silent = anyhow::Error::new(std::io::Error::other("not a request error"));
+    assert!(!unreachable(&silent));
+    let odd = Reply {
+        http: StatusCode::BAD_REQUEST,
+        body: json!({ "status": "ClientErrorJsonSyntaxWrong" }),
+        peer: None,
+    };
+    assert!(!unreachable(&odd.ok().unwrap_err()), "it did answer");
+}
+
+#[tokio::test]
+async fn a_closed_port_is_unreachable() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let refused = reqwest::Client::new()
+        .post("http://127.0.0.1:1/")
+        .send()
+        .await
+        .unwrap_err();
+    let e = anyhow::Error::new(refused).context("asking for brew jobs");
+    assert!(unreachable(&e));
+}
+
+#[tokio::test]
+async fn an_aborted_shot_is_cancelled() {
     let (server, fake) = start(Fake::default(), None, None).await;
     wait_for("pairing", || paired(&server)).await;
 
@@ -334,33 +474,67 @@ async fn an_aborted_shot_is_cancelled_and_a_dropped_job_ends_the_brew() {
             .is_empty()
     })
     .await;
-    assert_eq!(
-        fake.lock().unwrap().calls_to(wifi::PATH_BREW_DONE)[0]["result"],
-        "Canceled"
+    let f = fake.lock().unwrap();
+    assert_eq!(f.calls_to(wifi::PATH_BREW_DONE)[0]["result"], "Canceled");
+    assert!(
+        f.ongoing.is_empty() && f.jobs.is_empty(),
+        "the grinder closed it"
     );
+}
 
-    // Once the aborted shot stops showing: a job the grinder drops (it timed
-    // out) before any shot came.
-    wait_for("ready", || {
-        server.with(|m, now| matches!(m.phase(now), Phase::Ready))
+#[tokio::test]
+async fn no_shot_in_time_cancels_the_job() {
+    let machine = MachineConfig {
+        brew_timeout: Some(Duration::from_millis(300)),
+        ..MachineConfig::default()
+    };
+    let (server, fake) = start_with(Fake::default(), machine, None, None).await;
+    wait_for("pairing", || paired(&server)).await;
+    fake.lock().unwrap().jobs.push(job("g-1", 40_000));
+    wait_for("the brew", || brewing(&server)).await;
+
+    // `brewing` ticks the machine, as the server's timer does.
+    wait_for("the timeout", || !brewing(&server)).await;
+    wait_for("the cancel", || {
+        wifi(&server).detail
+            == "told the grinder the shot was cancelled (no result reported in time)"
     })
     .await;
-    fake.lock().unwrap().jobs.push(job("g-2", 40_000));
-    wait_for("the second brew", || brewing(&server)).await;
-    fake.lock().unwrap().jobs.clear();
-    wait_for("giving up", || !brewing(&server)).await;
+    let f = fake.lock().unwrap();
+    let done = f.calls_to(wifi::PATH_BREW_DONE);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0]["result"], "Canceled");
+    assert!(
+        f.ongoing.is_empty() && f.jobs.is_empty(),
+        "the grinder closed it"
+    );
+}
+
+#[tokio::test]
+async fn a_job_the_grinder_no_longer_has_ends_the_brew() {
+    let fake = Fake {
+        lose_jobs: true,
+        ..Fake::default()
+    };
+    let (server, fake) = start(fake, None, None).await;
+    wait_for("pairing", || paired(&server)).await;
+    fake.lock().unwrap().jobs.push(job("g-1", 40_000));
+
+    wait_for("giving up", || wifi(&server).problem.is_some()).await;
+    assert!(!brewing(&server));
     let late = ShotResult::from_grams(Duration::from_secs(30), 40.0);
     assert_eq!(
         server.with(|m, now| m.report_shot(now, late)),
         Err(MachineError::NotBrewing),
         "a late shot has nothing to answer"
     );
-    assert_eq!(
-        fake.lock().unwrap().calls_to(wifi::PATH_BREW_ACCEPT).len(),
-        1,
-        "only the aborted shot was answered"
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let f = fake.lock().unwrap();
+    assert_eq!(f.calls_to(wifi::PATH_BREW_ACCEPT).len(), 1, "tried once");
+    assert!(
+        f.calls_to(wifi::PATH_BREW_DONE).is_empty(),
+        "nothing to answer"
     );
-    assert!(wifi(&server).problem.is_some(), "the app says so");
 }
 
 #[tokio::test]
@@ -389,11 +563,11 @@ async fn the_newest_job_is_the_shot_being_pulled() {
 }
 
 #[tokio::test]
-async fn a_newer_grind_replaces_one_still_waiting() {
+async fn a_newer_grind_cancels_one_still_waiting() {
     let (server, fake) = start(Fake::default(), None, None).await;
     wait_for("pairing", || paired(&server)).await;
     fake.lock().unwrap().jobs.push(job("first", 36_000));
-    wait_for("the first brew", || brewing(&server)).await;
+    wait_for("the first job taken", || taken(&fake) == 1).await;
 
     // Ground again before pulling the shot.
     fake.lock().unwrap().jobs.push(job("second", 40_000));
@@ -407,9 +581,24 @@ async fn a_newer_grind_replaces_one_still_waiting() {
         wifi(&server).detail == "sent 28.0 s, 40.0 g"
     })
     .await;
-    let accepted = fake.lock().unwrap().calls_to(wifi::PATH_BREW_ACCEPT);
-    assert_eq!(accepted.len(), 1);
-    assert_eq!(accepted[0]["grindUuid"], "second");
+    let f = fake.lock().unwrap();
+    let accepted = f.calls_to(wifi::PATH_BREW_ACCEPT);
+    assert_eq!(accepted.len(), 2);
+    assert_eq!(
+        (&accepted[0]["grindUuid"], &accepted[1]["grindUuid"]),
+        (&json!("first"), &json!("second"))
+    );
+    let done = f.calls_to(wifi::PATH_BREW_DONE);
+    assert_eq!(
+        (&done[0]["grindUuid"], &done[0]["result"]),
+        (&json!("first"), &json!("Canceled")),
+        "the grinder stops waiting for the first"
+    );
+    assert_eq!(
+        (&done[1]["grindUuid"], &done[1]["result"]),
+        (&json!("second"), &json!("Success"))
+    );
+    assert!(f.ongoing.is_empty() && f.jobs.is_empty());
 }
 
 #[tokio::test]
