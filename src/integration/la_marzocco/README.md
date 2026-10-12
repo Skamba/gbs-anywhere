@@ -28,12 +28,13 @@ docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
 | E-mail | `--lm-username` | `LM_USERNAME` | off |
 | Password | `--lm-password` | `LM_PASSWORD` | |
 | Machine serial number | `--lm-serial` | `LM_SERIAL` | the account's only machine |
-| Seconds between checks (1 to 60) | `--lm-poll-s` | `LM_POLL_S` | 3 |
+| Check interval (seconds, 1 to 60) | `--lm-poll-s` | `LM_POLL_S` | 3 |
 
 ## How it works
 
 After the knob press (on an E65/E80 GbS: after the Grind-by-Sync grind)
-gbs-anywhere asks the cloud for new coffees every 3 s.
+gbs-anywhere asks the cloud for new coffees every 3 s (the check interval;
+lower reports sooner but sends more requests).
 The first coffee logged after the knob press is the shot: its extraction time
 and its weight go to the grinder. Without a scale reading it uses the recipe
 weight the grinder sent. The log says which.

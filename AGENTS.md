@@ -16,7 +16,12 @@ file is for agents changing the code.
 - `src/server/`: axum. `grinder_api.rs` is what the E64 WS calls
   (`/api/v2/*`); `wifi_grinder.rs` pairs with an E65/E80 GbS and turns its
   brew jobs into brews of the same machine; `control_api.rs` is the JSON API
-  and page for people.
+  and page for people. Around them: `settings.rs` holds the settings people
+  change in the app (shot window, grinder address, which restarts the
+  E65/E80 link) and is the only writer of the settings file; `history.rs`
+  records the shots from the machine's events; `logbook.rs` keeps the last
+  log lines for the app (a `tracing` layer next to the console output);
+  `update_check.rs` looks for a newer release; `utc.rs` formats times.
 - `src/integration/`: optional integrations that report shots by themselves,
   one folder each (see [Integrations](#integrations)).
 - `web/index.html`: the whole phone app (HTML, CSS, JS), no build step.
@@ -30,7 +35,7 @@ cargo test
 cargo clippy --all-targets
 cargo fmt
 # Local run, then open http://localhost:8089/
-cargo run -- -p 8089 --control off --no-stdin --config target/dev.json
+cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-check off
 ```
 
 - `web/index.html` is compiled into the binary (`include_str!`). After
@@ -91,8 +96,19 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   URL, stay command-line only.
 - Vendor logos are trademarks: draw a generic glyph for `icon.svg`. People
   can supply their own icons with `--icons`.
+- Texts stay English in Rust. Give each status line a key with
+  `Detail::keyed` (`<id>.<state>`) and its numbers with `Detail::var`
+  (unit in the name: `ago_ms`, `time_s`, `weight_g`); the API shows them as
+  `detail_key` and `detail_vars` next to `detail`. The German wording goes
+  into the app's catalog, `integ.detail.<key>` for status lines and
+  `kind.<id>.summary` / `kind.<id>.field.<key>.label|help|placeholder` for
+  the form. The app knows the units `_ms`, `_s` and `_g`; a new one needs a
+  case in `integDetail()`.
+  Without an entry the app shows the server's English. Errors and log lines
+  stay English.
 - Test against a local fake of the vendor's service. Don't send test traffic
-  or made-up credentials to a vendor's real service.
+  or made-up credentials to a vendor's real service. The same goes for
+  GitHub in the update check: tests pass a local URL (`UpdateConfig`).
 
 ## Web app
 
@@ -100,11 +116,15 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   network that may have no internet access.
 - Colours are CSS variables on `:root`, redefined for dark mode. Use them
   instead of literal colours.
+- Every text the app writes is in the `STRINGS` catalog, in `en` and `de`
+  with the same keys, and goes through `t()`. Integration texts that come
+  from the server in English (`kind.*`, `integ.detail.*`) are the
+  exception: they are only in `de`, and English shows the server's text.
 - Phone first: content at most 480 px wide, 16 px side padding, no
   horizontal scrolling.
 - Typing the time and weight by hand is the default flow and must work with no
-  integration set up. Integrations are optional, behind the green + in the
-  header.
+  integration set up. Integrations are optional, behind the green + under
+  Status → Machine integrations.
 
 ## Public repository wording
 

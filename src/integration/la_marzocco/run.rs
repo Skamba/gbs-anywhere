@@ -8,7 +8,7 @@ use anyhow::{Context, bail};
 use super::TITLE;
 use super::cloud::{CloudClient, LastCoffee, Thing};
 use super::config::Config;
-use crate::integration::{Backoff, BoxFuture, Integration, Link};
+use crate::integration::{Backoff, BoxFuture, Detail, Integration, Link, tenths};
 
 const MIN_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
@@ -40,12 +40,14 @@ pub fn new_coffee(coffees: &[LastCoffee], after_ms: i64) -> Option<&LastCoffee> 
 async fn run(link: Link, cfg: Config) {
     let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
     loop {
-        link.status.starting("logging in");
+        link.status
+            .starting(Detail::keyed("la_marzocco.logging_in", "logging in"));
         match connect(&cfg).await {
             Ok((client, machine)) => {
                 backoff.reset();
                 link.status.subject(&machine.subject);
-                link.status.connected(idle_line(machine.last.as_ref()));
+                link.status
+                    .connected(idle_line(machine.last.as_ref(), now_ms()));
                 if let Err(e) = watch(&link, &cfg, client, machine).await {
                     tracing::warn!("{TITLE}: {e:#}");
                     link.status.error(format!("{e:#}"));
@@ -86,17 +88,21 @@ impl From<&LastCoffee> for Idle {
     }
 }
 
-/// `last coffee 3 min ago: 25.1 s, 38.0 g`, with the age as of now.
-fn idle_line(last: Option<&Idle>) -> String {
-    match last {
-        Some(c) => format!(
-            "last coffee {} ago: {:.1} s{}",
-            age(c.time_ms),
-            c.extraction_seconds,
-            c.grams.map_or(String::new(), |g| format!(", {g:.1} g"))
-        ),
-        None => "no coffee in the last 7 days".to_owned(),
-    }
+/// `last coffee 3 min ago: 25.1 s, 38.0 g`, with the age as of `now_ms`.
+fn idle_line(last: Option<&Idle>, now_ms: i64) -> Detail {
+    let Some(c) = last else {
+        return Detail::keyed("la_marzocco.no_coffee", "no coffee in the last 7 days");
+    };
+    let ago_ms = (now_ms - c.time_ms).max(0);
+    let seconds = tenths(c.extraction_seconds);
+    let time = format!("last coffee {} ago: {seconds:.1} s", age_of(ago_ms));
+    let line = match c.grams.map(tenths) {
+        Some(g) => {
+            Detail::keyed("la_marzocco.last_coffee", format!("{time}, {g:.1} g")).var("weight_g", g)
+        }
+        None => Detail::keyed("la_marzocco.last_coffee_no_weight", time),
+    };
+    line.var("ago_ms", ago_ms).var("time_s", seconds)
 }
 
 /// How often the idle line's age is refreshed.
@@ -141,7 +147,7 @@ async fn connect(cfg: &Config) -> anyhow::Result<(CloudClient, Machine)> {
     let subject = format!("{serial} · {}", machine.model_name);
     tracing::info!(
         "{TITLE}: connected to {subject}, {}",
-        idle_line(last.as_ref())
+        idle_line(last.as_ref(), now_ms()).text()
     );
     Ok((
         client,
@@ -166,10 +172,6 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or(0)
-}
-
-fn age(time_ms: i64) -> String {
-    age_of(now_ms() - time_ms)
 }
 
 /// `45 s`, `12 min`, `5 h`, `2 days`.
@@ -207,7 +209,7 @@ async fn watch(
                 }
             }
             _ = refresh.tick() => {
-                link.status.connected(idle_line(idle.as_ref()));
+                link.status.connected(idle_line(idle.as_ref(), now_ms()));
                 continue;
             }
         }
@@ -222,8 +224,12 @@ async fn watch(
         }
         let poll_s = cfg.poll.as_secs();
         tracing::info!("{TITLE}: grinder is waiting, watching the coffee log every {poll_s} s");
-        let waiting = format!("grinder is waiting · checking the coffee log every {poll_s} s");
-        link.status.watching(&waiting);
+        let waiting = Detail::keyed(
+            "la_marzocco.watching",
+            format!("grinder is waiting · checking the coffee log every {poll_s} s"),
+        )
+        .var("every_s", poll_s);
+        link.status.watching(waiting.clone());
         let mut errors = 0u32;
         loop {
             tokio::time::sleep(cfg.poll).await;
@@ -236,7 +242,7 @@ async fn watch(
                     if errors > 0 {
                         // Back from a failed poll: still watching this brew.
                         errors = 0;
-                        link.status.watching(&waiting);
+                        link.status.watching(waiting.clone());
                     }
                     l
                 }
@@ -275,13 +281,14 @@ async fn watch(
             idle = Some(Idle::from(c));
             break;
         }
-        link.status.connected(idle_line(idle.as_ref()));
+        link.status.connected(idle_line(idle.as_ref(), now_ms()));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integration::Status;
     use serde_json::json;
 
     #[test]
@@ -292,13 +299,48 @@ mod tests {
         assert_eq!(age_of(47 * 3_600_000), "47 h");
         assert_eq!(age_of(3 * 86_400_000 + 5), "3 days");
         assert_eq!(age_of(-5), "0 s");
-        let line = idle_line(Some(&Idle {
-            time_ms: now_ms() - 90_000,
-            extraction_seconds: 25.1,
-            grams: Some(38.0),
-        }));
-        assert_eq!(line, "last coffee 90 s ago: 25.1 s, 38.0 g");
-        assert_eq!(idle_line(None), "no coffee in the last 7 days");
+    }
+
+    #[test]
+    fn status_lines_carry_a_key_and_their_numbers() {
+        let now = 1_790_536_239_820;
+        let status = Status::new("la_marzocco", "la_marzocco", TITLE);
+        let shown = |line: Detail| {
+            status.connected(line);
+            status.snapshot()
+        };
+
+        let coffee = Idle {
+            time_ms: now - 5 * 3_600_000,
+            extraction_seconds: 28.491_999,
+            grams: Some(40.900_001),
+        };
+        let snap = shown(idle_line(Some(&coffee), now));
+        assert_eq!(snap.detail, "last coffee 5 h ago: 28.5 s, 40.9 g");
+        assert_eq!(snap.detail_key, Some("la_marzocco.last_coffee"));
+        assert_eq!(
+            serde_json::Value::Object(snap.detail_vars),
+            json!({"ago_ms": 18_000_000, "time_s": 28.5, "weight_g": 40.9})
+        );
+
+        // No Connected Scale: no weight.
+        let no_scale = Idle {
+            time_ms: now - 90_000,
+            grams: None,
+            ..coffee
+        };
+        let snap = shown(idle_line(Some(&no_scale), now));
+        assert_eq!(snap.detail, "last coffee 90 s ago: 28.5 s");
+        assert_eq!(snap.detail_key, Some("la_marzocco.last_coffee_no_weight"));
+        assert_eq!(
+            serde_json::Value::Object(snap.detail_vars),
+            json!({"ago_ms": 90_000, "time_s": 28.5})
+        );
+
+        let snap = shown(idle_line(None, now));
+        assert_eq!(snap.detail, "no coffee in the last 7 days");
+        assert_eq!(snap.detail_key, Some("la_marzocco.no_coffee"));
+        assert!(snap.detail_vars.is_empty());
     }
 
     #[test]

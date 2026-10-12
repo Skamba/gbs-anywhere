@@ -15,7 +15,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use super::TITLE;
 use super::config::Config;
 use super::shot::{Detector, Progress, Reading, Shot};
-use crate::integration::{Backoff, BoxFuture, GrinderBrews, Integration, Link};
+use crate::integration::{Backoff, BoxFuture, Detail, GrinderBrews, Integration, Link, tenths};
 
 const MIN_BACKOFF: Duration = Duration::from_secs(2);
 /// Short, so a scale switched on after the knob press is found in time.
@@ -25,10 +25,37 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const SILENCE: Duration = Duration::from_secs(5);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
 
-const SETTLING: &str = "grinder is waiting · waiting for a steady weight";
-const READY: &str = "grinder is waiting · watching for the first drops";
+/// The status lines, each with a key the app can translate.
+fn connecting(host: &str) -> Detail {
+    Detail::keyed("half_decent.connecting", format!("connecting to {host}")).var("host", host)
+}
+
+fn settling() -> Detail {
+    Detail::keyed(
+        "half_decent.settling",
+        "grinder is waiting · waiting for a steady weight",
+    )
+}
+
+fn ready() -> Detail {
+    Detail::keyed(
+        "half_decent.ready",
+        "grinder is waiting · watching for the first drops",
+    )
+}
+
+fn flowing(grams: f64) -> Detail {
+    let grams = tenths(grams);
+    Detail::keyed("half_decent.flowing", format!("flowing · {grams:.1} g")).var("weight_g", grams)
+}
+
 /// When the scale could not be reached at startup. It may be on by now.
-const AWAY: &str = "not reached at startup; tried again at each knob press";
+fn away() -> Detail {
+    Detail::keyed(
+        "half_decent.away",
+        "not reached at startup; tried again at each knob press",
+    )
+}
 
 /// The integration. See the module docs.
 pub struct HalfDecent {
@@ -76,11 +103,17 @@ pub fn parse(text: &str) -> FromScale {
 }
 
 /// `last shot: 25.1 s, 38.0 g`.
-fn idle_line(last: Option<Shot>) -> String {
-    match last {
-        Some(s) => format!("last shot: {:.1} s, {:.1} g", s.time.as_secs_f64(), s.grams),
-        None => "ready for the next shot".to_owned(),
-    }
+fn idle_line(last: Option<Shot>) -> Detail {
+    let Some(s) = last else {
+        return Detail::keyed("half_decent.idle", "ready for the next shot");
+    };
+    let (time, grams) = (tenths(s.time.as_secs_f64()), tenths(s.grams));
+    Detail::keyed(
+        "half_decent.last_shot",
+        format!("last shot: {time:.1} s, {grams:.1} g"),
+    )
+    .var("time_s", time)
+    .var("weight_g", grams)
 }
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
@@ -96,12 +129,12 @@ async fn run(link: Link, cfg: Config) {
     // Subscribe first, so no knob press slips by.
     let mut brews = link.grinder_brews();
     if !link.grinder_waiting() {
-        link.status.starting(format!("connecting to {}", cfg.host));
+        link.status.starting(connecting(&cfg.host));
         match first_look(&link, &cfg).await {
             Ok(()) => link.status.connected(idle_line(last)),
             Err(e) => {
                 tracing::info!("{TITLE}: {e:#}");
-                link.status.connected(AWAY);
+                link.status.connected(away());
             }
         }
     }
@@ -160,7 +193,7 @@ async fn brew(
 ) -> bool {
     let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
     loop {
-        link.status.starting(format!("connecting to {}", cfg.host));
+        link.status.starting(connecting(&cfg.host));
         let result = match connect(&cfg.host).await {
             Ok(ws) => watch(link, cfg, ws, brews, tare, last).await,
             Err(e) => Err(e),
@@ -241,7 +274,7 @@ async fn watch(
         Detector::new()
     }
     .expecting(recipe_weight(link));
-    link.status.watching(SETTLING);
+    link.status.watching(settling());
     let ended = loop {
         let text = tokio::select! {
             pressed = brews.next() => {
@@ -251,7 +284,7 @@ async fn watch(
                 // Pressed again: a new brew.
                 send_tare(&mut ws).await?;
                 detector = Detector::after_tare().expecting(recipe_weight(link));
-                link.status.watching(SETTLING);
+                link.status.watching(settling());
                 continue;
             }
             msg = tokio::time::timeout(SILENCE, ws.next()) => match msg {
@@ -279,11 +312,9 @@ async fn watch(
             break true;
         }
         match detector.push(r) {
-            Progress::Settling => link.status.watching(SETTLING),
-            Progress::Ready => link.status.watching(READY),
-            Progress::Flowing { grams } => {
-                link.status.watching(format!("flowing · {grams:.1} g"));
-            }
+            Progress::Settling => link.status.watching(settling()),
+            Progress::Ready => link.status.watching(ready()),
+            Progress::Flowing { grams } => link.status.watching(flowing(grams)),
             Progress::Done(shot) => {
                 link.report(
                     shot.time,
@@ -477,6 +508,53 @@ mod tests {
         let snap = l.status.snapshot();
         assert_eq!(snap.health, Health::Connected);
         assert!(snap.detail.starts_with("last shot: "), "{}", snap.detail);
+        // The same numbers for the app's own wording, as reported.
+        assert_eq!(snap.detail_key, Some("half_decent.last_shot"));
+        let time_s = snap.detail_vars["time_s"].as_f64().unwrap();
+        assert!(
+            (time_s * 1000.0 - f64::from(shot.time_ms)).abs() < 50.0,
+            "{time_s}"
+        );
+        assert!(snap.detail_vars["weight_g"].as_f64().unwrap() > 30.0);
+    }
+
+    #[test]
+    fn status_lines_carry_a_key_and_their_numbers() {
+        let status = Status::new("half_decent", "half_decent", TITLE);
+        let shown = |line: Detail| {
+            status.watching(line);
+            status.snapshot()
+        };
+        let snap = shown(flowing(12.345));
+        assert_eq!(snap.detail, "flowing · 12.3 g");
+        assert_eq!(snap.detail_key, Some("half_decent.flowing"));
+        assert_eq!(snap.detail_vars["weight_g"], 12.3);
+
+        let snap = shown(connecting("192.168.1.30"));
+        assert_eq!(snap.detail, "connecting to 192.168.1.30");
+        assert_eq!(snap.detail_key, Some("half_decent.connecting"));
+        assert_eq!(snap.detail_vars["host"], "192.168.1.30");
+
+        let shot = Shot {
+            time: Duration::from_millis(25_140),
+            grams: 38.04,
+        };
+        let snap = shown(idle_line(Some(shot)));
+        assert_eq!(snap.detail, "last shot: 25.1 s, 38.0 g");
+        assert_eq!(
+            serde_json::Value::Object(snap.detail_vars),
+            serde_json::json!({"time_s": 25.1, "weight_g": 38.0})
+        );
+        assert_eq!(shown(idle_line(None)).detail_key, Some("half_decent.idle"));
+        for (line, key) in [
+            (settling(), "half_decent.settling"),
+            (ready(), "half_decent.ready"),
+            (away(), "half_decent.away"),
+        ] {
+            let snap = shown(line);
+            assert_eq!(snap.detail_key, Some(key));
+            assert!(snap.detail_vars.is_empty(), "{key}");
+        }
     }
 
     #[tokio::test]
@@ -506,9 +584,11 @@ mod tests {
         tokio::spawn(run(l.clone(), Config { host }));
         wait_for("ready", || l.status.snapshot().health == Health::Connected).await;
         // The scale may be on by now: say what happened, not what it is doing.
-        let detail = l.status.snapshot().detail;
+        let snap = l.status.snapshot();
+        let detail = snap.detail;
         assert!(detail.contains("at startup"), "{detail}");
         assert!(!detail.contains("off"), "{detail}");
+        assert_eq!(snap.detail_key, Some("half_decent.away"));
     }
 
     #[tokio::test]

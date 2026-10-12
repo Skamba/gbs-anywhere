@@ -5,10 +5,17 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations |
+//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations, settings, update check; `boot_id` changes on every start, so an app can tell its event and log numbers start over |
+//! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30"}` (any of them) — changes and saves them; they win over flags from then on |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
+//! | GET | `/api/integrations/<id>/settings` | the settings of one added in the app, without passwords (`secrets_set` names the ones that are set) |
+//! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes one added in the app and restarts it; a password left out or empty stays |
+//! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
+//! | GET | `/api/history` | the last 200 shots the grinder asked for, newest first |
+//! | GET | `/api/log?after=N` | the server's last 1000 log lines (INFO and up) with `seq > N` |
+//! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`); `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
 //! | GET | `/api/events?after=N` | events with `seq > N` |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers; without a weight, the recipe's |
@@ -25,7 +32,7 @@ use std::time::Duration;
 use crate::protocol::{MachineError, MakoState, ShotResult};
 use axum::Json;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
@@ -34,7 +41,8 @@ use serde_json::{Map, Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::integration::{self, ChangeError, Settings};
-use crate::server::Server;
+use crate::server::logbook::{self, LogLine};
+use crate::server::{Server, SettingsChange, history};
 
 pub fn control_router(state: Arc<Server>) -> axum::Router {
     axum::Router::new()
@@ -44,6 +52,10 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
         .route("/apple-touch-icon.png", get(no_icon))
         .route("/apple-touch-icon-precomposed.png", get(no_icon))
         .route("/api/state", get(get_state))
+        .route("/api/settings", put(put_settings))
+        .route("/api/history", get(get_history))
+        .route("/api/log", get(get_log))
+        .route("/api/log/stream", get(stream_log))
         .route("/api/events", get(get_events))
         .route("/api/events/stream", get(stream_events))
         .route("/api/shot/result", post(shot_result))
@@ -51,7 +63,12 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
         .route("/api/shot/start", post(shot_start))
         .route("/api/integrations", post(add_integration))
         .route("/api/integrations/kinds", get(integration_kinds))
-        .route("/api/integrations/{id}", delete(remove_integration))
+        .route(
+            "/api/integrations/{id}",
+            delete(remove_integration).put(update_integration),
+        )
+        .route("/api/integrations/{id}/settings", get(integration_settings))
+        .route("/api/integrations/{id}/adopt", post(adopt_integration))
         .route("/api/machine", post(patch_machine))
         .route("/api/grinder/pairing", post(grinder_pairing))
         .route("/api/overrides", put(put_overrides).delete(clear_overrides))
@@ -62,6 +79,8 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
 pub fn state_json(x: &Server) -> Value {
     let link = x.grinder_link();
     let integrations = x.integrations().list();
+    let settings = x.settings_json();
+    let update = x.update_json();
     x.with(|m, now| {
         let mako = m.mako(now);
         let blocked = mako.grind_blocked().map(|b| {
@@ -83,8 +102,11 @@ pub fn state_json(x: &Server) -> Value {
             },
             "integrations": integrations,
             "last_seq": m.last_seq(),
+            "boot_id": x.boot_id(),
             "version": crate::version(),
             "config": m.config(),
+            "settings": settings,
+            "update": update,
         })
     })
 }
@@ -170,6 +192,112 @@ async fn stream_events(State(x): State<Arc<Server>>) -> impl IntoResponse {
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+async fn put_settings(State(x): State<Arc<Server>>, Json(body): Json<Value>) -> Response {
+    let change = match SettingsChange::parse(&body) {
+        Ok(c) => c,
+        Err(e) => return error(StatusCode::BAD_REQUEST, &e),
+    };
+    match x.change_settings(change) {
+        Ok(settings) => Json(settings).into_response(),
+        // The file could not be written, or the pairing file read.
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
+}
+
+async fn get_history(State(x): State<Arc<Server>>) -> Json<Value> {
+    Json(json!({
+        "shots": x.history().list(),
+        "capacity": history::CAPACITY,
+        "persistent": x.history().persistent(),
+    }))
+}
+
+async fn get_log(State(x): State<Arc<Server>>, Query(q): Query<After>) -> Json<Value> {
+    let (lines, last_seq) = x.log().after(q.after);
+    Json(json!({
+        "lines": lines,
+        "last_seq": last_seq,
+        "capacity": x.log().capacity(),
+    }))
+}
+
+/// Live log lines. With the `Last-Event-ID` a browser sends when it
+/// reconnects, or else `?after=N`, the lines after `N` that are still kept
+/// come first;
+/// an `N` beyond the last line (the server restarted since) sends them all.
+async fn stream_log(
+    State(x): State<Arc<Server>>,
+    Query(q): Query<AfterMaybe>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // A reconnecting browser sends the same URL again, so its
+    // `Last-Event-ID` is newer than the query.
+    let resume = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse().ok())
+        .or(q.after);
+    // Subscribed first, so nothing falls between the backlog and the feed.
+    let (rx, now) = x.log().subscribe_at();
+    let after = match resume {
+        Some(after) if after <= now => after,
+        // From before a restart (the count started again): all kept lines.
+        Some(_) => 0,
+        None => now,
+    };
+    let start = LogStream {
+        rx,
+        pending: x.log().after(after).0.into(),
+        last: after,
+        book: x.log().clone(),
+    };
+    let stream = futures_util::stream::unfold(start, |mut s| async move {
+        let line = s.next().await?;
+        let ev = Event::default()
+            .event("log")
+            .id(line.seq.to_string())
+            .data(serde_json::to_string(&line).unwrap_or_default());
+        Some((Ok::<_, Infallible>(ev), s))
+    });
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+#[derive(Deserialize)]
+struct AfterMaybe {
+    after: Option<u64>,
+}
+
+/// The log lines for one stream, in order and without gaps: when the live
+/// feed falls behind, the missed lines are read back from the log book.
+struct LogStream {
+    book: Arc<logbook::LogBook>,
+    rx: tokio::sync::broadcast::Receiver<LogLine>,
+    pending: std::collections::VecDeque<LogLine>,
+    /// The last `seq` sent (or skipped as already known).
+    last: u64,
+}
+
+impl LogStream {
+    async fn next(&mut self) -> Option<LogLine> {
+        loop {
+            if let Some(line) = self.pending.pop_front() {
+                if line.seq > self.last {
+                    self.last = line.seq;
+                    return Some(line);
+                }
+                continue;
+            }
+            match self.rx.recv().await {
+                Ok(line) => self.pending.push_back(line),
+                Err(RecvError::Lagged(_)) => {
+                    self.pending = self.book.after(self.last).0.into();
+                }
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    }
+}
+
 async fn integration_kinds(State(x): State<Arc<Server>>) -> Json<Value> {
     Json(json!({
         "kinds": integration::KINDS,
@@ -200,6 +328,37 @@ async fn add_integration(
     };
     match x.integrations().add(&x, kind, req.settings) {
         Ok(id) => (StatusCode::CREATED, Json(json!({ "id": id }))).into_response(),
+        Err(e) => change_error(&e),
+    }
+}
+
+async fn integration_settings(State(x): State<Arc<Server>>, Path(id): Path<String>) -> Response {
+    match x.integrations().form(&id) {
+        Ok(form) => Json(form).into_response(),
+        Err(e) => change_error(&e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateIntegration {
+    #[serde(default)]
+    settings: Settings,
+}
+
+async fn update_integration(
+    State(x): State<Arc<Server>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateIntegration>,
+) -> Response {
+    match x.integrations().update(&x, &id, req.settings) {
+        Ok(()) => Json(json!({ "id": id })).into_response(),
+        Err(e) => change_error(&e),
+    }
+}
+
+async fn adopt_integration(State(x): State<Arc<Server>>, Path(id): Path<String>) -> Response {
+    match x.integrations().adopt(&id) {
+        Ok(view) => Json(view).into_response(),
         Err(e) => change_error(&e),
     }
 }
@@ -239,7 +398,9 @@ fn change_error(e: &ChangeError) -> Response {
     let code = match e {
         ChangeError::Invalid(_) => StatusCode::BAD_REQUEST,
         ChangeError::NotFound => StatusCode::NOT_FOUND,
-        ChangeError::CommandLine => StatusCode::CONFLICT,
+        ChangeError::CommandLine | ChangeError::InApp | ChangeError::NotPersistent => {
+            StatusCode::CONFLICT
+        }
         ChangeError::Save(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error(code, &e.to_string())

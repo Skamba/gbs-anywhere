@@ -15,7 +15,9 @@ use serde_json::{Value, json};
 use crate::server::Server;
 
 /// Every path goes through one handler so nothing the grinder sends is
-/// missed; unknown requests are logged and answered with `{}`.
+/// missed; unknown requests are answered with `{}`. The grinder never makes
+/// those (other devices on the network do, looking for their own kind), so
+/// they are logged at debug level only and don't count as the grinder.
 pub fn grinder_router(state: Arc<Server>) -> axum::Router {
     axum::Router::new().fallback(any(handle)).with_state(state)
 }
@@ -29,7 +31,10 @@ async fn handle(
 ) -> impl IntoResponse {
     let req = GrinderRequest::classify(method.as_str(), uri.path(), &body);
     let poll = matches!(req, GrinderRequest::PollMako);
-    x.note_request(Some(peer), poll);
+    let grinder = !matches!(req, GrinderRequest::Other { .. });
+    if grinder {
+        x.note_request(Some(peer), poll);
+    }
 
     let reply: Value = match &req {
         GrinderRequest::Identity => x.with(|m, _| json!(m.identity())),
@@ -53,13 +58,13 @@ async fn handle(
             json!({})
         }
         GrinderRequest::Other { method, path } => {
-            tracing::info!("unhandled grinder request {method} {path}");
+            tracing::debug!("not a grinder request: {method} {path}");
             json!({})
         }
     };
 
     let text = reply.to_string();
-    if poll {
+    if poll || !grinder {
         tracing::debug!("{peer} {method} {uri} -> {text}");
     } else {
         tracing::info!("{peer} {method} {uri} -> {text}");

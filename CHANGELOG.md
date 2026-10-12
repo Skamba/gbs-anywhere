@@ -17,19 +17,78 @@ a minor release may change behaviour.
   V01.36 does), gbs-anywhere sends it nothing for 3 minutes while it starts
   up, so that it keeps the pairing; the app then asks for the ID the grinder
   shows (also `--grinder-pairing-id`). The app shows the pairing code while
-  pairing and "grinder connected" once paired. The grinder waits for the
-  shot for up to `--brew-timeout-s` (3 minutes unless set); grinding again
-  before pulling cancels the shot it was waiting for. A shot that cannot
-  reach the grinder right away (say, the WiFi drops) is retried for two
-  minutes. While the grinder is off or in standby, the log says so once
-  rather than every minute. Tested with the E65W GbS.
+  pairing and the grinder as ready once paired. The grinder waits for the
+  shot for up to the shot window (`--brew-timeout-s`, or the time set in the
+  app; 3 minutes unless set); grinding again before pulling cancels the shot
+  it was waiting for. A shot that cannot reach the grinder right away (say,
+  the WiFi drops) is retried for two minutes. While the grinder is off or in
+  standby, the log says so once rather than every minute. Tested with the
+  E65W GbS.
+- Settings in the app: the shot window (how long gbs-anywhere waits for a
+  shot's numbers: 0:30 to 10:00 minutes in the app, with − and + in 15 s
+  steps or typed in) and the E65/E80 grinder's address (an IP
+  address or name, optionally with `:port`). A new address takes
+  effect at once and keeps the pairing. A setting changed in the app is
+  saved in the settings file and wins over `--brew-timeout-s` or
+  `--grinder` from then on (`PUT /api/settings`, `settings` in
+  `GET /api/state`).
+- Integrations added in the app can be changed there; a password left empty
+  keeps the saved one. An integration set with flags can be moved into the
+  app, with all its settings, so nothing has to be typed again; its flags
+  are ignored from the next start on and can be removed.
+- Shot history: the last 200 shots the grinder asked for, with time, weight,
+  target and how they ended, kept in `history.json` next to the settings
+  file (`GET /api/history`).
+- The app can show gbs-anywhere's log: the last 1,000 lines it printed
+  (INFO and up), and new ones as they come (`GET /api/log`,
+  `GET /api/log/stream`).
+- Update check: once a day gbs-anywhere asks GitHub for its latest release,
+  so the app can say when a newer one is out (`update` in `GET /api/state`).
+  The request carries nothing but the running version. `--update-check off`
+  (`UPDATE_CHECK=off`) turns it off.
+- `grinder.wifi.pairing_id` in `GET /api/state`: the E65/E80 pairing in use.
+- `grinder.wifi.unreachable` in `GET /api/state`: true while an E65/E80 GbS
+  does not answer at all (off, in standby or gone from the network), as
+  opposed to answering with an error.
+- `boot_id` in `GET /api/state`: new on every start, so an app can tell that
+  event and log numbers started over.
+- `detail_key` and `detail_vars` on each integration in `GET /api/state`:
+  its status line as a key and values (such as `time_s`, `weight_g`), next
+  to the English `detail`. The app uses them, and its own catalog for the
+  integrations' setup forms, to show both in German.
+- A guide, [GUIDE.md](GUIDE.md): setup, daily use, upgrading from
+  0.2.x and troubleshooting.
+- A redesigned app with four tabs: Start (the three steps of a shot, with
+  the step that is running or failed opened), Status (grinder, integrations,
+  settings, version), History and Log. Appearance (System, Light, Dark) and
+  language (English, Deutsch; by default the device's) can be set under
+  Status → Settings; both are kept on each device. When no shot can start
+  (no grinder connected, or the grinder blocked), System status opens by
+  itself and says why in plain words, and step 1 shows "Blocked" instead of
+  "Grind".
 
 ### Changed
 
+- What the machine does (grind received, brew started, shot shown to the
+  grinder) is now logged with a time and level like every other line, so it
+  also shows in the app's log.
+- `--grinder` refuses an address that cannot be one (for example with a
+  space in it) at startup, instead of failing on every request.
+- A fractional `--brew-timeout-s` is rounded to whole seconds.
+- The La Marzocco form calls its poll setting "Check interval (seconds)" and
+  says what it does; the Half Decent Scale form asks for the scale's IP
+  address.
 - Unreleased builds are now published once a night as the `nightly` image
   tag, and only on nights when something changed. The `main` and `sha-*`
   tags are no longer updated; switch from `:main` to `:nightly`. `latest`
   and the version tags still come only from releases.
+
+### Fixed
+
+- Requests on port 80 that never come from the grinder, such as other
+  devices on the network probing the port, no longer count as grinder
+  traffic and are logged at debug level only, so they no longer fill the
+  app's log. The `--log` transcript still records them.
 
 ## [0.2.1] - 2026-10-10
 

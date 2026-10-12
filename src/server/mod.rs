@@ -12,13 +12,22 @@
 //! An E65/E80 GbS grinder works the other way round: [`wifi_grinder`] asks it
 //! for brew jobs and drives the same machine from them.
 //!
+//! Around them: [`settings`] (what people change in the app, and the settings
+//! file), [`logbook`] (the server's log for the app), the shot history and
+//! [`update_check`].
+//!
 //! The `gbs-anywhere` binary is a thin wrapper: build a [`Server`], then
 //! [`serve`] it or mount the routers in another app.
 
 mod control_api;
 mod grinder_api;
+pub mod history;
+pub mod logbook;
+pub mod settings;
 #[cfg(test)]
 mod tests;
+pub mod update_check;
+mod utc;
 pub mod wifi_grinder;
 
 use std::net::SocketAddr;
@@ -31,11 +40,17 @@ use crate::protocol::machine::EventRecord;
 use crate::protocol::{Machine, MachineConfig};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 pub use control_api::{ShotInput, control_router, patch_ready, state_json};
 pub use grinder_api::grinder_router;
-pub use wifi_grinder::{PairingIdRefusal, WifiConfig, WifiGrinder, WifiLink, WifiState};
+pub use history::{History, Shot, ShotKind};
+pub use logbook::{LogBook, LogLayer, LogLine};
+pub use settings::{SettingsChange, SettingsError, SettingsFile, Startup};
+pub use update_check::UpdateConfig;
+pub use wifi_grinder::{
+    PairingIdRefusal, WifiConfig, WifiGrinder, WifiLink, WifiState, grinder_address,
+};
 
 /// Shared state behind both routers.
 pub struct Server {
@@ -44,14 +59,24 @@ pub struct Server {
     transcript: Option<tokio::sync::Mutex<tokio::fs::File>>,
     integrations: Integrations,
     icons_dir: OnceLock<PathBuf>,
-    /// Pairing IDs for the E65/E80 link, when one runs.
-    wifi_ids: OnceLock<tokio::sync::mpsc::Sender<u32>>,
+    /// The shot window and grinder address, and the E65/E80 link.
+    settings: Mutex<settings::Live>,
+    history: History,
+    update: Mutex<update_check::UpdateState>,
+    log: Arc<LogBook>,
+    /// New on every start: event and log numbers start over with it.
+    boot_id: String,
 }
 
 struct Inner {
     machine: Machine,
     published: u64,
     grinder: GrinderLink,
+    /// Pairing IDs for the E65/E80 link, while one runs.
+    wifi_ids: Option<mpsc::Sender<u32>>,
+    /// The E65/E80 link that may report its state: a replaced one may still
+    /// be finishing a step.
+    wifi_owner: u64,
 }
 
 /// What we know about the grinder from its requests (or, for an E65/E80
@@ -67,6 +92,19 @@ pub struct GrinderLink {
     pub wifi: Option<WifiLink>,
 }
 
+impl GrinderLink {
+    fn note(&mut self, peer: Option<SocketAddr>, poll: bool) {
+        if peer.is_some() {
+            self.peer = peer;
+        }
+        self.requests += 1;
+        if poll {
+            self.polls += 1;
+            self.last_poll = Some(Instant::now());
+        }
+    }
+}
+
 impl Server {
     pub fn new(config: MachineConfig) -> Arc<Self> {
         Arc::new(Self {
@@ -74,13 +112,34 @@ impl Server {
                 machine: Machine::new(config),
                 published: 0,
                 grinder: GrinderLink::default(),
+                wifi_ids: None,
+                wifi_owner: 0,
             }),
             events: broadcast::channel(256).0,
             transcript: None,
             integrations: Integrations::new(),
             icons_dir: OnceLock::new(),
-            wifi_ids: OnceLock::new(),
+            settings: Mutex::default(),
+            history: History::default(),
+            update: Mutex::default(),
+            log: LogBook::global(),
+            boot_id: uuid::Uuid::new_v4().simple().to_string(),
         })
+    }
+
+    /// Changes on every start, so an app can tell that event and log numbers
+    /// started over.
+    pub fn boot_id(&self) -> &str {
+        &self.boot_id
+    }
+
+    /// Like [`Server::new`], with a log book of its own (tests run side by
+    /// side).
+    #[cfg(test)]
+    fn with_log(config: MachineConfig, log: Arc<LogBook>) -> Arc<Self> {
+        let mut me = Arc::into_inner(Self::new(config)).expect("fresh Arc");
+        me.log = log;
+        Arc::new(me)
     }
 
     /// Like [`Server::new`], also appending every grinder request and our
@@ -134,35 +193,72 @@ impl Server {
         &self.integrations
     }
 
+    /// The server's log as the app shows it.
+    pub fn log(&self) -> &Arc<LogBook> {
+        &self.log
+    }
+
     /// A grinder request (E64 WS), or a successful request to an E65/E80
     /// grinder; a poll makes the app show the grinder as connected.
     fn note_request(&self, peer: Option<SocketAddr>, poll: bool) {
-        let mut inner = self.lock();
-        let g = &mut inner.grinder;
-        if peer.is_some() {
-            g.peer = peer;
-        }
-        g.requests += 1;
-        if poll {
-            g.polls += 1;
-            g.last_poll = Some(Instant::now());
-        }
+        self.lock().grinder.note(peer, poll);
     }
 
-    fn set_wifi(&self, link: WifiLink) {
+    /// A new E65/E80 link starts: it takes the pairing IDs typed in the app
+    /// from now on. Returns its owner number for [`Server::set_wifi`].
+    fn attach_wifi(&self, ids: mpsc::Sender<u32>) -> u64 {
+        let mut inner = self.lock();
+        inner.wifi_owner += 1;
+        inner.wifi_ids = Some(ids);
+        inner.wifi_owner
+    }
+
+    /// The E65/E80 link stopped: forget what it said. What an E64 WS told
+    /// (its address, request counts) stays; the last poll goes, so the
+    /// grinder no longer shows as connected unless an E64 WS polls.
+    fn detach_wifi(&self) {
+        let mut inner = self.lock();
+        inner.wifi_owner += 1;
+        inner.wifi_ids = None;
+        inner.grinder.wifi = None;
+        inner.grinder.last_poll = None;
+    }
+
+    /// Shows a link that is about to start, until it reports for itself.
+    fn show_wifi(&self, link: WifiLink) {
         self.lock().grinder.wifi = Some(link);
     }
 
-    fn set_wifi_ids(&self, tx: tokio::sync::mpsc::Sender<u32>) {
-        let _ = self.wifi_ids.set(tx);
+    /// The link's state, unless that link was replaced meanwhile.
+    fn set_wifi(&self, owner: u64, link: WifiLink) {
+        let mut inner = self.lock();
+        if inner.wifi_owner == owner {
+            inner.grinder.wifi = Some(link);
+        }
+    }
+
+    /// A poll of an E65/E80 grinder went through.
+    fn note_wifi_poll(&self, owner: u64, peer: Option<SocketAddr>) {
+        let mut inner = self.lock();
+        if inner.wifi_owner == owner {
+            inner.grinder.note(peer, true);
+        }
     }
 
     /// Hands the pairing ID an E65/E80 grinder shows to its link, for when
     /// gbs-anywhere lost it. Taken only while the link asks for one; the link
     /// checks it with the grinder before keeping it.
     pub fn use_grinder_pairing_id(&self, id: u32) -> Result<(), PairingIdRefusal> {
-        let tx = self.wifi_ids.get().ok_or(PairingIdRefusal::NoLink)?;
-        let asks = self.grinder_link().wifi.is_some_and(|w| w.needs_pairing_id);
+        let (tx, asks) = {
+            let inner = self.lock();
+            let asks = inner
+                .grinder
+                .wifi
+                .as_ref()
+                .is_some_and(|w| w.needs_pairing_id);
+            (inner.wifi_ids.clone(), asks)
+        };
+        let tx = tx.ok_or(PairingIdRefusal::NoLink)?;
         if !asks {
             return Err(PairingIdRefusal::NotNeeded);
         }
@@ -179,6 +275,18 @@ impl Server {
         // A panic while holding the lock leaves plain data; keep serving.
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
+
+/// Waits until `cond` holds, for up to five seconds.
+#[cfg(test)]
+pub(crate) async fn wait_for(what: &str, cond: impl Fn() -> bool) {
+    for _ in 0..250 {
+        if cond() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    panic!("timed out waiting for {what}");
 }
 
 /// Where to listen.

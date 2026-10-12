@@ -21,6 +21,9 @@ The two grinder families connect differently:
 Tested with the E64 WS and the E65W GbS; the other E65/E80 GbS models offer
 the same "Generic WiFi" option.
 
+New here? The [guide](GUIDE.md) walks through setup, daily use,
+upgrading and troubleshooting; this README is the reference.
+
 > Not affiliated with Mahlkönig or Hemro.
 
 ## Run it
@@ -33,8 +36,9 @@ docker run -d --name gbs-anywhere --restart unless-stopped \
   -p 80:80 -v gbs-anywhere:/data ghcr.io/skamba/gbs-anywhere
 ```
 
-The `/data` volume keeps the integrations you add in the app (see
-[Integrations](#integrations)).
+The `/data` volume keeps what you set up in the app: integrations (see
+[Integrations](#integrations)), [settings](#settings-in-the-app) and the
+shot history.
 
 `latest` is the newest release. Pin a version with `:0.1` (newest 0.1.x) or
 `:0.1.0`, or follow `:nightly`, built each night from the newest commit, which
@@ -47,7 +51,8 @@ or a DHCP reservation in your router. Port 80 must be free and reachable from
 the grinder (allow it in the firewall).
 
 For an E65/E80 GbS, also tell gbs-anywhere where the grinder is (see
-[Set up an E65/E80 GbS](#set-up-an-e65e80-gbs)):
+[Set up an E65/E80 GbS](#set-up-an-e65e80-gbs)), either later in the app's
+settings or when starting it:
 
 ```sh
 docker run -d --name gbs-anywhere --restart unless-stopped \
@@ -61,9 +66,8 @@ Or from source, with Rust installed:
 cargo run --release
 ```
 
-From source, pass `--config <file>` to keep integrations added in the app,
-and with `--grinder` the pairing, across restarts (Docker does this in
-`/data`).
+From source, pass `--config <file>` to keep what you set up in the app, and
+an E65/E80 pairing, across restarts (Docker does this in `/data`).
 
 ## Set up the E64 WS
 
@@ -78,7 +82,8 @@ The grinder treats gbs-anywhere as a Xenia, so the menus below say "Xenia".
 4. Open **Configuration**. The scan will not find gbs-anywhere, so enter the
    hostname by hand: the computer's IP address, e.g. `192.168.1.20`. An IP is
    more reliable than a `.local` name.
-5. Within a few seconds the app shows **grinder connected**. The grinder polls
+5. Within a few seconds the status at the top right of the app turns
+   **Ready** (tap it: **Grinder connected**). The grinder polls
    every 2 seconds from then on.
 
 **Make a recipe use Grind-by-Sync**
@@ -97,8 +102,9 @@ A blue chain icon on the recipe means GbS is active.
 These grinders don't poll a machine. With their "Generic WiFi" option the
 machine pairs with the grinder and, after every Grind-by-Sync grind, picks up
 the grinder's request for that shot and answers with its time and weight.
-gbs-anywhere does this when you start it with the grinder's address
-(`--grinder`, or `GRINDER_HOST` in Docker, as [above](#run-it)).
+gbs-anywhere does this once it knows the grinder's address: enter it in the
+app's settings, or start gbs-anywhere with it (`--grinder`, or
+`GRINDER_HOST` in Docker, as [above](#run-it)).
 
 The grinder's address is in its own WiFi settings, e.g. `192.168.1.30`. Give
 the grinder a fixed IP or a DHCP reservation as well. gbs-anywhere talks to it
@@ -111,9 +117,9 @@ on port 30001 over HTTPS; the grinder needs no access to the computer.
    enable **Generic WiFi**. Leave the other machines off. Set **Grouphead
    Selection** to **Grouphead 1** (or **All**): Grind-by-Sync only learns
    from shots of the selected group, and gbs-anywhere is a one-group machine.
-3. Start gbs-anywhere with the grinder's address (`GRINDER_HOST`, see
-   [Run it](#run-it)). The app now says to accept gbs-anywhere on the grinder
-   and shows a pairing code.
+3. Enter the grinder's address in the app's settings (or start gbs-anywhere
+   with `GRINDER_HOST`, see [Run it](#run-it)). The app now says to accept
+   gbs-anywhere on the grinder and shows a pairing code.
 4. On the grinder, in the same **Machine To Machine** menu, open **Generic
    WiFi → Configuration** and tap **Start Pairing**. (If you enabled Generic
    WiFi after starting gbs-anywhere, give it up to a minute to notice.) Within a few seconds **gbs-anywhere** shows up under **Available
@@ -122,10 +128,11 @@ on port 30001 over HTTPS; the grinder needs no access to the computer.
    may change: the app always shows the current one).
 5. The Generic WiFi entry is now called **gbs-anywhere**. Its **Diagnosis**
    shows the activity status as on and group 1 as idle, and the app shows
-   **grinder connected**.
+   the grinder as **Ready** under Status.
 
 The pairing is kept in `/data/grinder-pairing.json` (next to the `--config`
-file), so a restart needs no new pairing. Keep the `/data` volume. Deleting
+file), so a restart needs no new pairing, and neither does a new address for
+the grinder. Keep the `/data` volume. Deleting
 that file makes gbs-anywhere pair anew; clear the old pairing on the grinder
 first (**Clear Pairing**). Clear Pairing also switches Generic WiFi off:
 switch it on again before you pair.
@@ -165,7 +172,8 @@ shot is coming. Pull the shot, then enter its time and weight in the app
 (`http://<computer's IP>/` on your phone, e.g. `http://192.168.1.20/`), or let
 an [integration](#integrations) report it. gbs-anywhere passes it on to
 the grinder, which adjusts as usual. gbs-anywhere keeps the grinder waiting
-for the shot for up to `--brew-timeout-s` (3 minutes unless set), which leaves
+for the shot for up to the shot window (3 minutes unless changed in the app's
+settings or with `--brew-timeout-s`), which leaves
 time to tamp and pull; if no shot comes by then, it tells the grinder the shot
 was cancelled. If you grind again before pulling the shot, the newer grind is
 the one the shot counts for, and the grinder is told the older one was
@@ -176,13 +184,14 @@ gbs-anywhere keeps trying for two minutes and the app shows the problem.
 
 ## Pull a shot on the E64 WS
 
-1. Open `http://<that IP>/` on your phone, e.g. `http://192.168.1.20/`. The header shows
-   "grinder connected" while the grinder is polling.
+1. Open `http://<that IP>/` on your phone, e.g. `http://192.168.1.20/`.
+   While the grinder is polling, the status at the top right says **Ready**
+   and **System status** on the Start tab lists **Grinder connected**.
 2. Grind with a GbS recipe.
 3. When the grinder says "Press grinder rotary knob to start brewing.", press
    the knob and start the shot on your machine right away.
 4. Time the shot from pump start (always use the same timer), weigh the cup,
-   and enter both in the app. Tap **Send to grinder**.
+   and enter both in the app. Tap **Send**.
 5. The grinder shows its new grind setting.
 
 Shots of 10 s or less and over 80 s are ignored by the grinder, as is an
@@ -198,21 +207,64 @@ to the grinder by itself. You can still
 enter or correct a shot on your phone; whichever comes first wins, also when
 several integrations run at once.
 
-Tap the green **+** at the top right of the app, pick one and fill in its
-form. Each
-integration gets a card showing whether it is ready and what it last
-sent; **Remove** stops it. Integrations added in the app are saved in the
+Under **Status → Machine integrations**, tap the green **+**, pick one and
+fill in its form. Each integration gets a card showing whether it is ready
+and what it last sent; its ⋮ menu has **Edit** and **Delete**. Integrations added in the app are saved in the
 settings file (`--config`, `/data/gbs-anywhere.json` in Docker, holding their
 passwords), so keep the `/data` volume. Without a settings file they last
 until the next restart.
 
+An integration added in the app can be changed there too. Its passwords are
+never shown again; leave a password empty to keep the saved one.
+
 Integrations can also be set with flags or environment variables. Those show
-"Set on the command line" and can only be turned off by removing the flags.
+"From the start settings" and can only be turned off by removing the flags,
+or by moving them into the app first: with a settings file, the app offers
+to take such an integration over. Its settings, password included, are then
+saved as if you had added it in the app, so there is nothing to type again.
+From the next start on its flags are ignored (the log says so once), and you
+can remove them whenever it suits you. Once moved, it is changed and removed
+in the app like any other; removing it there does not bring the flags back.
 
 | integration | reads | setup |
 |---|---|---|
 | La Marzocco cloud | time and weight from a connected La Marzocco's coffee log | [src/integration/la_marzocco](src/integration/la_marzocco/README.md) |
 | Half Decent Scale | time from first drops and weight, from a Half Decent Scale over WiFi | [src/integration/half_decent](src/integration/half_decent/README.md) |
+
+## Settings in the app
+
+Two settings can be changed in the app, so the command line can stay as it
+is:
+
+- **Time to pull the shot** (the shot window): how long gbs-anywhere waits
+  for a shot's time and weight before it gives up on that shot
+  (`--brew-timeout-s`, 3 minutes unless set). In the app it goes from 0:30
+  to 10:00 minutes, in 15-second steps or typed in.
+- **Grinder IP address**: the E65/E80 GbS to pair with (`--grinder`,
+  `GRINDER_HOST`), as an IP address such as `192.168.1.30`, optionally with
+  `:port`. A new address takes effect at once and keeps the pairing;
+  removing it stops pairing (the E64 WS needs no address).
+
+A setting changed in the app is saved in the settings file (`--config`,
+`/data/gbs-anywhere.json` in Docker) and wins over its flag or environment
+variable from then on, also after a restart. Without a settings file, a
+change lasts until the next restart.
+
+**Appearance** (System, Light or Dark) and **Language** (Auto, English or
+Deutsch) sit in the same place, but are kept on each phone or computer
+rather than on the server: by default the app follows the device's light or
+dark mode and its language.
+
+The app also shows the last 200 shots the grinder asked for, with their
+time, weight and target (kept in `history.json` next to the settings file),
+and the last 1,000 lines of gbs-anywhere's log (INFO and up, as `docker logs`
+prints them by default), ready to copy into a bug report.
+
+**Update check.** One minute after it starts, and then once a day,
+gbs-anywhere asks GitHub for its latest release, so the app can say when a
+newer version is out. That request carries nothing but the running version
+(in the User-Agent). Turn it off with `--update-check off`
+(`UPDATE_CHECK=off` in Docker).
 
 ## Options
 
@@ -220,14 +272,15 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 
 | flag | default | what |
 |---|---|---|
-| `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever) |
-| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for the integrations added in the app; also `CONFIG_FILE` |
+| `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever); **Time to pull the shot** set in the app wins |
+| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings, integrations moved from the command line); the shot history (`history.json`) and the E65/E80 pairing are kept next to it; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs |
 | `--log <file>` | off | append every grinder request to a file |
 | `-p, --ports <list>` | 80 | ports to serve on |
-| `--grinder <host>` | off | pair with this E65/E80 GbS over its "Generic WiFi" option; also `GRINDER_HOST` |
+| `--grinder <host>` | off | pair with this E65/E80 GbS over its "Generic WiFi" option; also `GRINDER_HOST`; an address set in the app wins |
 | `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing across restarts; also `GRINDER_PAIRING_FILE` |
 | `--grinder-pairing-id <id>` | off | the pairing ID the grinder shows, used while the saved one does not work (the app can take it too); also `GRINDER_PAIRING_ID` |
+| `--update-check <on\|off>` | on | look for a newer release once a day (see [Update check](#settings-in-the-app)); also `UPDATE_CHECK` |
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
 | `--hds-*` | off | Half Decent Scale, see [its README](src/integration/half_decent/README.md) |
 
@@ -240,18 +293,27 @@ JSON on the same port as the app, for scripts or another front end:
 
 | method | path | what |
 |---|---|---|
-| GET | `/api/state` | version, phase, machine state, last shot, grinder connection (with `grinder.wifi` for an E65/E80 GbS), integrations |
+| GET | `/api/state` | version, phase, machine state, last shot, grinder connection (with `grinder.wifi` for an E65/E80 GbS; its `unreachable` is true while the grinder does not answer at all), integrations (each status line in English as `detail`, and as `detail_key` and `detail_vars` for wording it in another language), `settings`, `update`, `boot_id` (new on every start) |
+| PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30"}` (either one) changes and saves the [settings](#settings-in-the-app); `shot_window_s` is 0 (no limit) or 30 to 3600, `grinder_host` is an IP address or name with an optional `:port` (`null` removes it) |
 | GET | `/api/events?after=N` | events with `seq > N` |
 | GET | `/api/events/stream` | the same, live, as server-sent events |
 | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` reports the running shot (time up to 600 s; without a weight, the recipe weight is sent) |
 | POST | `/api/shot/abort` | aborts the running shot (the grinder skips it) |
 | GET | `/api/integrations/kinds` | the integrations that can be added, with their setup forms |
 | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{"username":"…","password":"…"}}` adds an integration |
+| GET | `/api/integrations/<id>/settings` | the settings of an integration added in the app, without passwords (`secrets_set` lists the ones that are set) |
+| PUT | `/api/integrations/<id>` | `{"settings":{…}}` changes an integration added in the app and restarts it; a password left out or empty stays as saved |
+| POST | `/api/integrations/<id>/adopt` | moves an integration set on the command line into the app (needs a settings file) |
 | DELETE | `/api/integrations/<id>` | removes an integration added in the app |
+| GET | `/api/history` | the last 200 shots the grinder asked for, newest first |
+| GET | `/api/log?after=N` | the last 1,000 log lines (INFO and up) with `seq > N` |
+| GET | `/api/log/stream` | new log lines, live, as server-sent events |
 | POST | `/api/grinder/pairing` | `{"pairing_id":1234}` gives the pairing ID an E65/E80 GbS shows, only while the app asks for it |
 
 The API has no login: anyone on your network who can open the app can add or
-remove integrations, as they can report shots. Passwords are never sent back.
+remove integrations, change the settings and read the log, as they can
+report shots. That includes the grinder address: anyone on the network can
+point gbs-anywhere at another E65/E80 grinder. Passwords are never sent back.
 
 ## Build
 
@@ -267,7 +329,9 @@ Each integration is one folder under `src/integration/`; `la_marzocco/` is a
 complete example. The layout and the rules every integration follows are in
 the [`integration` module docs](src/integration/mod.rs) (`cargo doc --open`).
 The app builds its list behind **+** and the setup form from the folder's
-`KIND`, so nothing in `web/` changes.
+`KIND`, so nothing in `web/` changes. Its texts are English; German ones can
+be added to the app's catalog later (see AGENTS.md), and until then the app
+shows the English in every language.
 
 ## License
 

@@ -29,7 +29,7 @@ docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
 
 | setting | flag | env | default |
 |---|---|---|---|
-| Scale address | `--hds-host` | `HDS_HOST` | off (`hds.local` when added in the app and left empty) |
+| Scale IP address | `--hds-host` | `HDS_HOST` | off (`hds.local` when added in the app and left empty) |
 
 ## How it works
 
