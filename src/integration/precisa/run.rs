@@ -41,6 +41,13 @@ const COMMAND_GAP: Duration = Duration::from_millis(200);
 const TIMER_RETRY: Duration = Duration::from_millis(800);
 /// ... up to this many times in all.
 const TIMER_TRIES: u32 = 3;
+/// How long a connect may take before it is cancelled ...
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// ... and how often one blocked by a pending earlier attempt is retried.
+const CONNECT_TRIES: u32 = 3;
+/// Failed attempts in a row that are the adapter's fault (not just no
+/// scale in sight) before Bluetooth is opened again.
+const ADAPTER_ERRORS: u32 = 3;
 /// Between two double beeps, so four beeps are heard as four.
 const BEEP_GAP: Duration = Duration::from_millis(700);
 /// After the pump stops, the weight is taken once it has not risen for the
@@ -64,13 +71,69 @@ async fn run(link: Link, cfg: Config) {
     // A switched-off scale is the normal case: keep looking at the configured
     // pace, without growing delays, so it reconnects soon after switching on.
     let mut backoff = Backoff::new(cfg.reconnect_every, cfg.reconnect_every);
-    // One D-Bus connection for the whole run. Each `Manager` opens its own
-    // and keeps it; one per attempt used up the system bus's per-user limit
-    // ("maximum number of active connections for UID 0").
-    let bt = loop {
+    // Held for the whole run: a pump sensor sees someone listens and leaves
+    // reporting to this integration.
+    let mut pump = link.pump();
+    loop {
+        // One D-Bus connection at a time. Each `Manager` opens its own and
+        // keeps it; one per attempt used up the system bus's per-user limit
+        // ("maximum number of active connections for UID 0"). It is opened
+        // again only when the adapter itself fails (swapped, restarted).
+        let bt = open_bluetooth(&link).await;
+        let mut adapter_errors = 0;
+        loop {
+            link.status.starting("looking for the scale");
+            match connect(&bt.adapter, &cfg).await {
+                Ok(mut scale) => {
+                    backoff.reset();
+                    adapter_errors = 0;
+                    tracing::info!("{TITLE}: connected to {}", scale.name);
+                    link.status.subject(&scale.name);
+                    link.status.connected(READY);
+                    let served = serve(&link, &cfg, &mut scale, &mut pump).await;
+                    scale.disconnect().await;
+                    match served {
+                        // The server is gone.
+                        Ok(()) => return,
+                        Err(e) => {
+                            tracing::warn!("{TITLE}: {e:#}");
+                            link.status.error(format!("{e:#}"));
+                        }
+                    }
+                }
+                Err(e) if is_not_found(&e) => {
+                    // The scale is switched off. Not worth a warning.
+                    adapter_errors = 0;
+                    tracing::debug!("{TITLE}: {e:#}");
+                    link.status.error(format!("{e:#}"));
+                }
+                Err(e) => {
+                    adapter_errors += 1;
+                    tracing::warn!("{TITLE}: {e:#}");
+                    link.status.error(format!("{e:#}"));
+                    if adapter_errors >= ADAPTER_ERRORS {
+                        tracing::warn!("{TITLE}: Bluetooth adapter keeps failing, opening it again");
+                        break;
+                    }
+                }
+            }
+            backoff.wait().await;
+        }
+        // `bt` is dropped here, closing its D-Bus connection before the next.
+        drop(bt);
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+}
+
+/// Opens Bluetooth, retrying until an adapter is there.
+async fn open_bluetooth(link: &Link) -> Bluetooth {
+    loop {
         link.status.starting("opening Bluetooth");
         match Bluetooth::open().await {
-            Ok(bt) => break bt,
+            Ok(bt) => {
+                tracing::info!("{TITLE}: using Bluetooth adapter {}", bt.info);
+                return bt;
+            }
             Err(e) => {
                 tracing::warn!("{TITLE}: {e:#}");
                 link.status.error(format!("{e:#}"));
@@ -78,37 +141,13 @@ async fn run(link: Link, cfg: Config) {
                 tokio::time::sleep(Duration::from_secs(10)).await;
             }
         }
-    };
-    // Held for the whole run: a pump sensor sees someone listens and leaves
-    // reporting to this integration.
-    let mut pump = link.pump();
-    loop {
-        link.status.starting("looking for the scale");
-        match connect(&bt.adapter, &cfg).await {
-            Ok(mut scale) => {
-                backoff.reset();
-                tracing::info!("{TITLE}: connected to {}", scale.name);
-                link.status.subject(&scale.name);
-                link.status.connected(READY);
-                let served = serve(&link, &cfg, &mut scale, &mut pump).await;
-                scale.disconnect().await;
-                match served {
-                    // The server is gone.
-                    Ok(()) => return,
-                    Err(e) => {
-                        tracing::warn!("{TITLE}: {e:#}");
-                        link.status.error(format!("{e:#}"));
-                    }
-                }
-            }
-            Err(e) => {
-                // Mostly: the scale is switched off. Not worth a warning.
-                tracing::debug!("{TITLE}: {e:#}");
-                link.status.error(format!("{e:#}"));
-            }
-        }
-        backoff.wait().await;
     }
+}
+
+/// Whether a failed attempt just did not find the scale (switched off),
+/// rather than the adapter failing.
+fn is_not_found(e: &anyhow::Error) -> bool {
+    format!("{e:#}").contains("scale not found")
 }
 
 /// Runs while the scale stays connected. `Ok` once the server is gone.
@@ -157,15 +196,10 @@ async fn shot(
     let what = if test { "test" } else { "grinder is waiting" };
     tracing::info!(
         "{TITLE}: {what}, timing by {}",
-        if sensed {
-            "the pump sensor"
-        } else {
-            "the scale"
-        }
+        if sensed { "the pump sensor" } else { "the scale" }
     );
     if sensed {
-        link.status
-            .watching(format!("{what} · waiting for the pump"));
+        link.status.watching(format!("{what} · waiting for the pump"));
         return by_pump(link, cfg, scale, test, pump).await;
     }
     link.status.watching(format!("{what} · watching the scale"));
@@ -188,15 +222,9 @@ async fn by_scale(
     scale.send(&protocol::TARE).await.context("tare")?;
     if cfg.drive_timer {
         tokio::time::sleep(COMMAND_GAP).await;
-        scale
-            .send(&protocol::RESET_TIMER)
-            .await
-            .context("reset timer")?;
+        scale.send(&protocol::RESET_TIMER).await.context("reset timer")?;
         tokio::time::sleep(COMMAND_GAP).await;
-        scale
-            .send(&protocol::START_TIMER)
-            .await
-            .context("start timer")?;
+        scale.send(&protocol::START_TIMER).await.context("start timer")?;
     }
     // Whether the scale has confirmed its timer runs; retried if not.
     let mut timer_confirmed = !cfg.drive_timer;
@@ -317,15 +345,9 @@ async fn by_pump(
     let start = Instant::now();
     link.status.watching(format!("{what} · pump running"));
     if cfg.drive_timer {
-        scale
-            .send(&protocol::RESET_TIMER)
-            .await
-            .context("reset timer")?;
+        scale.send(&protocol::RESET_TIMER).await.context("reset timer")?;
         tokio::time::sleep(COMMAND_GAP).await;
-        scale
-            .send(&protocol::START_TIMER)
-            .await
-            .context("start timer")?;
+        scale.send(&protocol::START_TIMER).await.context("start timer")?;
     }
 
     // Reaching the recipe weight ends the shot at that moment, pump running
@@ -377,13 +399,11 @@ async fn by_pump(
     }
 
     // 3. The last drops: weigh once the weight stops rising.
-    link.status
-        .watching(format!("{what} · pump stopped, weighing"));
+    link.status.watching(format!("{what} · pump stopped, weighing"));
     let settling = Instant::now();
     let mut peak = grams;
     let mut last_rise = Instant::now();
-    while last_rise.elapsed() < cfg.stable_for && settling.elapsed() < cfg.stable_for + SETTLE_EXTRA
-    {
+    while last_rise.elapsed() < cfg.stable_for && settling.elapsed() < cfg.stable_for + SETTLE_EXTRA {
         tokio::select! {
             reading = scale.next_reading() => {
                 grams = reading?.grams;
@@ -447,10 +467,8 @@ fn target_weight(link: &Link, cfg: &Config) -> Option<f64> {
         .filter(|g| g.is_finite() && *g > 0.0);
     match target {
         Some(g) => tracing::info!("{TITLE}: the shot ends at the recipe weight, {g:.1} g"),
-        None => tracing::info!(
-            "{TITLE}: no recipe weight from the grinder; the shot ends \
-            when the flow stops"
-        ),
+        None => tracing::info!("{TITLE}: no recipe weight from the grinder; the shot ends \
+            when the flow stops"),
     }
     target
 }
@@ -475,13 +493,10 @@ async fn finish(
     }
     if time < cfg.min_time && !at_target {
         let min = cfg.min_time.as_secs_f64();
-        tracing::info!(
-            "{TITLE}: shot ended after {secs:.1} s, below the minimum \
-            {min:.0} s: not reported"
-        );
-        link.status.connected(format!(
-            "shot ended after {secs:.1} s, under {min:.0} s: not reported"
-        ));
+        tracing::info!("{TITLE}: shot ended after {secs:.1} s, below the minimum \
+            {min:.0} s: not reported");
+        link.status
+            .connected(format!("shot ended after {secs:.1} s, under {min:.0} s: not reported"));
         aborted(cfg, scale).await;
         return;
     }
@@ -510,11 +525,7 @@ async fn finish(
     };
     link.status.connected(line);
     if cfg.beep {
-        let times = if matches!(outcome, ReportOutcome::Reported { .. }) {
-            2
-        } else {
-            4
-        };
+        let times = if matches!(outcome, ReportOutcome::Reported { .. }) { 2 } else { 4 };
         beep(scale, times).await;
     }
 }
@@ -531,9 +542,8 @@ async fn countdown(
     let secs = cfg.start_delay.as_secs_f64();
     tracing::info!("{TITLE}: measuring starts in {secs:.1} s");
     let what = if test { "test" } else { "grinder is waiting" };
-    link.status.watching(format!(
-        "{what} · start the machine, measuring in {secs:.0} s"
-    ));
+    link.status
+        .watching(format!("{what} · start the machine, measuring in {secs:.0} s"));
     let until = Instant::now() + cfg.start_delay;
     let mut tick = tokio::time::interval(cfg.live_every);
     let mut grams = 0.0;
@@ -676,6 +686,8 @@ struct Bluetooth {
     // Kept alive with the adapter, which works through its connection.
     _manager: Manager,
     adapter: Adapter,
+    /// What BlueZ calls the adapter, e.g. `hci0 (usb:v0BDAp8771d0001)`.
+    info: String,
 }
 
 impl Bluetooth {
@@ -686,10 +698,15 @@ impl Bluetooth {
             .await?
             .into_iter()
             .next()
-            .context("no Bluetooth adapter")?;
+            .context("no Bluetooth adapter (is one plugged in and powered on?)")?;
+        let info = adapter
+            .adapter_info()
+            .await
+            .unwrap_or_else(|_| "(unknown)".to_owned());
         Ok(Self {
             _manager: manager,
             adapter,
+            info,
         })
     }
 }
@@ -703,10 +720,7 @@ async fn connect(adapter: &Adapter, cfg: &Config) -> anyhow::Result<Scale> {
     let _ = adapter.stop_scan().await;
     let (peripheral, name) = found?;
 
-    peripheral
-        .connect()
-        .await
-        .context("connecting to the scale")?;
+    open_link(&peripheral).await?;
     match set_up(peripheral.clone(), name).await {
         Ok(scale) => Ok(scale),
         Err(e) => {
@@ -715,6 +729,43 @@ async fn connect(adapter: &Adapter, cfg: &Config) -> anyhow::Result<Scale> {
             Err(e)
         }
     }
+}
+
+/// Connects to the scale. BlueZ answers "in progress" while an earlier
+/// attempt is still pending (one that timed out, or from before the
+/// integration restarted): that one is cancelled and the connect retried.
+/// A connect that hangs is cancelled too, so it cannot block the next.
+async fn open_link(peripheral: &Peripheral) -> anyhow::Result<()> {
+    for attempt in 1..=CONNECT_TRIES {
+        match tokio::time::timeout(CONNECT_TIMEOUT, peripheral.connect()).await {
+            Ok(Ok(())) => return Ok(()),
+            Ok(Err(e)) if e.to_string().to_lowercase().contains("in progress") => {
+                // Maybe the pending attempt is about to succeed.
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if peripheral.is_connected().await.unwrap_or(false) {
+                    return Ok(());
+                }
+                tracing::info!("{TITLE}: a connection to the scale is still pending, \
+                    cancelling it (try {attempt} of {CONNECT_TRIES})");
+                let _ = peripheral.disconnect().await;
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Ok(Err(e)) => {
+                let _ = peripheral.disconnect().await;
+                return Err(e).context("connecting to the scale");
+            }
+            Err(_) => {
+                // Cancel the pending connect in BlueZ, or it answers "in
+                // progress" to the next one.
+                let _ = peripheral.disconnect().await;
+                anyhow::bail!(
+                    "connecting to the scale took over {} s",
+                    CONNECT_TIMEOUT.as_secs()
+                );
+            }
+        }
+    }
+    anyhow::bail!("connecting to the scale: still in progress after {CONNECT_TRIES} tries")
 }
 
 /// Starts a scan; one still running (from an earlier search, or another
@@ -761,10 +812,7 @@ async fn set_up(peripheral: Peripheral, name: String) -> anyhow::Result<Scale> {
         notifications,
         name,
     };
-    scale
-        .send(&protocol::UNIT_GRAMS)
-        .await
-        .context("set grams")?;
+    scale.send(&protocol::UNIT_GRAMS).await.context("set grams")?;
     Ok(scale)
 }
 
