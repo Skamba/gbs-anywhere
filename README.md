@@ -21,8 +21,8 @@ The two grinder families connect differently:
 Tested with the E64 WS and the E65W GbS; the other E65/E80 GbS models offer
 the same "Generic WiFi" option.
 
-New here? The [guide](GUIDE.md) walks through setup, daily use,
-upgrading and troubleshooting; this README is the reference.
+**New here? Start with the [manual](MANUAL.md):** setup, daily use,
+upgrading and troubleshooting, step by step. This README is the reference.
 
 > Not affiliated with Mahlkönig or Hemro.
 
@@ -122,10 +122,11 @@ on port 30001 over HTTPS; the grinder needs no access to the computer.
    gbs-anywhere on the grinder and shows a pairing code.
 4. On the grinder, in the same **Machine To Machine** menu, open **Generic
    WiFi → Configuration** and tap **Start Pairing**. (If you enabled Generic
-   WiFi after starting gbs-anywhere, give it up to a minute to notice.) Within a few seconds **gbs-anywhere** shows up under **Available
-   devices**, with the same code. Select it and tap **Accept Pairing**. If the
-   grinder's pairing times out first, tap **Start Pairing** again (the code
-   may change: the app always shows the current one).
+   WiFi after starting gbs-anywhere, give it up to a minute to notice.)
+   Within a few seconds **gbs-anywhere** shows up under **Available
+   devices**, with the same code: tap **Accept Pairing**. If the grinder's
+   pairing times out first, tap **Start Pairing** again (the code may
+   change: the app always shows the current one).
 5. The Generic WiFi entry is now called **gbs-anywhere**. Its **Diagnosis**
    shows the activity status as on and group 1 as idle, and the app shows
    the grinder as **Ready** under Status.
@@ -141,11 +142,12 @@ The grinder may restart right after you accept (the E65W with firmware
 V01.36 does): the screen freezes, the light pulses red, then white, and the
 grinder starts again. Leave gbs-anywhere running: when the grinder stops
 answering while pairing, gbs-anywhere sends it nothing for 3 minutes (the
-app says so), because a request while it starts up can make it lose the
-pairing it has just saved. (The same happens if the grinder goes to standby
-or is switched off while the pairing code is showing: then gbs-anywhere may
-take up to 3 minutes to show up under **Available devices** again.) After
-those 3 minutes, open **Generic WiFi → Configuration** on the grinder:
+app shows that the grinder does not answer, and why), because a request
+while it starts up can make it lose the pairing it has just saved. (The
+same happens if the grinder goes to standby or is switched off while the
+pairing code is showing: then gbs-anywhere may take up to 3 minutes to show
+up under **Available devices** again.) After those 3 minutes, open
+**Generic WiFi → Configuration** on the grinder:
 
 - It shows a **Pairing ID** next to the name gbs-anywhere: the pairing is
   made, but gbs-anywhere never learned its ID. The app asks for it: type the
@@ -156,6 +158,8 @@ those 3 minutes, open **Generic WiFi → Configuration** on the grinder:
 - It shows **Start Pairing** and no gbs-anywhere entry: the pairing was lost
   in the restart. If Generic WiFi is switched off again, enable it as in
   step 2. Then start pairing and accept once more.
+
+The [manual](MANUAL.md#setup-and-pairing) has these steps and other fixes.
 
 If the pairing is cleared on the grinder (**Clear Pairing**), gbs-anywhere
 asks to pair again by itself once Generic WiFi is switched on again and the

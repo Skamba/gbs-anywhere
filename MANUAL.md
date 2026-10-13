@@ -1,4 +1,4 @@
-# gbs-anywhere guide
+# gbs-anywhere manual
 
 A walk-through from first setup to daily use, with fixes for the problems
 people run into. The [README](README.md) has the reference: every flag,
@@ -97,7 +97,11 @@ the grinder's address, and the grinder needs nothing from the computer.
    Start tab and in the grinder card under Status.
 3. On the grinder: **Generic WiFi → Configuration → Start Pairing**.
    **gbs-anywhere** appears under **Available devices** with the same code.
-   Select it and tap **Accept Pairing**.
+   Tap **Accept Pairing**.
+   The E65W may freeze and restart right after this. Leave it and
+   gbs-anywhere alone for 3 minutes and follow
+   [Troubleshooting → Setup and pairing](#setup-and-pairing): "The grinder
+   freezes and restarts right after Accept Pairing".
 4. The Generic WiFi entry is now called **gbs-anywhere**. Its **Diagnosis**
    shows the activity status as on and group 1 as idle. In the app, the
    grinder shows **Ready** under Status.
@@ -165,7 +169,7 @@ The app has four tabs.
 
 ### Start: the current shot
 
-<img src="assets/guide/app-start-running.jpg" width="300" alt="Start tab while a shot runs: step 2 with the timer and the time left">
+<img src="assets/manual/app-start-running.jpg" width="300" alt="Start tab while a shot runs: step 2 with the timer and the time left">
 
 **System status** says whether everything is ready; tap it for the details.
 When something keeps a shot from starting, such as **No grinder
@@ -186,7 +190,7 @@ running, or the one that failed, opens by itself.
    guess: the grinder decides by itself, and may count a shot near the
    target as correct.
 
-<img src="assets/guide/app-start-result.jpg" width="300" alt="Start tab after a shot: step 3 says the shot was 1.9 s too fast and the next grind will be finer">
+<img src="assets/manual/app-start-result.jpg" width="300" alt="Start tab after a shot: step 3 says the shot was 1.9 s too fast and the next grind will be finer">
 
 Good to know:
 
@@ -199,7 +203,7 @@ Good to know:
 
 ### Status: grinder, integrations, settings, version
 
-<img src="assets/guide/app-status.jpg" width="300" alt="Status tab: grinder card, machine integrations, settings and version">
+<img src="assets/manual/app-status.jpg" width="300" alt="Status tab: grinder card, machine integrations, settings and version">
 
 - **Grinder**: its address, pairing ID, last contact and what it is doing.
 - **Machine integrations**: each one with its state and last shot. The ⋮
@@ -209,7 +213,7 @@ Good to know:
 
 ### History: the last 200 shots
 
-<img src="assets/guide/app-history.jpg" width="300" alt="History tab: shots grouped by day with time, weight, target and outcome">
+<img src="assets/manual/app-history.jpg" width="300" alt="History tab: shots grouped by day with time, weight, target and outcome">
 
 Each shot the grinder asked for, with its time and weight, the target, and
 how it ended: **Success**, **Aborted** (by you, or replaced by a newer grind)
@@ -296,13 +300,39 @@ out.**
 - If you enabled Generic WiFi after starting gbs-anywhere, give it up to a
   minute, then tap **Start Pairing** again. The code may change; the app
   always shows the current one.
+- If the grinder was in standby or switched off while the pairing code was
+  showing, gbs-anywhere leaves it alone for up to 3 minutes before it shows
+  up again.
 
-**The grinder restarted right after Accept Pairing, and the app asks for a
-pairing ID.**
-The pairing was made, but gbs-anywhere did not learn its ID. On the
-grinder, open the gbs-anywhere entry under Generic WiFi: the **Pairing ID**
-is the first line of **Configuration**, and also under **Diagnosis** after
-the serial number. Type it into the app and tap **Use this pairing ID**.
+**The grinder freezes and restarts right after Accept Pairing.**
+The E65W (firmware V01.36) does this: the screen freezes, the light pulses
+red, then white, and the grinder starts again. It still keeps the pairing,
+as long as nothing reaches it while it is starting up, so gbs-anywhere
+sends it nothing for 3 minutes once it stops answering.
+1. Leave the grinder and gbs-anywhere alone for those 3 minutes. Meanwhile
+   the app says **No grinder connected**, with the reason below it: "Last
+   error: if you have just accepted the pairing, it is restarting, so
+   nothing is sent for 3 min".
+2. Then open **Generic WiFi → Configuration** on the grinder.
+   - It shows a **Pairing ID** next to gbs-anywhere (nothing left to
+     accept): the pairing is saved. The app asks for the ID: type it in and
+     tap **Use this pairing ID**. The grinder card then shows **Ready**.
+     (The ID is also under **Diagnosis**, after the serial number.)
+   - It shows **Start Pairing** and no gbs-anywhere entry: the pairing was
+     lost. If Generic WiFi is switched off again (**Settings → Connectivity
+     → Machine To Machine**), switch it on. Then start pairing and accept
+     once more.
+3. Lost every time? Copy the lines around the accept from the **Log** tab
+   (the copy button replaces IP addresses) and open an issue with them (see
+   **Still stuck?** below).
+
+**The app asks for a pairing ID.**
+The grinder has gbs-anywhere paired, but gbs-anywhere does not know the ID
+(after the restart above, or when the `gbs-anywhere` volume from
+[2.2](#22-start-gbs-anywhere) was lost). On the grinder, the **Pairing ID**
+is the first line of **Generic WiFi → Configuration**, and also under
+**Diagnosis** after the serial number. Type it into the app and tap **Use
+this pairing ID**.
 
 **The grinder's Diagnosis shows the activity status as off, or group 1 as
 unknown.**
@@ -311,7 +341,9 @@ opens), that the grinder address under Status is right, and the Log tab for
 "not reachable".
 
 **The pairing was cleared on the grinder.**
-gbs-anywhere notices and asks to pair again: accept it on the grinder as in
+**Clear Pairing** also switches Generic WiFi off: switch it on again
+(**Settings → Connectivity → Machine To Machine**). gbs-anywhere notices
+within about a minute and asks to pair again: accept it on the grinder as in
 [2.4](#24-pair-an-e65e80-gbs).
 
 **The grinder got a new IP address.**

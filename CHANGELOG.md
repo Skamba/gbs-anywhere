@@ -56,7 +56,7 @@ a minor release may change behaviour.
   its status line as a key and values (such as `time_s`, `weight_g`), next
   to the English `detail`. The app uses them, and its own catalog for the
   integrations' setup forms, to show both in German.
-- A guide, [GUIDE.md](GUIDE.md): setup, daily use, upgrading from
+- A manual, [MANUAL.md](MANUAL.md): setup, daily use, upgrading from
   0.2.x and troubleshooting.
 - A redesigned app with four tabs: Start (the three steps of a shot, with
   the step that is running or failed opened), Status (grinder, integrations,
