@@ -47,6 +47,11 @@ const POLL: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const MIN_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// How long nothing is sent to a grinder that stopped answering while
+/// pairing. The E65W freezes and restarts as it saves an accepted pairing
+/// (about a minute and a half), and a request while it starts up can make it
+/// lose that pairing.
+const RESTART_QUIET: Duration = Duration::from_secs(180);
 /// Replies are a few hundred bytes; anything this big is not the grinder.
 const MAX_REPLY_BYTES: usize = 64 * 1024;
 /// Refusals in a row before the pairing counts as cleared on the grinder (one
@@ -73,6 +78,9 @@ pub struct WifiConfig {
     pub pairing_id: Option<u32>,
     /// Between job requests and pairing checks.
     pub poll: Duration,
+    /// How long nothing is sent after a pairing check got no answer (see
+    /// [`RESTART_QUIET`]).
+    pub restart_quiet: Duration,
 }
 
 impl WifiConfig {
@@ -88,6 +96,7 @@ impl WifiConfig {
             pairing_file: None,
             pairing_id: None,
             poll: POLL,
+            restart_quiet: RESTART_QUIET,
         })
     }
 }
@@ -384,19 +393,39 @@ impl WifiGrinder {
             code.map_or(String::new(), |c| format!(" (code {c})"))
         );
         tracing::info!("grinder: {detail}");
-        self.status(server, WifiState::Pairing, code, detail);
+        self.status(server, WifiState::Pairing, code, detail.clone());
 
         let ask = json!({ "version": API_VERSION, "applicationId": application_id });
+        // Left alone after a check got no answer (see `stay_quiet`).
+        let mut quiet = false;
         loop {
             tokio::time::sleep(self.cfg.poll).await;
-            let reply = self.post(wifi::PATH_PAIRING_STATUS, &ask).await?;
+            let outcome = self.post(wifi::PATH_PAIRING_STATUS, &ask).await;
+            if no_answer(&outcome) {
+                self.stay_quiet(server, outcome, !quiet).await;
+                quiet = true;
+                continue;
+            }
+            let reply = outcome?;
+            self.reached();
             if reply.status() == wifi::STATUS_APPLICATION_UNKNOWN {
-                tracing::info!("grinder: the pairing request expired, asking again");
+                if quiet {
+                    tracing::info!(
+                        "grinder: it no longer has the pairing request (it restarted?), asking \
+                         again"
+                    );
+                } else {
+                    tracing::info!("grinder: the pairing request expired, asking again");
+                }
                 return Ok(());
             }
             reply.ok().context("checking the pairing")?;
             let status: PairingStatusRes = reply.parse()?;
             if !status.accepted {
+                if std::mem::take(&mut quiet) {
+                    // Back without a restart: the request is still open.
+                    self.status(server, WifiState::Pairing, code, detail.clone());
+                }
                 continue;
             }
             let Some(id) = status.pairing_id else {
@@ -406,6 +435,30 @@ impl WifiGrinder {
             tracing::info!("grinder: paired");
             return Ok(());
         }
+    }
+
+    /// After a pairing check got no answer: sends the grinder nothing for a
+    /// while (see [`RESTART_QUIET`]). Shown as not answering meanwhile, and
+    /// logged as a warning the `first` time in a row.
+    async fn stay_quiet(&mut self, server: &Server, outcome: anyhow::Result<Reply>, first: bool) {
+        let secs = self.cfg.restart_quiet.as_secs();
+        let wait = if secs >= 60 {
+            format!("{} min", secs.div_ceil(60))
+        } else {
+            format!("{secs} s")
+        };
+        let detail = format!(
+            "not answering: if you have just accepted the pairing, it is restarting, so nothing \
+             is sent for {wait}"
+        );
+        if first {
+            tracing::warn!("grinder: {detail}: {}", failure(outcome));
+        } else {
+            tracing::debug!("grinder: {detail}: {}", failure(outcome));
+        }
+        self.unreachable = true;
+        self.status(server, WifiState::Error, None, detail);
+        tokio::time::sleep(self.cfg.restart_quiet).await;
     }
 
     /// The grinder has gbs-anywhere paired, but its pairing ID is not known
@@ -871,6 +924,16 @@ fn failure(outcome: anyhow::Result<Reply>) -> String {
     match outcome.and_then(|r| r.ok()) {
         Err(e) => format!("{e:#}"),
         Ok(()) => "unexpected reply".to_owned(),
+    }
+}
+
+/// Whether a request got no answer from the grinder: it failed in any way (a
+/// grinder that is starting up can fail them in several), or the grinder sent
+/// an HTTP error without a status.
+fn no_answer(outcome: &anyhow::Result<Reply>) -> bool {
+    match outcome {
+        Err(_) => true,
+        Ok(reply) => reply.status().is_empty() && !reply.http.is_success(),
     }
 }
 

@@ -13,9 +13,10 @@ a minor release may change behaviour.
   WiFi" option. After each Grind-by-Sync grind, the shot entered in the app
   or reported by an integration goes to the grinder, which adjusts as usual.
   The pairing is kept next to the settings file (`--grinder-pairing-file`).
-  When the pairing ID is lost (for example if the grinder restarts right
-  after the pairing is accepted), the app asks for the ID the grinder shows
-  (also `--grinder-pairing-id`). The app shows the pairing code while
+  If the grinder restarts as the pairing is accepted (the E65W with firmware
+  V01.36 does), gbs-anywhere sends it nothing for 3 minutes while it starts
+  up, so that it keeps the pairing; the app then asks for the ID the grinder
+  shows (also `--grinder-pairing-id`). The app shows the pairing code while
   pairing and "grinder connected" once paired. The grinder waits for the
   shot for up to `--brew-timeout-s` (3 minutes unless set); grinding again
   before pulling cancels the shot it was waiting for. A shot that cannot

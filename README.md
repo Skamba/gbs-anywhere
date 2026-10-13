@@ -127,17 +127,31 @@ on port 30001 over HTTPS; the grinder needs no access to the computer.
 The pairing is kept in `/data/grinder-pairing.json` (next to the `--config`
 file), so a restart needs no new pairing. Keep the `/data` volume. Deleting
 that file makes gbs-anywhere pair anew; clear the old pairing on the grinder
-first (**Clear Pairing**).
+first (**Clear Pairing**). Clear Pairing also switches Generic WiFi off:
+switch it on again before you pair.
 
-If the grinder restarts right after you accept, the pairing is made but
-gbs-anywhere never learns its ID. The app then asks for
-the **Pairing ID** the grinder shows in the gbs-anywhere entry (first line of
-**Configuration**, or under **Diagnosis** after the serial number): type it
-in and tap **Use this pairing ID**. gbs-anywhere checks it with the
-grinder before keeping it. (`GRINDER_PAIRING_ID` does the same from the
-command line; it is only used while the saved pairing does not work.) If the
-pairing is cleared on the grinder (**Clear Pairing**), gbs-anywhere asks to
-pair again by itself.
+The grinder may restart right after you accept (the E65W with firmware
+V01.36 does): the screen freezes, the light pulses red, then white, and the
+grinder starts again. Leave gbs-anywhere running: when the grinder stops
+answering while pairing, gbs-anywhere sends it nothing for 3 minutes (the
+app says so), because a request while it starts up can make it lose the
+pairing it has just saved. (The same happens if the grinder goes to standby
+or is switched off while the pairing code is showing: then gbs-anywhere may
+take up to 3 minutes to show up under **Available devices** again.) After
+those 3 minutes, open **Generic WiFi → Configuration** on the grinder:
+
+- It shows a **Pairing ID** next to the name gbs-anywhere: the pairing is
+  made, but gbs-anywhere never learned its ID. The app asks for it: type the
+  Pairing ID in and tap **Use this pairing ID**. gbs-anywhere checks it with
+  the grinder before keeping it. (The ID is also under **Diagnosis**, after
+  the serial number. `GRINDER_PAIRING_ID` does the same from the command
+  line; it is only used while the saved pairing does not work.)
+- It shows **Start Pairing** and no gbs-anywhere entry: the pairing was lost
+  in the restart. If Generic WiFi is switched off again, enable it as in
+  step 2. Then start pairing and accept once more.
+
+If the pairing is cleared on the grinder (**Clear Pairing**), gbs-anywhere
+asks to pair again by itself once Generic WiFi is switched on again.
 
 **Make a recipe use Grind-by-Sync** as on the E64 WS: turn on **Enable GbS**
 and set **Brew Time**, **Brew Weight** and **GbS start DD**.

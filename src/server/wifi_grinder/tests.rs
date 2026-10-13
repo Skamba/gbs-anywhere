@@ -2,7 +2,7 @@
 //! HTTP), with the real machine and shot rules behind it.
 
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::Json;
 use axum::extract::State;
@@ -17,13 +17,28 @@ use crate::protocol::{MachineConfig, MachineError, Phase, ShotResult};
 /// The pairing ID the fake hands out.
 const PAIRING_ID: u32 = 42;
 
+/// [`WifiConfig::restart_quiet`] here.
+const RESTART_QUIET_IN_TESTS: Duration = Duration::from_millis(500);
+
 /// What the fake grinder knows and what it was sent.
 #[derive(Default)]
 struct Fake {
-    applications: u32,
+    /// Every request: path and when it came.
+    requests: Vec<(String, Instant)>,
+    /// Status checks to answer as for a request that expired.
+    forget_requests: u32,
+    /// Status checks to fail with HTTP 503, as if the network dropped.
+    fail_checks: u32,
+    /// Save the pairing on the accept and restart, as the E65W does: the
+    /// accept check is not answered, and the request is gone afterwards.
+    restart_on_accept: bool,
+    /// When it restarted that way.
+    restarted_at: Option<Instant>,
     /// Accepts the pairing on the second status check, like a person who
     /// needs a moment.
     status_checks: u32,
+    /// Status checks to wait on top of that, like a person who needs longer.
+    slow_accept: u32,
     /// The pairing it knows (none until accepted).
     paired: Option<u32>,
     /// Open jobs; accepting one moves it to `ongoing`.
@@ -45,6 +60,19 @@ struct Fake {
 }
 
 impl Fake {
+    fn applications(&self) -> usize {
+        self.requests_to(wifi::PATH_PAIRING_APPLICATION).len()
+    }
+
+    /// When each request to `path` came.
+    fn requests_to(&self, path: &str) -> Vec<Instant> {
+        self.requests
+            .iter()
+            .filter(|(p, _)| p == path)
+            .map(|(_, at)| *at)
+            .collect()
+    }
+
     fn calls_to(&self, path: &str) -> Vec<Value> {
         self.calls
             .iter()
@@ -67,6 +95,7 @@ type Shared = Arc<Mutex<Fake>>;
 async fn handle(State(fake): State<Shared>, uri: Uri, Json(body): Json<Value>) -> Response {
     let mut f = fake.lock().unwrap();
     let path = uri.path();
+    f.requests.push((path.to_owned(), Instant::now()));
     let ok = |extra: Value| {
         let mut reply = json!({ "status": "Ok" });
         let extra = extra.as_object().cloned().unwrap_or_default();
@@ -77,18 +106,29 @@ async fn handle(State(fake): State<Shared>, uri: Uri, Json(body): Json<Value>) -
         |status: &str| (StatusCode::BAD_REQUEST, Json(json!({ "status": status }))).into_response();
     match path {
         wifi::PATH_PAIRING_APPLICATION => {
-            f.applications += 1;
             if f.paired.is_some() {
                 return refuse(wifi::STATUS_ALREADY_PAIRED);
             }
             ok(json!({ "applicationId": 5, "pairingCode": 73 }))
         }
         wifi::PATH_PAIRING_STATUS => {
+            if f.restarted_at.is_some() || f.forget_requests > 0 {
+                f.forget_requests = f.forget_requests.saturating_sub(1);
+                return refuse(wifi::STATUS_APPLICATION_UNKNOWN);
+            }
+            if f.fail_checks > 0 {
+                f.fail_checks -= 1;
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
             f.status_checks += 1;
-            if f.status_checks < 2 {
+            if f.status_checks < 2 + f.slow_accept {
                 return ok(json!({ "accepted": false }));
             }
             f.paired = Some(PAIRING_ID);
+            if f.restart_on_accept {
+                f.restarted_at = Some(Instant::now());
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
             ok(json!({ "accepted": true, "pairingId": PAIRING_ID }))
         }
         _ if f.paired.is_none() || body["pairingId"] != json!(f.paired) => {
@@ -169,6 +209,7 @@ async fn start_with(
     });
     let mut cfg = WifiConfig::from_host(&format!("http://{addr}")).unwrap();
     cfg.poll = Duration::from_millis(20);
+    cfg.restart_quiet = RESTART_QUIET_IN_TESTS;
     cfg.pairing_file = pairing_file;
     cfg.pairing_id = pairing_id;
     let link = WifiGrinder::new(cfg).unwrap();
@@ -618,13 +659,13 @@ async fn one_refusal_keeps_the_pairing_three_pair_again() {
         PAIRING_ID,
         "one refusal is not a cleared pairing"
     );
-    assert_eq!(fake.lock().unwrap().applications, 0);
+    assert_eq!(fake.lock().unwrap().applications(), 0);
 
     // Cleared on the grinder: it refuses from now on, then pairs anew.
     fake.lock().unwrap().paired = None;
     wait_for("the new pairing", || fake.lock().unwrap().paired.is_some()).await;
     wait_for("paired again", || paired(&server)).await;
-    assert_eq!(fake.lock().unwrap().applications, 1);
+    assert_eq!(fake.lock().unwrap().applications(), 1);
     let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     assert_eq!(saved["brew_device_id"], "dev-1", "same device as before");
     let _ = std::fs::remove_file(file);
@@ -643,11 +684,84 @@ async fn the_given_pairing_id_is_tried_when_the_saved_one_is_refused() {
     wait_for("saved", || saved_id(&file) == PAIRING_ID).await;
     wait_for("paired", || paired(&server)).await;
     assert_eq!(
-        fake.lock().unwrap().applications,
+        fake.lock().unwrap().applications(),
         0,
         "no new pairing needed"
     );
     let _ = std::fs::remove_file(file);
+}
+
+#[tokio::test]
+async fn a_grinder_that_restarts_on_the_accept_is_left_alone_while_it_starts_up() {
+    let fake = Fake {
+        restart_on_accept: true,
+        ..Fake::default()
+    };
+    let (server, fake) = start(fake, None, None).await;
+    wait_for("the question", || {
+        server
+            .grinder_link()
+            .wifi
+            .is_some_and(|w| w.needs_pairing_id)
+    })
+    .await;
+    {
+        let f = fake.lock().unwrap();
+        let restarted = f.restarted_at.unwrap();
+        let (path, next) = f
+            .requests
+            .iter()
+            .find(|(_, at)| *at > restarted)
+            .cloned()
+            .unwrap();
+        assert!(
+            next >= restarted + RESTART_QUIET_IN_TESTS,
+            "nothing sent while it starts up"
+        );
+        assert_eq!(path, wifi::PATH_PAIRING_STATUS, "the request checked first");
+        assert_eq!(f.applications(), 2, "then asked once more");
+    }
+    server.use_grinder_pairing_id(PAIRING_ID).unwrap();
+    wait_for("paired", || paired(&server)).await;
+}
+
+#[tokio::test]
+async fn a_pairing_request_still_open_after_the_quiet_time_is_kept() {
+    // No answer once, then the grinder answers with the request still open.
+    let fake = Fake {
+        fail_checks: 1,
+        slow_accept: 10,
+        ..Fake::default()
+    };
+    let (server, fake) = start(fake, None, None).await;
+    let link = || server.grinder_link().wifi;
+    wait_for("the quiet time", || {
+        link().is_some_and(|w| w.state == WifiState::Error)
+    })
+    .await;
+    wait_for("the code again", || {
+        link().is_some_and(|w| w.pairing_code == Some(73))
+    })
+    .await;
+    wait_for("pairing", || paired(&server)).await;
+    assert_eq!(fake.lock().unwrap().applications(), 1, "no new request");
+}
+
+#[tokio::test]
+async fn an_expired_pairing_request_is_replaced_at_once() {
+    // Not accepted in time, while the grinder kept answering: nothing to
+    // wait for.
+    let fake = Fake {
+        forget_requests: 1,
+        ..Fake::default()
+    };
+    let (server, fake) = start(fake, None, None).await;
+    wait_for("pairing", || paired(&server)).await;
+    let f = fake.lock().unwrap();
+    let applied = f.requests_to(wifi::PATH_PAIRING_APPLICATION);
+    let checks = f.requests_to(wifi::PATH_PAIRING_STATUS);
+    assert_eq!(applied.len(), 2, "asked again");
+    assert!(applied[1] < checks[0] + RESTART_QUIET_IN_TESTS, "at once");
 }
 
 #[tokio::test]
