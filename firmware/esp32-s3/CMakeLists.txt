@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.16)
+if(NOT DEFINED SDKCONFIG)
+    set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
+endif()
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+project(gbs_esp32 VERSION 0.1.0)

@@ -1,0 +1,502 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>gbs-anywhere · ESP32-S3</title>
+<style>
+:root{color-scheme:light dark;--bg:#f7f5f1;--fg:#2d302c;--card:#fff;--line:#deddd7;--muted:#656b63;--error:#a53623}
+@media(prefers-color-scheme:dark){:root{--bg:#171a17;--fg:#eceee9;--card:#232823;--line:#414941;--muted:#b5bdb1;--error:#ffab96}}
+*{box-sizing:border-box}body{font:16px/1.6 system-ui,sans-serif;background:var(--bg);color:var(--fg);margin:24px auto;padding:0 16px;max-width:480px}h1{font-size:24px}section{background:var(--card);padding:16px;border:1px solid var(--line);border-radius:12px;margin:16px 0}h2{font-size:18px;margin:0 0 12px}dl{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}dt{color:var(--muted);overflow-wrap:anywhere}dd{margin:0;text-align:right;overflow-wrap:anywhere}#issue{color:var(--error);overflow-wrap:anywhere}small,footer{color:var(--muted);font-size:13px}a{color:inherit}
+.language{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.language label{color:var(--muted)}select{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px;max-width:100%}select:focus-visible,a:focus-visible{outline:2px solid currentColor;outline-offset:3px}.diagnostic{color:var(--error);overflow-wrap:anywhere}.diagnostic code{font-size:13px}
+</style>
+<h1>gbs-anywhere <small>ESP32-S3</small></h1>
+<div class="language"><label for="language" data-i18n="language">Language</label><select id="language">
+<option value="auto" data-i18n="automatic">Browser language</option>
+<option value="en" lang="en">English</option>
+<option value="de" lang="de">Deutsch</option>
+<option value="fr" lang="fr">Français</option>
+<option value="it" lang="it">Italiano</option>
+<option value="ja" lang="ja">日本語</option>
+<option value="ko" lang="ko">한국어</option>
+<option value="zh-CN" lang="zh-CN">简体中文</option>
+<option value="zh-TW" lang="zh-TW">繁體中文</option>
+</select></div>
+<p id="summary" role="status">Reading status…</p>
+<section><h2 data-i18n="connection">Connection</h2><dl>
+<dt data-i18n="mode">Mode</dt><dd id="mode">—</dd>
+<dt data-i18n="grinder">Grinder</dt><dd id="grinder">—</dd>
+<dt data-i18n="cloud">La Marzocco cloud</dt><dd id="cloud">—</dd>
+<dt data-i18n="currentTask">Current task</dt><dd id="phase">—</dd>
+</dl>
+<p id="diagnostic" class="diagnostic" role="status" hidden><span data-i18n="diagnostics">Diagnostics</span>: <code id="issue"></code></p>
+</section>
+<section><h2 data-i18n="coffee">Coffee</h2><dl>
+<dt data-i18n="latestCoffee">Latest cloud coffee</dt><dd id="coffee">—</dd>
+<dt data-i18n="resultsDelivered">Results delivered</dt><dd id="successes">—</dd>
+<dt data-i18n="lastOutcome">Last outcome</dt><dd id="outcome">—</dd>
+<dt data-i18n="targetTime">Target time</dt><dd id="target">—</dd>
+</dl>
+</section>
+<section><h2 data-i18n="device">Device</h2><dl>
+<dt data-i18n="uptime">Uptime</dt><dd id="uptime">—</dd>
+<dt data-i18n="freeInternal">Free internal memory</dt><dd id="heap">—</dd>
+<dt data-i18n="freePsram">Free PSRAM</dt><dd id="psram">—</dd>
+</dl>
+<small data-i18n="refreshNote">Updates every 3 seconds. Change mode through the USB console.</small>
+</section>
+<footer><span data-i18n="notAffiliated">Not affiliated with Mahlkönig or Hemro.</span><br>AGPL-3.0-or-later · <a href="/api/state" data-i18n="statusJson">Status JSON</a></footer>
+<script id="translations" type="application/json">
+{
+  "en": {
+    "language": "Language",
+    "automatic": "Browser language",
+    "reading": "Reading status…",
+    "activeSummary": "The ESP32 sends coffee results to your grinder.",
+    "monitorSummary": "Monitor mode: reading status only.",
+    "unreachable": "Device unreachable. Retrying…",
+    "connection": "Connection",
+    "mode": "Mode",
+    "grinder": "Grinder",
+    "cloud": "La Marzocco cloud",
+    "currentTask": "Current task",
+    "diagnostics": "Diagnostics",
+    "coffee": "Coffee",
+    "latestCoffee": "Latest cloud coffee",
+    "resultsDelivered": "Results delivered",
+    "lastOutcome": "Last outcome",
+    "targetTime": "Target time",
+    "device": "Device",
+    "uptime": "Uptime",
+    "freeInternal": "Free internal memory",
+    "freePsram": "Free PSRAM",
+    "refreshNote": "Updates every 3 seconds. Change mode through the USB console.",
+    "notAffiliated": "Not affiliated with Mahlkönig or Hemro.",
+    "statusJson": "Status JSON",
+    "active": "Active",
+    "monitor": "Monitor",
+    "connected": "Connected",
+    "disconnected": "Disconnected",
+    "none": "None yet",
+    "booting": "Starting",
+    "ready": "Waiting for a grind",
+    "waiting_for_coffee": "Waiting for coffee",
+    "sending": "Sending result",
+    "wifi_waiting": "Waiting for WiFi",
+    "clock_waiting": "Setting clock",
+    "storage_error": "Storage error",
+    "pending_cancel": "Canceling",
+    "pending_result": "Result pending",
+    "success": "Delivered",
+    "canceled": "Canceled",
+    "delivery_expired": "Delivery timed out",
+    "delivery_refused": "Result rejected",
+    "delivery_unknown": "Delivery unconfirmed; not retried",
+    "job_disappeared": "Task no longer available",
+    "stopped_by_mode_change": "Stopped by mode change",
+    "interrupted_by_restart": "Interrupted by restart"
+  },
+  "de": {
+    "language": "Sprache",
+    "automatic": "Browsersprache",
+    "reading": "Status wird gelesen…",
+    "activeSummary": "Der ESP32 sendet die Bezugsdaten an deine Mühle.",
+    "monitorSummary": "Beobachtungsmodus: Status wird nur gelesen.",
+    "unreachable": "Gerät nicht erreichbar. Neuer Versuch…",
+    "connection": "Verbindung",
+    "mode": "Modus",
+    "grinder": "Mühle",
+    "cloud": "La Marzocco Cloud",
+    "currentTask": "Aktuelle Aufgabe",
+    "diagnostics": "Diagnose",
+    "coffee": "Kaffee",
+    "latestCoffee": "Letzter Cloud-Bezug",
+    "resultsDelivered": "Übermittelte Ergebnisse",
+    "lastOutcome": "Letztes Ergebnis",
+    "targetTime": "Zielzeit",
+    "device": "Gerät",
+    "uptime": "Betriebszeit",
+    "freeInternal": "Freier interner Speicher",
+    "freePsram": "Freier PSRAM",
+    "refreshNote": "Aktualisierung alle 3 Sekunden. Modus über die USB-Konsole ändern.",
+    "notAffiliated": "Keine Verbindung zu Mahlkönig oder Hemro.",
+    "statusJson": "Status als JSON",
+    "active": "Aktiv",
+    "monitor": "Beobachten",
+    "connected": "Verbunden",
+    "disconnected": "Getrennt",
+    "none": "Noch keine",
+    "booting": "Startet",
+    "ready": "Wartet auf Mahlvorgang",
+    "waiting_for_coffee": "Wartet auf Bezug",
+    "sending": "Ergebnis wird gesendet",
+    "wifi_waiting": "Wartet auf WLAN",
+    "clock_waiting": "Uhr wird gestellt",
+    "storage_error": "Speicherfehler",
+    "pending_cancel": "Wird abgebrochen",
+    "pending_result": "Ergebnis ausstehend",
+    "success": "Übermittelt",
+    "canceled": "Abgebrochen",
+    "delivery_expired": "Zeitüberschreitung beim Senden",
+    "delivery_refused": "Ergebnis abgelehnt",
+    "delivery_unknown": "Übertragung unbestätigt; kein erneuter Versuch",
+    "job_disappeared": "Aufgabe nicht mehr verfügbar",
+    "stopped_by_mode_change": "Durch Moduswechsel gestoppt",
+    "interrupted_by_restart": "Durch Neustart unterbrochen"
+  },
+  "fr": {
+    "language": "Langue",
+    "automatic": "Langue du navigateur",
+    "reading": "Lecture de l’état…",
+    "activeSummary": "L’ESP32 transmet les résultats d’extraction à votre moulin.",
+    "monitorSummary": "Mode observation : lecture de l’état uniquement.",
+    "unreachable": "Appareil inaccessible. Nouvelle tentative…",
+    "connection": "Connexion",
+    "mode": "Mode",
+    "grinder": "Moulin",
+    "cloud": "Cloud La Marzocco",
+    "currentTask": "Tâche en cours",
+    "diagnostics": "Diagnostic",
+    "coffee": "Café",
+    "latestCoffee": "Dernière extraction du cloud",
+    "resultsDelivered": "Résultats transmis",
+    "lastOutcome": "Dernier résultat",
+    "targetTime": "Durée cible",
+    "device": "Appareil",
+    "uptime": "Durée de fonctionnement",
+    "freeInternal": "Mémoire interne libre",
+    "freePsram": "PSRAM libre",
+    "refreshNote": "Actualisation toutes les 3 secondes. Changez de mode via la console USB.",
+    "notAffiliated": "Sans affiliation avec Mahlkönig ou Hemro.",
+    "statusJson": "État au format JSON",
+    "active": "Actif",
+    "monitor": "Observation",
+    "connected": "Connecté",
+    "disconnected": "Déconnecté",
+    "none": "Aucun pour le moment",
+    "booting": "Démarrage",
+    "ready": "En attente de mouture",
+    "waiting_for_coffee": "En attente d’extraction",
+    "sending": "Envoi du résultat",
+    "wifi_waiting": "En attente du Wi-Fi",
+    "clock_waiting": "Réglage de l’horloge",
+    "storage_error": "Erreur de stockage",
+    "pending_cancel": "Annulation en cours",
+    "pending_result": "Résultat en attente",
+    "success": "Transmis",
+    "canceled": "Annulé",
+    "delivery_expired": "Délai d’envoi dépassé",
+    "delivery_refused": "Résultat refusé",
+    "delivery_unknown": "Envoi non confirmé ; pas de nouvel essai",
+    "job_disappeared": "Tâche indisponible",
+    "stopped_by_mode_change": "Arrêt suite au changement de mode",
+    "interrupted_by_restart": "Interruption suite au redémarrage"
+  },
+  "it": {
+    "language": "Lingua",
+    "automatic": "Lingua del browser",
+    "reading": "Lettura dello stato…",
+    "activeSummary": "L’ESP32 invia i risultati dell’estrazione al macinacaffè.",
+    "monitorSummary": "Modalità monitoraggio: sola lettura dello stato.",
+    "unreachable": "Dispositivo non raggiungibile. Nuovo tentativo…",
+    "connection": "Connessione",
+    "mode": "Modalità",
+    "grinder": "Macinacaffè",
+    "cloud": "Cloud La Marzocco",
+    "currentTask": "Attività corrente",
+    "diagnostics": "Diagnostica",
+    "coffee": "Caffè",
+    "latestCoffee": "Ultima estrazione dal cloud",
+    "resultsDelivered": "Risultati inviati",
+    "lastOutcome": "Ultimo esito",
+    "targetTime": "Tempo obiettivo",
+    "device": "Dispositivo",
+    "uptime": "Tempo di attività",
+    "freeInternal": "Memoria interna libera",
+    "freePsram": "PSRAM libera",
+    "refreshNote": "Aggiornamento ogni 3 secondi. Cambia modalità dalla console USB.",
+    "notAffiliated": "Non affiliato a Mahlkönig o Hemro.",
+    "statusJson": "Stato in JSON",
+    "active": "Attivo",
+    "monitor": "Monitoraggio",
+    "connected": "Connesso",
+    "disconnected": "Disconnesso",
+    "none": "Nessuno",
+    "booting": "Avvio",
+    "ready": "In attesa di macinatura",
+    "waiting_for_coffee": "In attesa di estrazione",
+    "sending": "Invio del risultato",
+    "wifi_waiting": "In attesa del Wi-Fi",
+    "clock_waiting": "Sincronizzazione orologio",
+    "storage_error": "Errore di archiviazione",
+    "pending_cancel": "Annullamento in corso",
+    "pending_result": "Risultato in attesa",
+    "success": "Inviato",
+    "canceled": "Annullato",
+    "delivery_expired": "Tempo di invio scaduto",
+    "delivery_refused": "Risultato rifiutato",
+    "delivery_unknown": "Invio non confermato; nessun nuovo tentativo",
+    "job_disappeared": "Attività non più disponibile",
+    "stopped_by_mode_change": "Interrotto dal cambio di modalità",
+    "interrupted_by_restart": "Interrotto dal riavvio"
+  },
+  "ja": {
+    "language": "言語",
+    "automatic": "ブラウザーの言語",
+    "reading": "状態を読み込み中…",
+    "activeSummary": "ESP32 が抽出結果をグラインダーに送信します。",
+    "monitorSummary": "モニターモード：状態の読み取りのみ。",
+    "unreachable": "デバイスに接続できません。再試行中…",
+    "connection": "接続",
+    "mode": "モード",
+    "grinder": "グラインダー",
+    "cloud": "La Marzocco クラウド",
+    "currentTask": "現在のタスク",
+    "diagnostics": "診断情報",
+    "coffee": "コーヒー",
+    "latestCoffee": "クラウドの最新抽出",
+    "resultsDelivered": "送信済み結果数",
+    "lastOutcome": "前回の処理結果",
+    "targetTime": "目標抽出時間",
+    "device": "デバイス",
+    "uptime": "稼働時間",
+    "freeInternal": "内蔵メモリーの空き",
+    "freePsram": "PSRAM の空き",
+    "refreshNote": "3秒ごとに更新します。モードは USB コンソールで変更できます。",
+    "notAffiliated": "Mahlkönig または Hemro とは提携していません。",
+    "statusJson": "状態 JSON",
+    "active": "連動中",
+    "monitor": "モニター",
+    "connected": "接続済み",
+    "disconnected": "未接続",
+    "none": "まだありません",
+    "booting": "起動中",
+    "ready": "挽き始めを待機中",
+    "waiting_for_coffee": "抽出待ち",
+    "sending": "結果を送信中",
+    "wifi_waiting": "Wi-Fi 接続待ち",
+    "clock_waiting": "時刻を同期中",
+    "storage_error": "ストレージエラー",
+    "pending_cancel": "キャンセル中",
+    "pending_result": "結果の送信待ち",
+    "success": "送信完了",
+    "canceled": "キャンセル済み",
+    "delivery_expired": "送信がタイムアウトしました",
+    "delivery_refused": "結果が拒否されました",
+    "delivery_unknown": "送信を確認できません。再送していません",
+    "job_disappeared": "タスクは利用できません",
+    "stopped_by_mode_change": "モード変更により停止",
+    "interrupted_by_restart": "再起動により中断"
+  },
+  "ko": {
+    "language": "언어",
+    "automatic": "브라우저 언어",
+    "reading": "상태를 읽는 중…",
+    "activeSummary": "ESP32가 추출 결과를 그라인더로 전송합니다.",
+    "monitorSummary": "모니터링 모드: 상태만 읽습니다.",
+    "unreachable": "기기에 연결할 수 없습니다. 다시 시도 중…",
+    "connection": "연결",
+    "mode": "모드",
+    "grinder": "그라인더",
+    "cloud": "La Marzocco 클라우드",
+    "currentTask": "현재 작업",
+    "diagnostics": "진단 정보",
+    "coffee": "커피",
+    "latestCoffee": "클라우드의 최근 추출",
+    "resultsDelivered": "전송한 결과 수",
+    "lastOutcome": "마지막 처리 결과",
+    "targetTime": "목표 추출 시간",
+    "device": "기기",
+    "uptime": "가동 시간",
+    "freeInternal": "내부 메모리 여유 공간",
+    "freePsram": "PSRAM 여유 공간",
+    "refreshNote": "3초마다 갱신합니다. 모드는 USB 콘솔에서 변경할 수 있습니다.",
+    "notAffiliated": "Mahlkönig 또는 Hemro와 제휴 관계가 없습니다.",
+    "statusJson": "상태 JSON",
+    "active": "연동 중",
+    "monitor": "모니터링",
+    "connected": "연결됨",
+    "disconnected": "연결 끊김",
+    "none": "아직 없음",
+    "booting": "시작 중",
+    "ready": "분쇄 대기 중",
+    "waiting_for_coffee": "추출 대기 중",
+    "sending": "결과 전송 중",
+    "wifi_waiting": "Wi-Fi 연결 대기 중",
+    "clock_waiting": "시간 동기화 중",
+    "storage_error": "저장소 오류",
+    "pending_cancel": "취소 중",
+    "pending_result": "결과 전송 대기 중",
+    "success": "전송 완료",
+    "canceled": "취소됨",
+    "delivery_expired": "전송 시간 초과",
+    "delivery_refused": "결과가 거부됨",
+    "delivery_unknown": "전송 확인 불가. 재전송하지 않음",
+    "job_disappeared": "작업을 더 이상 사용할 수 없음",
+    "stopped_by_mode_change": "모드 변경으로 중지됨",
+    "interrupted_by_restart": "재시작으로 중단됨"
+  },
+  "zh-CN": {
+    "language": "语言",
+    "automatic": "跟随浏览器",
+    "reading": "正在读取状态…",
+    "activeSummary": "ESP32 正在向磨豆机发送萃取结果。",
+    "monitorSummary": "观察模式：仅读取状态。",
+    "unreachable": "无法连接设备，正在重试…",
+    "connection": "连接",
+    "mode": "模式",
+    "grinder": "磨豆机",
+    "cloud": "La Marzocco 云端",
+    "currentTask": "当前任务",
+    "diagnostics": "诊断信息",
+    "coffee": "咖啡",
+    "latestCoffee": "云端最近一次萃取",
+    "resultsDelivered": "已送达结果数",
+    "lastOutcome": "上次处理结果",
+    "targetTime": "目标萃取时间",
+    "device": "设备",
+    "uptime": "运行时间",
+    "freeInternal": "内部可用内存",
+    "freePsram": "可用 PSRAM",
+    "refreshNote": "每 3 秒刷新一次。可通过 USB 控制台切换模式。",
+    "notAffiliated": "本项目与 Mahlkönig 或 Hemro 无关联。",
+    "statusJson": "状态 JSON",
+    "active": "联动中",
+    "monitor": "观察",
+    "connected": "已连接",
+    "disconnected": "未连接",
+    "none": "暂无",
+    "booting": "正在启动",
+    "ready": "等待研磨",
+    "waiting_for_coffee": "等待萃取",
+    "sending": "正在发送结果",
+    "wifi_waiting": "等待 WiFi",
+    "clock_waiting": "正在校时",
+    "storage_error": "存储错误",
+    "pending_cancel": "正在取消",
+    "pending_result": "结果待发送",
+    "success": "已送达",
+    "canceled": "已取消",
+    "delivery_expired": "发送超时",
+    "delivery_refused": "结果被拒绝",
+    "delivery_unknown": "发送结果未确认，未重试",
+    "job_disappeared": "任务已不可用",
+    "stopped_by_mode_change": "因模式切换停止",
+    "interrupted_by_restart": "因设备重启中断"
+  },
+  "zh-TW": {
+    "language": "語言",
+    "automatic": "跟隨瀏覽器",
+    "reading": "正在讀取狀態…",
+    "activeSummary": "ESP32 正在向磨豆機傳送萃取結果。",
+    "monitorSummary": "觀察模式：僅讀取狀態。",
+    "unreachable": "無法連線至裝置，正在重試…",
+    "connection": "連線",
+    "mode": "模式",
+    "grinder": "磨豆機",
+    "cloud": "La Marzocco 雲端",
+    "currentTask": "目前任務",
+    "diagnostics": "診斷資訊",
+    "coffee": "咖啡",
+    "latestCoffee": "雲端最近一次萃取",
+    "resultsDelivered": "已送達結果數",
+    "lastOutcome": "上次處理結果",
+    "targetTime": "目標萃取時間",
+    "device": "裝置",
+    "uptime": "運作時間",
+    "freeInternal": "內部可用記憶體",
+    "freePsram": "可用 PSRAM",
+    "refreshNote": "每 3 秒重新整理一次。可透過 USB 主控台切換模式。",
+    "notAffiliated": "本專案與 Mahlkönig 或 Hemro 無關聯。",
+    "statusJson": "狀態 JSON",
+    "active": "連動中",
+    "monitor": "觀察",
+    "connected": "已連線",
+    "disconnected": "未連線",
+    "none": "尚無",
+    "booting": "正在啟動",
+    "ready": "等待研磨",
+    "waiting_for_coffee": "等待萃取",
+    "sending": "正在傳送結果",
+    "wifi_waiting": "等待 WiFi",
+    "clock_waiting": "正在校時",
+    "storage_error": "儲存錯誤",
+    "pending_cancel": "正在取消",
+    "pending_result": "結果待傳送",
+    "success": "已送達",
+    "canceled": "已取消",
+    "delivery_expired": "傳送逾時",
+    "delivery_refused": "結果遭拒絕",
+    "delivery_unknown": "傳送結果未確認，未重試",
+    "job_disappeared": "任務已無法使用",
+    "stopped_by_mode_change": "因模式切換停止",
+    "interrupted_by_restart": "因裝置重啟中斷"
+  }
+}
+</script>
+<script>
+const messages = JSON.parse(document.getElementById('translations').textContent);
+const picker = document.getElementById('language');
+const storageKey = 'gbs-esp32-language';
+const text = (id, value) => { document.getElementById(id).textContent = value; };
+let state = null, failed = false;
+
+function browserLanguage(languages) {
+  for (const language of languages) {
+    const tag = language.toLowerCase().replaceAll('_', '-');
+    if (tag === 'zh' || tag.startsWith('zh-')) {
+      return /(^|-)hant(-|$)/.test(tag) || (!/(^|-)hans(-|$)/.test(tag) && /(^|-)(tw|hk|mo)(-|$)/.test(tag)) ? 'zh-TW' : 'zh-CN';
+    }
+    const base = tag.split('-')[0];
+    if (Object.hasOwn(messages, base)) return base;
+  }
+  return 'en';
+}
+
+function render() {
+  const locale = Object.hasOwn(messages, picker.value) ? picker.value : browserLanguage(navigator.languages || [navigator.language || 'en']);
+  const m = messages[locale];
+  document.documentElement.lang = locale;
+  document.querySelectorAll('[data-i18n]').forEach(el => { el.textContent = m[el.dataset.i18n]; });
+  const format = (value, unit, digits = 0) => Number.isFinite(value) ? new Intl.NumberFormat(locale, {
+    ...(unit ? {style: 'unit', unit, unitDisplay: 'short'} : {}),
+    minimumFractionDigits: digits, maximumFractionDigits: digits
+  }).format(value) : '—';
+  text('summary', failed ? m.unreachable : !state || !state.mode ? m.reading : state.mode === 'active' ? m.activeSummary : m.monitorSummary);
+  if (!state) return;
+  text('mode', state.mode === 'active' ? m.active : state.mode === 'monitor' ? m.monitor : '—');
+  for (const id of ['grinder', 'cloud']) text(id, typeof state[id] === 'boolean' ? (state[id] ? m.connected : m.disconnected) : '—');
+  text('phase', m[state.phase] || state.phase || '—');
+  text('issue', state.issue || '');
+  document.getElementById('diagnostic').hidden = !state.issue;
+  text('coffee', state.latest_coffee_ms ? `${format(state.latest_seconds, 'second', 1)} · ${format(state.latest_grams, 'gram', 1)}` : m.none);
+  text('successes', format(state.successes));
+  text('outcome', m[state.last_outcome] || state.last_outcome || m.none);
+  text('target', state.target_seconds ? format(state.target_seconds, 'second', 1) : '—');
+  text('uptime', format(Math.floor(state.uptime_s / 60), 'minute'));
+  text('heap', format(state.free_internal / 1024, 'kilobyte'));
+  text('psram', format(state.free_psram / 1048576, 'megabyte', 1));
+}
+
+try {
+  const saved = localStorage.getItem(storageKey);
+  picker.value = Object.hasOwn(messages, saved) ? saved : 'auto';
+} catch (_) { picker.value = 'auto'; }
+picker.addEventListener('change', () => {
+  try { localStorage.setItem(storageKey, picker.value); } catch (_) { /* Storage may be blocked. */ }
+  render();
+});
+window.addEventListener('languagechange', render);
+render();
+
+async function refresh() {
+  try {
+    const response = await fetch('/api/state', {cache: 'no-store'});
+    if (!response.ok) throw Error(response.status);
+    const next = await response.json();
+    if (!next || typeof next !== 'object' || Array.isArray(next)) throw Error('Invalid status');
+    state = next;
+    failed = false;
+  } catch (_) { failed = true; }
+  render();
+  setTimeout(refresh, 3000);
+}
+refresh();
+</script></html>

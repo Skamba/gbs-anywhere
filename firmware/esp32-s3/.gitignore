@@ -1,0 +1,5 @@
+.private/
+build*/
+sdkconfig
+sdkconfig.old
+__pycache__/

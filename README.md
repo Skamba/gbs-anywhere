@@ -11,6 +11,15 @@ adjusts as usual.
 
 > Not affiliated with Mahlkönig or Hemro.
 
+## Experimental ESP32-S3 bridge
+
+For an E65/E80 Generic WiFi grinder and La Marzocco cloud, the standalone
+[ESP32-S3 firmware](firmware/esp32-s3/README.md) can report shots without a
+computer running. It imports an existing desktop pairing once and currently
+requires measured weight from the cloud. See its hardware and setup limits.
+Its status page supports eight languages, including English, German, French,
+Italian, Japanese, Korean, and Simplified/Traditional Chinese.
+
 ## Run it
 
 On any computer on the same network as the grinder (PC, NAS, Raspberry Pi),

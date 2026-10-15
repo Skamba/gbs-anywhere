@@ -6,6 +6,14 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- Experimental standalone ESP32-S3 firmware for E65/E80 Generic WiFi and
+  La Marzocco cloud, using an imported pairing and a read-only status page.
+  Once configured, it runs from USB power without a desktop service.
+  The status page offers eight languages with automatic browser-language
+  selection, a remembered override and localized numbers and units.
+
 ## [0.2.1] - 2026-10-10
 
 ### Changed
