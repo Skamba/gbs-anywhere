@@ -1,0 +1,56 @@
+name: Something doesn't work
+description: gbs-anywhere does something wrong or stops working.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. Before you paste logs or screenshots,
+        remove IP addresses, serial numbers, e-mail addresses and passwords:
+        this page is public.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: gbs-anywhere version
+      description: Shown at the bottom of the app.
+      placeholder: 0.2.1
+    validations:
+      required: true
+  - type: dropdown
+    id: run
+    attributes:
+      label: How you run it
+      options:
+        - Docker
+        - From source (cargo)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: grinder
+    attributes:
+      label: Grinder model and firmware
+      placeholder: E64 WS, firmware …
+    validations:
+      required: true
+  - type: input
+    id: machine
+    attributes:
+      label: Espresso machine and integrations
+      description: Your machine, and any integrations you added in the app.
+      placeholder: Linea Mini R with the La Marzocco cloud integration
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: >-
+        The output around the problem, e.g. from `docker logs gbs-anywhere`.
+        Remove IP addresses and serial numbers first.
+      render: text
