@@ -1,0 +1,51 @@
+name: Report your setup
+description: Tell us whether gbs-anywhere works with your grinder, machine or scale.
+labels: [compatibility]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Reports from setups we can't test ourselves help us support more
+        hardware. Leave out serial numbers and IP addresses.
+  - type: dropdown
+    id: result
+    attributes:
+      label: Does it work?
+      options:
+        - Yes, it works
+        - Partly
+        - No
+    validations:
+      required: true
+  - type: input
+    id: grinder
+    attributes:
+      label: Grinder model and firmware
+      placeholder: E64 WS, firmware …
+    validations:
+      required: true
+  - type: input
+    id: machine
+    attributes:
+      label: Espresso machine
+  - type: input
+    id: integrations
+    attributes:
+      label: Integrations used
+      placeholder: None, La Marzocco cloud, Half Decent Scale, …
+  - type: input
+    id: version
+    attributes:
+      label: gbs-anywhere version
+      description: Shown at the bottom of the app.
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: What worked, what didn't, anything that was hard to set up.
+  - type: checkboxes
+    id: tester
+    attributes:
+      label: Testing
+      options:
+        - label: I'm willing to try out changes for this setup.

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea
+    url: https://github.com/Skamba/gbs-anywhere/discussions
+    about: Ask how to set something up, or share an idea, in Discussions.
+  - name: Security problem
+    url: https://github.com/Skamba/gbs-anywhere/security/advisories/new
+    about: Report it privately, not in a public issue.
