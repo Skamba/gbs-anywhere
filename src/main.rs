@@ -48,7 +48,7 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:8787")]
     control: String,
 
-    /// Append every grinder request and our reply to this file.
+    /// Append every E64 WS request and our reply to this file.
     #[arg(short, long)]
     log: Option<PathBuf>,
 

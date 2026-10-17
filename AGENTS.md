@@ -12,13 +12,17 @@ file is for agents changing the code.
 
 - `src/protocol/`: the grinder link as plain types, no I/O. `machine.rs` holds
   the state machine and shot rules, `wire.rs` the JSON field names, `wifi.rs`
-  the E65/E80 "Generic WiFi" messages.
+  the E65/E80 "Generic WiFi" messages, and `grinder.rs` models how the E64 WS
+  reads the machine's replies (`GrinderModel`, used in tests).
 - `src/server/`: axum. `grinder_api.rs` is what the E64 WS calls
   (`/api/v2/*`); `wifi_grinder.rs` pairs with an E65/E80 GbS and turns its
   brew jobs into brews of the same machine; `control_api.rs` is the JSON API
-  and page for people.
+  and page for people. `tests.rs` and `wifi_grinder/tests.rs` hold the
+  end-to-end tests.
 - `src/integration/`: optional integrations that report shots by themselves,
-  one folder each (see [Integrations](#integrations)).
+  one folder each (see [Integrations](#integrations)). `mod.rs` has the
+  shared rules (`Link`), `kind.rs` the setup forms and `manager.rs` the
+  running integrations and the `--config` settings file.
 - `web/index.html`: the whole phone app (HTML, CSS, JS), no build step.
 - `src/main.rs`: flags and startup only.
 
@@ -85,7 +89,8 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
 
 - Report shots only through `Link::report`. It holds the rules every
   integration shares: a shot counts only while the grinder waits after a knob
-  press, and a missing weight falls back to the recipe weight.
+  press (on an E65/E80 GbS: after a Grind-by-Sync grind), and a missing
+  weight falls back to the recipe weight.
 - Secrets are `Input::Password` fields. Settings never go back out through
   the API or into logs. Keys that are not on the form, such as a test base
   URL, stay command-line only.

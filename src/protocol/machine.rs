@@ -4,7 +4,8 @@
 //!
 //! ```text
 //! Ready (ON)
-//!   | grinder posts scripts/execute {"ID":9}  (knob press after a grind)
+//!   | grinder posts scripts/execute {"ID":9}  (E64 WS: knob press after a grind)
+//!   | or on_brew_job                          (E65/E80: a Grind-by-Sync grind)
 //!   v                                          -> tell the human "start the shot"
 //! Brewing (ACTIVE SERVING, time rising)
 //!   | report_shot(time, volume)                -> the human's numbers

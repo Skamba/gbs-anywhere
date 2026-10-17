@@ -10,7 +10,7 @@ pub const DEFAULT_HOST: &str = "hds.local";
 pub const FIELDS: &[Field] = &[Field {
     key: "host",
     label: "Scale address",
-    help: "The scale's IP address, e.g. 192.168.1.30 (hds.local works outside Docker). \
+    help: "The scale's IP address, e.g. 192.168.1.40 (hds.local works outside Docker). \
            Turn on WiFi in the scale's Setup > Connections first.",
     input: Input::Text,
     required: false,
@@ -49,7 +49,7 @@ fn host(input: &str) -> anyhow::Result<String> {
         .is_some_and(|(_, port)| port.parse::<u16>().is_err());
     if h.is_empty() || bad_port || h.contains(|c: char| c.is_whitespace() || "/?#@".contains(c)) {
         bail!(
-            "enter the scale's address as an IP address or name, e.g. 192.168.1.30, not `{input}`"
+            "enter the scale's address as an IP address or name, e.g. 192.168.1.40, not `{input}`"
         );
     }
     Ok(h.to_owned())

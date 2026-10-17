@@ -1,4 +1,5 @@
-//! The face the grinder sees: a Xenia's `/api/v2/*` on port 80.
+//! The face the E64 WS sees: a Xenia's `/api/v2/*` on port 80. (An E65/E80
+//! GbS is polled by [`super::wifi_grinder`] instead.)
 
 use std::net::SocketAddr;
 use std::sync::Arc;

@@ -36,8 +36,8 @@ docker run -d --name gbs-anywhere --restart unless-stopped \
 The `/data` volume keeps the integrations you add in the app (see
 [Integrations](#integrations)).
 
-`latest` is the newest release. Pin a version with `:0.1` (newest 0.1.x) or
-`:0.1.0`, or follow `:nightly`, built each night from the newest commit, which
+`latest` is the newest release. Pin a version with `:0.2` (newest 0.2.x) or
+`:0.2.1`, or follow `:nightly`, built each night from the newest commit, which
 may not be released yet. The app shows the version at the bottom of the page;
 what changed is in [CHANGELOG.md](CHANGELOG.md).
 
@@ -92,6 +92,21 @@ The grinder treats gbs-anywhere as a Xenia, so the menus below say "Xenia".
 
 A blue chain icon on the recipe means GbS is active.
 
+**Pull a shot**
+
+1. Open `http://<computer's IP>/` on your phone, e.g.
+   `http://192.168.1.20/`. The header shows "grinder connected" while the
+   grinder is polling.
+2. Grind with a GbS recipe.
+3. When the grinder says "Press grinder rotary knob to start brewing.", press
+   the knob and start the shot on your machine right away.
+4. Time the shot from pump start (always use the same timer), weigh the cup,
+   and enter both in the app. Tap **Send to grinder**.
+5. The grinder shows its new grind setting.
+
+Shots of 10 s or less and over 80 s are ignored by the grinder, as is an
+aborted shot.
+
 ## Set up an E65/E80 GbS
 
 These grinders don't poll a machine. With their "Generic WiFi" option the
@@ -116,7 +131,8 @@ on port 30001 over HTTPS; the grinder needs no access to the computer.
    and shows a pairing code.
 4. On the grinder, in the same **Machine To Machine** menu, open **Generic
    WiFi → Configuration** and tap **Start Pairing**. (If you enabled Generic
-   WiFi after starting gbs-anywhere, give it up to a minute to notice.) Within a few seconds **gbs-anywhere** shows up under **Available
+   WiFi after starting gbs-anywhere, give it up to a minute to notice.)
+   Within a few seconds **gbs-anywhere** shows up under **Available
    devices**, with the same code. Select it and tap **Accept Pairing**. If the
    grinder's pairing times out first, tap **Start Pairing** again (the code
    may change: the app always shows the current one).
@@ -144,8 +160,9 @@ those 3 minutes, open **Generic WiFi → Configuration** on the grinder:
   made, but gbs-anywhere never learned its ID. The app asks for it: type the
   Pairing ID in and tap **Use this pairing ID**. gbs-anywhere checks it with
   the grinder before keeping it. (The ID is also under **Diagnosis**, after
-  the serial number. `GRINDER_PAIRING_ID` does the same from the command
-  line; it is only used while the saved pairing does not work.)
+  the serial number. `GRINDER_PAIRING_ID` gives it from the command line
+  instead, unchecked; it is used when no pairing is saved or the grinder
+  refuses the saved one.)
 - It shows **Start Pairing** and no gbs-anywhere entry: the pairing was lost
   in the restart. If Generic WiFi is switched off again, enable it as in
   step 2. Then start pairing and accept once more.
@@ -182,34 +199,19 @@ with shots reported by La Marzocco cloud. You pair the grinder with
 gbs-anywhere once, then move the pairing to the board. It is a community
 project and not part of this repository; please report its issues there.
 
-## Pull a shot on the E64 WS
-
-1. Open `http://<that IP>/` on your phone, e.g. `http://192.168.1.20/`. The header shows
-   "grinder connected" while the grinder is polling.
-2. Grind with a GbS recipe.
-3. When the grinder says "Press grinder rotary knob to start brewing.", press
-   the knob and start the shot on your machine right away.
-4. Time the shot from pump start (always use the same timer), weigh the cup,
-   and enter both in the app. Tap **Send to grinder**.
-5. The grinder shows its new grind setting.
-
-Shots of 10 s or less and over 80 s are ignored by the grinder, as is an
-aborted shot.
-
 ## Integrations
 
 Entering the numbers on your phone is the default and needs no setup.
 Optionally, let an *integration* report the shot instead: a vendor cloud, a
 connected scale, a home-automation hub. After the knob press (on an E65/E80
 GbS: after the grind) it waits for the shot, then sends its time and weight
-to the grinder by itself. You can still
-enter or correct a shot on your phone; whichever comes first wins, also when
-several integrations run at once.
+to the grinder by itself. You can still enter or correct a shot on your
+phone; whichever comes first wins, also when several integrations run at
+once.
 
 Tap the green **+** at the top right of the app, pick one and fill in its
-form. Each
-integration gets a card showing whether it is ready and what it last
-sent; **Remove** stops it. Integrations added in the app are saved in the
+form. Each integration gets a card showing whether it is ready and what it
+last sent; **Remove** stops it. Integrations added in the app are saved in the
 settings file (`--config`, `/data/gbs-anywhere.json` in Docker, holding their
 passwords), so keep the `/data` volume. Without a settings file they last
 until the next restart.
@@ -230,14 +232,16 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 |---|---|---|
 | `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever) |
 | `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for the integrations added in the app; also `CONFIG_FILE` |
-| `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs |
-| `--log <file>` | off | append every grinder request to a file |
+| `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
+| `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
 | `-p, --ports <list>` | 80 | ports to serve on |
 | `--grinder <host>` | off | pair with this E65/E80 GbS over its "Generic WiFi" option; also `GRINDER_HOST` |
 | `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing across restarts; also `GRINDER_PAIRING_FILE` |
-| `--grinder-pairing-id <id>` | off | the pairing ID the grinder shows, used while the saved one does not work (the app can take it too); also `GRINDER_PAIRING_ID` |
+| `--grinder-pairing-id <id>` | off | the pairing ID the grinder shows, used when none is saved or the grinder refuses the saved one (the app can take it too); also `GRINDER_PAIRING_ID` |
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
 | `--hds-*` | off | Half Decent Scale, see [its README](src/integration/half_decent/README.md) |
+
+`gbs-anywhere --help` lists the rest, such as `--bind` and `--no-app`.
 
 Without Docker you can also type the shot into the console: `30 36` means
 30 s, 36 g. `h` lists the other commands.
@@ -253,10 +257,15 @@ JSON on the same port as the app, for scripts or another front end:
 | GET | `/api/events/stream` | the same, live, as server-sent events |
 | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` reports the running shot (time up to 600 s; without a weight, the recipe weight is sent) |
 | POST | `/api/shot/abort` | aborts the running shot (the grinder skips it) |
+| POST | `/api/shot/start` | starts a shot by hand (an E64 WS counts it as a flush) |
 | GET | `/api/integrations/kinds` | the integrations that can be added, with their setup forms |
 | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{"username":"…","password":"…"}}` adds an integration |
 | DELETE | `/api/integrations/<id>` | removes an integration added in the app |
 | POST | `/api/grinder/pairing` | `{"pairing_id":1234}` gives the pairing ID an E65/E80 GbS shows, only while the app asks for it |
+
+A few more routes, for testing, are listed in
+[`src/server/control_api.rs`](src/server/control_api.rs). Outside Docker the
+API is also served on `127.0.0.1:8787` (`--control`, `off` to disable).
 
 The API has no login: anyone on your network who can open the app can add or
 remove integrations, as they can report shots. Passwords are never sent back.

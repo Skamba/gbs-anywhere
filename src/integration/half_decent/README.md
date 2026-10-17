@@ -17,14 +17,14 @@ cup. Nothing needs to be typed, and the Decent app keeps working alongside.
 3. Find the scale's IP address in your router and give it a DHCP
    reservation, as for the computer running gbs-anywhere.
 4. In the app: the green **+** at the top right → **Half Decent Scale**,
-   and enter that address, e.g. `192.168.1.30`. Outside Docker the scale's
+   and enter that address, e.g. `192.168.1.40`. Outside Docker the scale's
    own name `hds.local` usually works too; inside Docker, use the IP.
 
 Or on the command line / in Docker:
 
 ```sh
 docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
-  -e HDS_HOST=192.168.1.30 ghcr.io/skamba/gbs-anywhere
+  -e HDS_HOST=192.168.1.40 ghcr.io/skamba/gbs-anywhere
 ```
 
 | setting | flag | env | default |
@@ -34,9 +34,9 @@ docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
 ## How it works
 
 After the knob press, gbs-anywhere tares the scale, waits for a steady
-weight, then for the first drops. The shot ends when the weight stops rising; the
-time from the first drops to that moment and the coffee in the cup go to
-the grinder a few seconds later.
+weight, then for the first drops. The shot ends when the weight stops
+rising; the time from the first drops to that moment and the coffee in the
+cup go to the grinder a few seconds later.
 
 - **Times start at the first drops, not at pump start.** They come out
   shorter than a timer started with the pump, by the time before coffee

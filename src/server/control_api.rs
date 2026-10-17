@@ -13,7 +13,7 @@
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the brew as a user abort (grinder skips it) |
-//! | POST | `/api/shot/start` | starts a brew without a grinder request (grinder sees a flush) |
+//! | POST | `/api/shot/start` | starts a brew without a grinder request (an E64 WS sees a flush; an E65/E80 nothing) |
 //! | POST | `/api/machine` | patch the `ON`-state mako fields, e.g. `{"TANK_LEVEL":0}` |
 //! | POST | `/api/grinder/pairing` | `{"pairing_id":1234}` — the pairing ID an E65/E80 grinder shows, only while the link asks for it |
 //! | PUT/DELETE | `/api/overrides` | raw keys forced into every mako reply |

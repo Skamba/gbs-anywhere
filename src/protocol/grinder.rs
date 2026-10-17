@@ -1,4 +1,4 @@
-//! What the grinder makes of a sequence of mako replies: a model of its brew
+//! What the E64 WS makes of a sequence of mako replies: a model of its brew
 //! state machine.
 //!
 //! The rule that matters: a shot only counts if the **grinder** started it.
