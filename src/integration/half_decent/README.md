@@ -55,8 +55,6 @@ cup go to the grinder a few seconds later.
 - **On an E65/E80 GbS** the end of the Grind-by-Sync grind counts as the
   knob press, so the scale is tared then: put the cup on before the grind
   ends. Not tested with these grinders yet.
-- **The phone still works.** You can still enter or correct a shot on your
-  phone; whichever comes first wins.
 - **The scale still switches itself off.** A connected app keeps the scale
   awake, so gbs-anywhere only connects from the knob press until the shot
   is reported. If the scale is off at the knob press, turn it on:

@@ -47,8 +47,6 @@ weight the grinder sent. The log says which.
 - **Same account as the app.** gbs-anywhere registers itself as one more
   installation of the La Marzocco Home app (derived from your credentials,
   nothing else is stored). The app keeps working alongside it.
-- **The phone still works.** You can still enter or correct a shot on your
-  phone; whichever comes first wins.
 - The cloud login retries by itself with backoff.
 
 ## Official logo
