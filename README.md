@@ -174,6 +174,14 @@ app shows the shot as aborted, or, once you report it, that it did not reach
 the grinder. If a shot cannot reach the grinder (say, the WiFi drops),
 gbs-anywhere keeps trying for two minutes and the app shows the problem.
 
+**On an ESP32-S3 instead of a computer**
+
+[gbs-anywhere-esp32](https://github.com/zpmdd/gbs-anywhere-esp32) is a
+separate, experimental firmware that does the same job on an ESP32-S3 board,
+with shots reported by La Marzocco cloud. You pair the grinder with
+gbs-anywhere once, then move the pairing to the board. It is a community
+project and not part of this repository; please report its issues there.
+
 ## Pull a shot on the E64 WS
 
 1. Open `http://<that IP>/` on your phone, e.g. `http://192.168.1.20/`. The header shows
