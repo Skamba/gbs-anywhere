@@ -3,6 +3,15 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// `2026-10-11T12:08:01.663Z`.
+pub fn with_millis(t: SystemTime) -> String {
+    let millis = t
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_millis();
+    format!("{}.{millis:03}Z", format(t))
+}
+
 /// `2026-10-11T12:08:01Z`.
 pub fn with_seconds(t: SystemTime) -> String {
     format!("{}Z", format(t))
@@ -45,9 +54,17 @@ mod tests {
     #[test]
     fn formats_utc() {
         assert_eq!(with_seconds(UNIX_EPOCH), "1970-01-01T00:00:00Z");
+        assert_eq!(
+            with_millis(at(1_000_000_000, 7)),
+            "2001-09-09T01:46:40.007Z"
+        );
         // A leap day, and the day after.
         assert_eq!(with_seconds(at(951_782_400, 0)), "2000-02-29T00:00:00Z");
         assert_eq!(with_seconds(at(951_868_800, 0)), "2000-03-01T00:00:00Z");
+        assert_eq!(
+            with_millis(at(1_791_720_481, 663)),
+            "2026-10-11T12:08:01.663Z"
+        );
         assert_eq!(with_seconds(at(4_102_444_799, 0)), "2099-12-31T23:59:59Z");
     }
 }

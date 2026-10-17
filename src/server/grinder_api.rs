@@ -50,7 +50,7 @@ async fn handle(
         GrinderRequest::Identity => x.with(|m, _| json!(m.identity())),
         GrinderRequest::PollMako => x.with(|m, now| m.mako_json(now)),
         GrinderRequest::GrindResult(g) => {
-            tracing::info!(
+            tracing::debug!(
                 "grinder grind result: beverage {:?} g, filter {:?}",
                 g.beverage_weight_g,
                 g.filter
@@ -59,7 +59,7 @@ async fn handle(
             json!({})
         }
         GrinderRequest::StartBrew(s) => {
-            tracing::info!("grinder asks to start a brew (ID {:?})", s.script_id);
+            tracing::debug!("grinder asks to start a brew (ID {:?})", s.script_id);
             x.with(|m, now| m.on_start_request(now, s.script_id));
             json!({})
         }
@@ -78,7 +78,13 @@ async fn handle(
     };
 
     let text = reply.to_string();
-    if poll || !grinder {
+    // A grind and a start are logged as the machine's events (see
+    // `print_events`), so their raw requests are only for debugging.
+    let described = matches!(
+        req,
+        GrinderRequest::GrindResult(_) | GrinderRequest::StartBrew(_)
+    );
+    if poll || !grinder || described {
         tracing::debug!("{peer} {method} {uri} -> {text}");
     } else {
         tracing::info!("{peer} {method} {uri} -> {text}");

@@ -78,6 +78,14 @@
     --warn-solid: #8C5A0A;
     --outcome-bg: #EFEAE3;
     --outcome-fg: #3F3830;
+    --pressed-bg: #1F1B16;
+    --pressed-fg: #FFFFFF;
+    --log-bg: #17140F;
+    --log-ink: #E8E2D8;
+    --log-dim: #9C9285;
+    --log-info: #7FC79A;
+    --log-warn: #E8B860;
+    --log-error: #F08A7E;
     --scrim: rgba(31, 27, 22, .45);
     --shadow-tab: 0 1px 2px rgba(31, 27, 22, .10);
     --shadow-menu: 0 8px 24px rgba(31, 27, 22, .16);
@@ -95,7 +103,8 @@
     --ok-bg: #173526; --ok-fg: #92D7AD; --ok: #4FB97B; --ok-solid: #2F8053;
     --bad-bg: #431F19; --bad-fg: #F4A298; --bad: #E0695A; --bad-solid: #B5473A; --bad-box: #2D1814; --bad-line: #5A2B24; --bad-field: #7B3C33;
     --warn-bg: #3F2F12; --warn-fg: #F1C676; --warn-soft: #382A12; --warn-solid: #9A6814;
-    --outcome-bg: #2F2822; --outcome-fg: #E5DCD1;
+    --outcome-bg: #2F2822; --outcome-fg: #E5DCD1; --pressed-bg: #F3EDE5; --pressed-fg: #1F1B16;
+    --log-bg: #0C0A08; --log-ink: #E8E2D8; --log-dim: #9C9285; --log-info: #7FC79A; --log-warn: #E8B860; --log-error: #F08A7E;
     --scrim: rgba(0, 0, 0, .6); --shadow-tab: 0 1px 2px rgba(0, 0, 0, .5); --shadow-menu: 0 8px 24px rgba(0, 0, 0, .55);
   }
 
@@ -198,9 +207,22 @@
   .sys-label { margin: 2px 0 0; font-size: 20px; font-weight: 700; }
   .sys-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
   .sys-body .body-text { line-height: 1.45; }
-  .sys-detail { margin: -4px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
-  .checks { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--text); }
-  .checks span { display: inline-flex; align-items: center; gap: 6px; }
+  /* The last error and the way to the log, in one box */
+  .sys-diag { display: flex; align-items: center; gap: 12px; background: var(--sunk); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .sys-diag-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+  .sys-diag-k { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .sys-log {
+    flex: none; display: inline-flex; align-items: center; gap: 2px; min-height: 36px; padding: 0 10px 0 12px; border-radius: 999px;
+    border: 1px solid var(--field); background: var(--surface); color: var(--strong); font-size: 13px; font-weight: 650; text-decoration: none;
+  }
+  /* Grinder and integrations, in one quiet line */
+  .checks { overflow: hidden; border-top: 1px solid var(--line); padding-top: 10px; font-size: 13px; color: var(--text); }
+  .checks:empty { display: none; }
+  /* Each item brings its "·"; the row starts 19px to the left, so the dot of
+     the first item on each line falls outside and is clipped. */
+  .checks-in { display: flex; flex-wrap: wrap; align-items: center; row-gap: 4px; margin-left: -19px; }
+  .checks-in > span { display: inline-flex; align-items: center; gap: 5px; }
+  .checks-in > span::before { content: "\00b7"; content: "\00b7" / ""; flex: none; width: 19px; margin-right: -5px; text-align: center; color: var(--muted); }
   .checks .ok svg { color: var(--ok); }
   .checks .bad { color: var(--bad-fg); }
   .checks .wait svg, .checks .muted { color: var(--muted); }
@@ -413,6 +435,46 @@
     font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
   }
 
+  /* Log: the last card on Status, closed until needed */
+  .log-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .log-body .log-box { flex: none; min-height: 160px; max-height: min(60vh, 520px); }
+  .log-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .tool-end { display: flex; gap: 6px; margin-left: auto; }
+  .tool {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 10px; border-radius: 10px;
+    border: 1px solid var(--field); background: var(--surface); color: var(--strong); font-size: 14px; font-weight: 600;
+  }
+  .tool[aria-pressed="true"] { background: var(--pressed-bg); color: var(--pressed-fg); }
+  /* The tools stay on one line down to 360 px, in English and German. */
+  @media (max-width: 370px) {
+    .log-tools, .tool-end { gap: 4px; }
+    .tool { gap: 4px; padding: 0 8px; font-size: 13px; }
+  }
+  .tool-icon {
+    width: 44px; height: 44px; border-radius: 10px; border: 1px solid var(--field); background: var(--surface);
+    color: var(--strong); display: grid; place-items: center;
+  }
+  .tool-icon.done { background: var(--ok-bg); color: var(--ok-fg); border-color: var(--ok-solid); }
+  .tool-icon .i-done, .tool-icon.done .i-idle { display: none; }
+  .tool-icon.done .i-done { display: block; }
+  .log-box {
+    flex: 1; min-height: 200px; overflow: auto; background: var(--log-bg); color: var(--log-ink); border-radius: 14px; padding: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; overscroll-behavior: contain;
+  }
+  .ll { display: flex; gap: 8px; padding: 1px 0; }
+  .ll .t { flex: none; color: var(--log-dim); }
+  .ll .v { flex: none; width: 5ch; font-weight: 700; }
+  .ll .x { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .l-INFO .v { color: var(--log-info); }
+  .l-WARN .v { color: var(--log-warn); }
+  .l-ERROR .v { color: var(--log-error); }
+  .warn-only .l-INFO { display: none; }
+  .log-live { display: flex; align-items: center; gap: 8px; padding-top: 6px; color: var(--log-dim); }
+  .live-block { width: 7px; height: 14px; background: var(--log-dim); }
+  .live-block.on { background: var(--log-info); }
+  .log-note { font-size: 12px; line-height: 1.45; color: var(--muted); }
+  .log-note.done { color: var(--ok-fg); font-weight: 600; }
+
   /* Bottom sheet */
   .scrim { position: fixed; inset: 0; z-index: 50; background: var(--scrim); display: flex; flex-direction: column; justify-content: flex-end; }
   .sheet {
@@ -427,11 +489,16 @@
     letter-spacing: 0.04em; color: var(--ink); background: var(--surface); outline: none;
   }
   .sheet-label input:focus { border-color: var(--accent); }
+  .sheet textarea {
+    width: 100%; min-height: 220px; border: 1px solid var(--field); border-radius: 10px; padding: 10px; background: var(--sunk);
+    color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5;
+  }
   .sheet-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 4px; }
   .sheet-actions.one { grid-template-columns: minmax(0, 1fr); }
   .sheet-actions button { min-height: 48px; border-radius: 12px; font-size: 16px; font-weight: 600; }
   .s-plain { border: 1px solid var(--field); background: var(--surface); color: var(--ink); }
   .s-danger { border: 0; background: var(--bad-solid); color: var(--on-solid); }
+  .s-primary { border: 0; background: var(--accent); color: var(--on-accent); }
   .sheet-actions button:disabled { opacity: .45; }
 </style>
 </head>
@@ -483,7 +550,10 @@
       </button>
       <div class="sys-body" id="sys-body" hidden>
         <p class="body-text" id="sys-text"></p>
-        <p class="sys-detail" id="sys-detail" hidden></p>
+        <div class="sys-diag" id="sys-detail" hidden>
+          <span class="sys-diag-text"><span class="sys-diag-k" data-i18n="sys.lastError">Last error</span><span id="sys-detail-text"></span></span>
+          <a href="#log" class="sys-log" id="sys-log-link" data-i18n-attr="aria-label:log.show" aria-label="Show the log"><span data-i18n="log.title">Log</span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></a>
+        </div>
         <div class="checks" id="sys-checks"></div>
       </div>
     </section>
@@ -669,6 +739,30 @@
       </form>
       <p class="foot" id="set-foot" hidden></p>
     </section>
+
+    <!-- Log: the server's recent log lines, live; closed until needed -->
+    <section class="card clip" id="log-card" data-i18n-attr="aria-label:log.title" aria-label="Log">
+      <button type="button" class="card-head" id="log-toggle" aria-expanded="false" aria-controls="log-body">
+        <span class="minw"><span class="card-title" style="display:block" data-i18n="log.title">Log</span><span class="sub" style="display:block" data-i18n="log.sub">A record of the activity in gbs-anywhere's engine room.</span></span>
+        <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="log-body" id="log-body" hidden>
+        <div class="log-tools" id="log-tools">
+          <button type="button" class="tool" id="log-follow" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg><span data-i18n="log.follow">Follow</span></button>
+          <button type="button" class="tool" id="log-warn" aria-pressed="false" data-i18n="log.warnOnly">Warnings only</button>
+          <span class="tool-end">
+          <button type="button" class="tool-icon" id="log-copy" data-i18n-attr="aria-label:log.copy;title:log.copy" aria-label="Copy the last 60 minutes" title="Copy the last 60 minutes"><svg class="i-done" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg><svg class="i-idle" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button>
+          <button type="button" class="tool-icon" id="log-dl" data-i18n-attr="aria-label:log.download;title:log.download" aria-label="Download the complete log" title="Download the complete log"><svg class="i-done" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg><svg class="i-idle" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 19h14"/></svg></button>
+          </span>
+        </div>
+        <div role="log" data-i18n-attr="aria-label:log.box" aria-label="gbs-anywhere log" aria-live="off" class="log-box" id="log-box" tabindex="0">
+          <div id="log-lines"></div>
+          <div class="log-live"><span class="live-block on" id="log-live-block"></span><span id="log-live-text">live · following new lines</span></div>
+        </div>
+        <p role="status" class="log-note" id="log-note"></p>
+        <p class="center-note" id="log-unsupported" data-i18n="log.unsupported" hidden>This gbs-anywhere server has no log view. Update gbs-anywhere to read its log here.</p>
+      </div>
+    </section>
   </main>
 
   <!-- History: the last shots from GET /api/history -->
@@ -682,7 +776,7 @@
   <footer class="app-footer" id="app-footer">gbs-anywhere</footer>
 </div>
 
-<!-- Bottom sheet for confirmations (delete) -->
+<!-- Bottom sheet for confirmations (delete) and the copy fallback -->
 <div class="scrim" id="sheet" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
     <p class="sheet-title" id="sheet-title"></p>
@@ -745,7 +839,7 @@
   // plural, picked by the number `n`. Keys ending in .e64 / .wifi are the
   // wording for an E64 WS or an E65/E80 GbS (Generic WiFi), picked by tv().
   // Texts from the server (integration names, summaries, forms and status
-  // lines, errors) are shown as they come.
+  // lines, errors, log lines) are shown as they come.
   const STRINGS = {
     en: {
       "nav.sections": "Sections",
@@ -759,6 +853,7 @@
       "common.save": "Save",
       "common.change": "Change",
       "common.delete": "Delete",
+      "common.done": "Done",
       "common.optional": " (optional)",
       "common.notSaved": "Not saved: {error}",
       "common.requestFailed": "The request failed ({status}).",
@@ -784,6 +879,9 @@
       "sys.label.blocked": "Blocked",
       "sys.label.error": "Error",
       "sys.label.ready": "Ready",
+      "sys.label.problem": "Grinder problem",
+      "sys.label.integError": "Integration not working",
+      "sys.label.integErrorShort": "Integration",
       "sys.text.offline": "Can’t reach gbs-anywhere. Is it running, and is this phone on the same network?",
       "sys.text.running": "Shot in progress: step 2 of 3.",
       "sys.text.checking": "The grinder is taking the result: step 3 of 3.",
@@ -794,6 +892,8 @@
       "sys.text.linkingNoHost": "Connecting to the grinder…",
       "sys.text.blocked": "Grinder blocked: {message}",
       "sys.text.error": "The last shot did not reach the grinder.",
+      "sys.text.problem": "The grinder answers, but turned down the last request. gbs-anywhere keeps trying.",
+      "sys.text.integError": "{title} is not working right now. You can still grind and enter the shot by hand.",
       "sys.text.done": "The last shot reached the grinder {ago}. Ready for the next one.",
       "sys.text.doneNoTime": "The last shot reached the grinder. Ready for the next one.",
       "sys.text.aborted": "Shot aborted. Grind again to start the next one.",
@@ -801,7 +901,7 @@
       "sys.missing.e64": "The grinder is not polling. Is it switched on and paired with gbs-anywhere (it appears as ‘Xenia’ on the grinder)?",
       "sys.missing.wifi": "The grinder does not answer. Is it switched on? gbs-anywhere reconnects by itself as soon as it can reach it.",
       "sys.missing.linkError": "The grinder answers, but the connection is not working right now. gbs-anywhere keeps trying.",
-      "sys.detail": "Last error: {detail}",
+      "sys.lastError": "Last error",
       "sys.problem": "Grinder: {problem}",
       "check.grinderPairing": "Grinder pairing",
       "check.grinderReady.e64": "Grinder connected",
@@ -812,7 +912,7 @@
       "check.integConnecting": "{title} connecting",
       "check.integStopped": "{title} stopped",
       "check.integError": "{title}: error",
-      "check.noIntegration": "No machine integration · shots by hand",
+      "check.noIntegration": "No machine integration",
 
       "pair.kicker": "Grinder pairing",
       "pair.accept.title": "Accept gbs-anywhere on the grinder",
@@ -1007,6 +1107,29 @@
       "history.noMatch": "No shots match the filter. Tap a status above to show it again.",
       "history.kept": { one: "The last shot is kept on this computer.", other: "The last {n} shots are kept on this computer." },
       "history.keptMemory": { one: "The last shot is kept in memory only, until gbs-anywhere restarts.", other: "The last {n} shots are kept in memory only, until gbs-anywhere restarts." },
+
+      "log.follow": "Follow",
+      "log.warnOnly": "Warnings only",
+      "log.copy": "Copy the last 60 minutes",
+      "log.download": "Download the complete log",
+      "log.box": "gbs-anywhere log",
+      "log.live": "live · following new lines",
+      "log.paused": "paused · new lines arrive below",
+      "log.reconnecting": "connecting…",
+      "log.note": "Showing the last {n} lines. Copy takes the filtered entries of up to the last hour, at most 500 lines. Download takes the whole log. IP addresses are anonymised.",
+      "log.title": "Log",
+      "log.sub": "A record of the activity in gbs-anywhere's engine room.",
+      "log.show": "Show the log",
+      "log.nothingLines": "Nothing to copy: no lines in the last 60 min.",
+      "log.nothingWarnings": "Nothing to copy: no warnings in the last 60 min.",
+      "log.copied": { one: "Copied {n} line from the last 60 min. IP addresses replaced.", other: "Copied {n} lines from the last 60 min. IP addresses replaced." },
+      "log.copiedWarn": { one: "Copied {n} line from the last 60 min (warnings only). IP addresses replaced.", other: "Copied {n} lines from the last 60 min (warnings only). IP addresses replaced." },
+      "log.downloaded": { one: "Downloaded {file} ({n} line, all levels). IP addresses replaced.", other: "Downloaded {file} ({n} lines, all levels). IP addresses replaced." },
+      "log.copySheet.title": "Copy the log",
+      "log.copySheet.text": "This browser blocks copying here. Select the text below and copy it.",
+      "log.copySheet.selectAll": "Select all",
+      "log.copySheet.label": "Log text",
+      "log.unsupported": "This gbs-anywhere server has no log view. Update gbs-anywhere to read its log here.",
     },
   };
 
@@ -1312,6 +1435,9 @@
   // --- Tabs --------------------------------------------------------------------
   const TABS = ["start", "status", "history"];
   function showTab(name) {
+    // The log is the last card on Status: #log opens it there.
+    const toLog = name === "log";
+    if (toLog) name = "status";
     if (!TABS.includes(name)) name = "start";
     const changed = name !== tab;
     tab = name;
@@ -1319,8 +1445,10 @@
     for (const a of document.querySelectorAll("nav.tabs a")) {
       if (a.dataset.tab === name) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     }
-    if (changed) window.scrollTo(0, 0);
+    if (changed && !toLog) window.scrollTo(0, 0);
     renderAll();
+    if (toLog) { log.open = true; scrollToLog(); openLog().then(scrollToLog); }
+    else if (name === "status" && log.open) openLog();   // back after a restart: start over
     if (name === "history") loadHistory();
   }
   /** Opens a tab and puts it in the address, without a navigation: Safari on
@@ -1409,7 +1537,15 @@
       return s("error", "alert", "noGrinder", missing.text, missing.detail);
     }
     if (blocked) return s("warn", "alert", "blocked", t("sys.text.blocked", { message: blocked.grinder_message }));
-    if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"));
+    if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f.reason, f.outcome));
+    // Shots can still be made, but something needs a look: not green.
+    if (wifi && wifi.problem) return s("warn", "alert", "problem", t("sys.text.problem"), sentence(wifi.problem));
+    const failing = (S.integrations || []).find((i) => i.health === "error" || i.health === "stopped");
+    if (failing) {
+      const r = s("warn", "alert", "integError", t("sys.text.integError", { title: failing.title }), failing.last_error);
+      r.integ = failing;
+      return r;
+    }
     if (f.sc === "done") {
       const at = endTime(f.outcome);
       return s("ok", "check", "ready", at ? t("sys.text.done", { ago: ago(Date.now() - at) }) : t("sys.text.doneNoTime"));
@@ -1418,25 +1554,34 @@
     return s("ok", "check", "ready", "");
   }
 
-  function renderChecks() {
+  /** The grinder and each integration, in one line. What System status
+   *  says already (its title) is left out. */
+  function renderChecks(s) {
     const box = $("sys-checks");
     const items = [];
     const wifi = wifiOf();
     if (S && online) {
-      if (wifi && (wifi.state === "pairing" || wifi.needs_pairing_id)) items.push(["wait", "clock", t("check.grinderPairing")]);
-      else if (linkOn()) items.push(["ok", "check", tv("check.grinderReady")]);
-      else if (linkStarting()) items.push(["wait", "clock", t("check.grinderConnecting")]);
-      else items.push(["bad", "alert", t("check.grinderOff")]);
+      let grinder = null;
+      if (["noGrinder", "pairing", "linking", "problem"].includes(s.key)) { /* said above */ }
+      else if (wifi && (wifi.state === "pairing" || wifi.needs_pairing_id)) grinder = ["wait", "clock", t("check.grinderPairing")];
+      else if (linkOn()) grinder = ["ok", "check", tv("check.grinderReady")];
+      else if (linkStarting()) grinder = ["wait", "clock", t("check.grinderConnecting")];
+      else grinder = ["bad", "alert", t("check.grinderOff")];
+      if (grinder) items.push(grinder);
       const list = S.integrations || [];
       for (const i of list) {
+        if (i === s.integ) continue;
         const title = { title: i.title };
         if (i.health === "connected" || i.health === "watching") items.push(["ok", "check", t("check.integReady", title)]);
         else if (i.health === "starting") items.push(["wait", "clock", t("check.integConnecting", title)]);
         else items.push(["bad", "alert", t(i.health === "stopped" ? "check.integStopped" : "check.integError", title)]);
       }
       if (list.length === 0) items.push(["muted", null, t("check.noIntegration")]);
+      // The grinder alone on a line says nothing System status doesn't.
+      if (items.length === 1 && items[0] === grinder) items.length = 0;
     }
-    box.replaceChildren(...items.map(([cls, ic, text]) => el("span", { class: cls }, ic ? icon(ic, 14, ic === "check" ? 2.6 : 2.2) : null, text)));
+    box.replaceChildren(...(items.length ? [el("div", { class: "checks-in" }, ...items.map(([cls, ic, text]) =>
+      el("span", { class: cls }, ic ? icon(ic, 14, ic === "check" ? 2.6 : 2.2) : null, text)))] : []));
   }
 
   function setTone(node, tone) {
@@ -1464,11 +1609,12 @@
     $("sys-icon").replaceChildren(icon(s.icon, 22, s.icon === "check" ? 2.2 : 2));
     $("sys-text").textContent = s.text;
     $("sys-text").hidden = !s.text;
-    $("sys-detail").textContent = s.detail ? t("sys.detail", { detail: s.detail }) : "";
+    // The last error, with the way to the log.
+    $("sys-detail-text").textContent = s.detail;
     $("sys-detail").hidden = !s.detail;
     $("sys-toggle").setAttribute("aria-expanded", String(ui.sysOpen));
     $("sys-body").hidden = !ui.sysOpen;
-    renderChecks();
+    renderChecks(s);
     return s;
   }
   /** The pill's label, or its short form when the long one would be cut off. */
@@ -1520,7 +1666,7 @@
     else if (wifi && (wifi.needs_pairing_id || wifi.state === "pairing")) b.hidden = true; // the pairing card says it
     else if (linkStarting()) b.hidden = true; // the system status says it
     else if (!linkOn()) { if (s.key === "noGrinder") b.hidden = true; else show("bad", grinderMissing(wifi).text); }
-    else if (wifi && wifi.problem && !(f.sc === "error" && f.reason === wifi.problem)) show("warn", t("sys.problem", { problem: sentence(wifi.problem) }));
+    else if (wifi && wifi.problem && s.key !== "problem" && !(f.sc === "error" && f.reason === wifi.problem)) show("warn", t("sys.problem", { problem: sentence(wifi.problem) }));
     else b.hidden = true;
   }
 
@@ -2496,6 +2642,287 @@
     foot.textContent = t(hist.persistent === false ? "history.keptMemory" : "history.kept", { n: hist.capacity || 200 });
   }
 
+  // --- Log ---------------------------------------------------------------------
+  const log = { open: false, lines: [], last: 0, state: "idle", es: null, poll: null, retry: null, connected: false, follow: true, warnOnly: false, capacity: 1000, done: null, doneTimer: null };
+  const LOG_NOTE = () => t("log.note", { n: log.capacity });
+
+  /** The server restarted (a new boot_id, or its line numbers went back): start over from its first line. */
+  function restartLog() {
+    stopLogFeed();
+    log.lines = []; log.last = 0;
+    $("log-lines").replaceChildren();
+    if (log.state === "live") { log.state = "idle"; if (logShown()) openLog(); }
+  }
+
+  /** One log line on the page: time in the language's format, level, text as the server wrote it. */
+  function lineEl(l) {
+    const d = new Date(l.ts);
+    const level = String(l.level || "INFO").toUpperCase();
+    return el("div", { class: "ll l-" + (level === "WARNING" ? "WARN" : level) },
+      el("span", { class: "t", text: isNaN(d) ? "--:--:--" : hhmmss(d) }),
+      el("span", { class: "v", text: level }),
+      el("span", { class: "x", text: String(l.text || "") }));
+  }
+  function addLines(lines) {
+    const box = $("log-lines");
+    const frag = document.createDocumentFragment();
+    for (const l of lines) {
+      if (!l || typeof l.seq !== "number" || l.seq <= log.last) continue;
+      log.last = l.seq;
+      log.lines.push(l);
+      frag.append(lineEl(l));
+    }
+    box.append(frag);
+    const over = log.lines.length - log.capacity;
+    if (over > 0) {
+      log.lines.splice(0, over);
+      for (let i = 0; i < over && box.firstChild; i++) box.firstChild.remove();
+    }
+    if (log.follow) scrollLogEnd();
+  }
+
+  async function fetchLog() {
+    try {
+      const r = await api("/api/log?after=" + log.last);
+      if (!r || !Array.isArray(r.lines)) throw Object.assign(new Error("no log"), { status: 404 });
+      if (typeof r.capacity === "number") log.capacity = r.capacity;
+      if (typeof r.last_seq === "number" && r.last_seq < log.last) { restartLog(); return false; }
+      addLines(r.lines);
+      return true;
+    } catch (e) {
+      if (e.status === 404) { log.state = "unsupported"; stopLogFeed(); renderLog(); }
+      return false;
+    }
+  }
+
+  function stopLogFeed() {
+    if (log.es) { log.es.close(); log.es = null; }
+    if (log.poll) { clearInterval(log.poll); log.poll = null; }
+    clearTimeout(log.retry);
+    log.connected = false;
+  }
+
+  async function openLog() {
+    renderLog();
+    if (log.state !== "idle") { if (log.follow) scrollLogEnd(); return; }
+    if (!S) return;
+    if (!hasNewApi()) { log.state = "unsupported"; renderLog(); return; }
+    log.state = "live";
+    $("log-note").textContent = LOG_NOTE();
+    const ok = await fetchLog();
+    if (!ok || log.state !== "live") return;
+    renderLog();
+    if (window.EventSource) connectLog(); else startLogPolling();
+  }
+
+  // The stream first replays the kept lines after `after`, so none fall
+  // between the fetch and the stream. It is reopened by hand after an error,
+  // with the newest `after` and after a fetch that notices a server restart.
+  function connectLog() {
+    if (log.state !== "live" || log.es) return;
+    const es = new EventSource("/api/log/stream?after=" + log.last);
+    log.es = es;
+    es.addEventListener("open", () => { log.connected = true; renderLog(); });
+    es.addEventListener("log", (m) => { try { addLines([JSON.parse(m.data)]); } catch (_) {} });
+    es.addEventListener("error", () => {
+      es.close();
+      if (log.es === es) log.es = null;
+      log.connected = false;
+      renderLog();
+      clearTimeout(log.retry);
+      log.retry = setTimeout(reconnectLog, 3000);
+    });
+  }
+  async function reconnectLog() {
+    if (log.state !== "live" || log.es) return;
+    const ok = await fetchLog();
+    if (log.state !== "live" || log.es) return;   // a restart: openLog took over
+    if (ok) connectLog(); else log.retry = setTimeout(reconnectLog, 3000);
+  }
+  function startLogPolling() {
+    if (log.poll) return;
+    log.poll = setInterval(() => { if (!document.hidden && logShown()) fetchLog(); }, 2000);
+  }
+
+  /** Brings the log card's head just below the sticky header. */
+  function scrollToLog() {
+    const head = document.querySelector(".top").offsetHeight;
+    window.scrollTo({ top: $("log-card").getBoundingClientRect().top + window.scrollY - head - 8 });
+  }
+  /** Whether the log card is open on the visible Status tab. */
+  const logShown = () => tab === "status" && log.open;
+
+  function renderLog() {
+    if (tab !== "status") return;
+    $("log-toggle").setAttribute("aria-expanded", String(log.open));
+    $("log-body").hidden = !log.open;
+    if (!log.open) return;
+    const unsupported = log.state === "unsupported";
+    $("log-unsupported").hidden = !unsupported;
+    for (const id of ["log-tools", "log-box", "log-note"]) $(id).hidden = unsupported;
+    if (unsupported) return;
+    $("log-follow").setAttribute("aria-pressed", String(log.follow));
+    $("log-warn").setAttribute("aria-pressed", String(log.warnOnly));
+    $("log-lines").classList.toggle("warn-only", log.warnOnly);
+    const live = window.EventSource ? log.connected : log.state === "live" && online;
+    $("log-live-block").classList.toggle("on", log.follow && live);
+    $("log-live-text").textContent = t(!live ? "log.reconnecting" : log.follow ? "log.live" : "log.paused");
+    // A status region announces every change, so only real ones.
+    if (!log.done && $("log-note").textContent !== LOG_NOTE()) $("log-note").textContent = LOG_NOTE();
+    if (!log.done) $("log-note").classList.remove("done");
+    $("log-copy").classList.toggle("done", log.done === "copy");
+    $("log-dl").classList.toggle("done", log.done === "dl");
+  }
+
+  let logScrolling = false;
+  function scrollLogEnd() {
+    const box = $("log-box");
+    logScrolling = true;
+    box.scrollTop = box.scrollHeight;
+    requestAnimationFrame(() => { logScrolling = false; });
+  }
+  $("log-box").addEventListener("scroll", () => {
+    if (logScrolling) return;
+    const box = $("log-box");
+    const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 8;
+    if (!atEnd && log.follow) { log.follow = false; renderLog(); }
+  }, { passive: true });
+  // The box changes height with the note below it and the screen: keep the end in view.
+  if (window.ResizeObserver) new ResizeObserver(() => { if (log.follow && logShown()) scrollLogEnd(); }).observe($("log-box"));
+  // Opened by hand, or from "Show the log" next to an error.
+  $("log-toggle").addEventListener("click", () => {
+    log.open = !log.open;
+    if (log.open) openLog(); else renderLog();
+  });
+  $("sys-log-link").addEventListener("click", (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    goTab("log");
+  });
+  $("log-follow").addEventListener("click", () => {
+    log.follow = !log.follow;
+    if (log.follow) scrollLogEnd();
+    renderLog();
+  });
+  $("log-warn").addEventListener("click", () => {
+    log.warnOnly = !log.warnOnly;
+    renderLog();
+    if (log.follow) scrollLogEnd();
+  });
+
+  // Copy and Download share the export: IP addresses replaced the same way
+  // throughout, and a header line saying what it holds.
+  function scrubber() {
+    const seen = new Map();
+    const name = (ip) => {
+      const key = ip.toLowerCase();
+      if (!seen.has(key)) seen.set(key, "<ip-" + (seen.size + 1) + ">");
+      return seen.get(key);
+    };
+    // The IPv4 tail goes first, so ::ffff:192.168.1.30 is one address.
+    const V6 = /(^|[^0-9A-Za-z_:.])((?:[0-9A-Fa-f]{0,4}:){2,7}(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f]{1,4})?)(?=$|[^0-9A-Za-z_:])/g;
+    const V4 = /(^|[^0-9.])((?:25[0-5]|2[0-4]\d|[01]?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)){3})(?![0-9]|\.\d)/g;
+    return (text) => text
+      .replace(/\/\/[^\s\/@]+@/g, "//<login>@")   // user:password@ in a URL
+      .replace(V6, (all, pre, ip) => {
+        const colons = (ip.match(/:/g) || []).length;
+        const valid = /[0-9A-Fa-f]/.test(ip) && (ip.includes("::") ? !/:::/.test(ip) && ip.split("::").length === 2 : colons === 7 || (colons === 6 && /\d\.\d/.test(ip)));
+        return valid ? pre + name(ip) : all;
+      })
+      .replace(V4, (all, pre, ip) => pre + name(ip));
+  }
+  // The export is meant for bug reports: always English, ISO-like times.
+  function stamp(d) {
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate())
+      + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+  function utcOffset(d) {
+    const m = -d.getTimezoneOffset();
+    return "UTC" + (m >= 0 ? "+" : "-") + pad2(Math.floor(Math.abs(m) / 60)) + ":" + pad2(Math.abs(m) % 60);
+  }
+  function exportText(lines, filter) {
+    const scrub = scrubber();
+    const body = lines.map((l) => {
+      const d = new Date(l.ts);
+      return (isNaN(d) ? String(l.ts) : stamp(d) + "." + String(d.getMilliseconds()).padStart(3, "0")) + " "
+        + String(l.level).padEnd(5) + " " + scrub(String(l.text || ""));
+    });
+    const first = lines.length ? new Date(lines[0].ts) : new Date();
+    const last = lines.length ? new Date(lines[lines.length - 1].ts) : new Date();
+    const head = "# gbs-anywhere " + ((S && S.version) || "") + " log · " + stamp(first) + " to " + stamp(last)
+      + " (" + utcOffset(last) + ") · " + lines.length + (lines.length === 1 ? " line" : " lines") + " · " + filter + " · IP addresses replaced";
+    return head + "\n" + body.join("\n") + "\n";
+  }
+  /** Shows `note` under the log for a moment; `kind` "copy" or "dl" also ticks that button. */
+  function logDone(kind, note) {
+    log.done = kind;
+    $("log-note").textContent = note;
+    $("log-note").classList.toggle("done", kind === "copy" || kind === "dl");
+    clearTimeout(log.doneTimer);
+    log.doneTimer = setTimeout(() => { log.done = null; renderLog(); }, 3500);
+    renderLog();
+  }
+
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
+    }
+    // Plain HTTP on a LAN address: no clipboard API, so a hidden textarea.
+    const ta = el("textarea", { readonly: true, "aria-hidden": "true" });
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;";
+    document.body.append(ta);
+    const active = document.activeElement;
+    ta.focus(); ta.select();
+    try { ta.setSelectionRange(0, text.length); } catch (_) {}
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) {}
+    ta.remove();
+    if (active && active.focus) active.focus();
+    return ok;
+  }
+
+  $("log-copy").addEventListener("click", async () => {
+    const since = Date.now() - 60 * 60000;
+    let lines = log.lines.filter((l) => Date.parse(l.ts) >= since && (!log.warnOnly || l.level !== "INFO"));
+    if (lines.length > 500) lines = lines.slice(-500);
+    if (!lines.length) {
+      logDone("note", t(log.warnOnly ? "log.nothingWarnings" : "log.nothingLines"));
+      return;
+    }
+    const filter = log.warnOnly ? "warnings only" : "all levels";
+    const text = exportText(lines, filter);
+    const note = t(log.warnOnly ? "log.copiedWarn" : "log.copied", { n: lines.length });
+    if (await copyText(text)) { logDone("copy", note); return; }
+    // Copying is blocked: show the text to copy by hand.
+    const ta = el("textarea", { readonly: true, "aria-label": t("log.copySheet.label") });
+    ta.value = text;
+    openSheet({
+      title: t("log.copySheet.title"),
+      body: [el("p", { class: "body-text", text: t("log.copySheet.text") }), ta],
+      actions: [
+        { label: t("log.copySheet.selectAll"), cls: "s-plain", run: () => { ta.focus(); ta.select(); try { ta.setSelectionRange(0, ta.value.length); } catch (_) {} } },
+        { label: t("common.done"), cls: "s-primary", run: closeSheet },
+      ],
+      focus: ta,
+    });
+    requestAnimationFrame(() => { ta.select(); try { ta.setSelectionRange(0, ta.value.length); } catch (_) {} });
+  });
+
+  $("log-dl").addEventListener("click", () => {
+    const lines = log.lines.slice();
+    const now = new Date();
+    const name = "gbs-anywhere-log-" + now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate())
+      + "-" + pad2(now.getHours()) + pad2(now.getMinutes()) + ".txt";
+    const url = URL.createObjectURL(new Blob([exportText(lines, "all levels")], { type: "text/plain;charset=utf-8" }));
+    const a = el("a", { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    logDone("dl", t("log.downloaded", { file: name, n: lines.length }));
+  });
+
   // --- Bottom sheet ------------------------------------------------------------------
   // While open, the page behind is inert, so focus stays in the sheet.
   // `returnTo` (an element or a function) gets the focus back on close.
@@ -2548,6 +2975,7 @@
     renderStart();
     renderStatus();
     renderHistory();
+    renderLog();
   }
 
   async function refresh() {
@@ -2564,9 +2992,11 @@
       events = []; lastSeq = 0; seenAt.clear();
       ui.mine.clear(); ui.mineRange = null; ui.dismissed = 0; ui.planKey = null;
       kinds = null;
+      restartLog();
     }
-    // Upgraded in place: the history may be there now.
+    // Upgraded in place: the history and the log may be there now.
     if (primed && (restarted || (!hadNewApi && hasNewApi()))) {
+      if (log.state === "unsupported") { log.state = "idle"; if (logShown()) openLog(); }
       if (histState !== "ok" || restarted) { histState = "unknown"; if (hasNewApi()) loadHistory(); }
     }
     if (!kinds) loadKinds();
@@ -2602,6 +3032,8 @@
     if (!primed && caughtUp) {
       primed = true;
       if (hasNewApi()) await loadHistory(); else histState = "unsupported";
+      // Opened at #log: the card could only open now, so scroll to it now.
+      if (logShown()) openLog().then(() => { if (location.hash === "#log") scrollToLog(); });
     } else if (shotDone && hasNewApi()) loadHistory();
     else if (histState === "failed" && Date.now() - histTried > 5000) loadHistory();
     renderAll();
