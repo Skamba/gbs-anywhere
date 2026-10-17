@@ -9,19 +9,24 @@
 <link rel="icon" href="data:,">
 <script>
   // Light or dark, before the first paint so the page never flashes: the
-  // system's, followed live. Sets data-theme on <html>, which picks the
-  // palette below.
+  // choice from Status → Settings → Appearance (this device only), else the
+  // system's. Sets data-theme on <html>, which picks the palette below.
   (function () {
     var root = document.documentElement;
     var system = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
     function apply() {
-      var dark = !!(system && system.matches);
+      var choice = null;
+      try { choice = localStorage.getItem("gbs.theme"); } catch (e) {}
+      var dark = choice === "dark" || (choice !== "light" && !!(system && system.matches));
       root.setAttribute("data-theme", dark ? "dark" : "light");
       // Keep in step with --bg below (the stylesheet is not read yet here).
       var meta = document.querySelector('meta[name="theme-color"]');
       if (meta) meta.setAttribute("content", dark ? "#14110E" : "#F4F1EC");
     }
     apply();
+    window.gbsApplyTheme = apply;
+    // A choice made in another tab of this app applies here too.
+    window.addEventListener("storage", function (e) { if (e.key === "gbs.theme") apply(); });
     if (system) {
       if (system.addEventListener) system.addEventListener("change", apply);
       else if (system.addListener) system.addListener(apply);
@@ -39,6 +44,7 @@
     --muted: #6B6157;
     --strong: #3F3830;
     --line: #E3DCD2;
+    --line-soft: #EEE8E0;
     --field: #D6CEC3;
     --nav: #E9E3DA;
     --nav-ink: #5C5248;
@@ -77,12 +83,12 @@
     --shadow-menu: 0 8px 24px rgba(31, 27, 22, .16);
   }
   /* The dark palette. data-theme is set before the first paint by the
-     script in <head>, from the system, so this is the only place dark
-     colours are defined. */
+     script in <head>, from the Appearance setting or the system, so this is
+     the only place dark colours are defined. */
   :root[data-theme="dark"] {
     color-scheme: dark;
     --bg: #14110E; --surface: #201B16; --sunk: #17130F; --ink: #F3EDE5; --text: #D2C8BB; --muted: #A69A8C;
-    --strong: #E5DCD1; --line: #352D26; --field: #4A4037; --nav: #29231D; --nav-ink: #B9AD9F;
+    --strong: #E5DCD1; --line: #352D26; --line-soft: #2B241E; --field: #4A4037; --nav: #29231D; --nav-ink: #B9AD9F;
     --nav-on: #3B332B; --tile: #2E2720; --accent: #DB9A5E; --on-accent: #1F1B16; --on-solid: #FFFFFF;
     --neutral-bg: #2F2822; --neutral-fg: #CBBFB2; --start-bg: #3F2C19; --start-fg: #EFB883;
     --run-bg: #16303F; --run-fg: #9FD1EA; --run-dot: #5AB3DD; --run-note: #132733;
@@ -126,7 +132,7 @@
   .pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--td); flex: none; }
   nav.tabs {
-    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px;
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px;
     margin: 0 16px 16px; padding: 4px; background: var(--nav); border-radius: 12px;
   }
   nav.tabs a {
@@ -154,6 +160,7 @@
   .pad { padding: 16px; }
   .stack { display: flex; flex-direction: column; gap: 10px; }
   .stack-12 { display: flex; flex-direction: column; gap: 12px; }
+  .stack-14 { display: flex; flex-direction: column; gap: 14px; }
   .stack-8 { display: flex; flex-direction: column; gap: 8px; }
   .row { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .row.wrap { flex-wrap: wrap; }
@@ -210,6 +217,7 @@
     flex: none; width: 44px; height: 44px; margin: -4px; border: 0; border-radius: 50%; background: transparent;
     color: var(--muted); display: grid; place-items: center;
   }
+  .info-btn.err { margin: -6px; color: var(--bad-fg); }
   .left-pill {
     flex: none; padding: 6px 12px; border-radius: 999px; background: var(--run-bg); color: var(--run-fg);
     font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
@@ -257,6 +265,8 @@
   }
   .err-head { display: flex; align-items: center; gap: 4px; }
   .err-title { font-size: 15px; font-weight: 650; color: var(--bad-fg); }
+  .err-note { padding: 8px 10px; border-radius: 10px; background: var(--surface); font-size: 13px; line-height: 1.45; color: var(--text); }
+  .err-note a { color: var(--accent); font-weight: 600; }
   .err-box .body-text { line-height: 1.45; }
 
   /* Step 3 */
@@ -344,6 +354,59 @@
   .form-field .field input { font-size: 16px; font-weight: 500; }
   .form-field .help { font-size: 12px; line-height: 1.4; color: var(--muted); }
   .actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+  .set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; min-width: 0; }
+  .set-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .set-name { font-weight: 600; }
+  .set-sub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .stepper { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+  .step-btn {
+    flex: none; width: 44px; height: 44px; border: 1px solid var(--field); border-radius: 10px; background: var(--surface);
+    color: var(--ink); display: grid; place-items: center;
+  }
+  .step-btn[aria-disabled="true"] { opacity: .4; cursor: default; }
+  #set-window-msg:not(:empty) { margin-top: 8px; }
+  .win-field { width: 116px; justify-content: center; gap: 4px; }
+  .win-field input { flex: 1 1 auto; width: 0; min-width: 0; font-size: 17px; text-align: right; }
+  .win-field .unit { font-size: 15px; }
+  .win-field.none input { text-align: center; font-size: 15px; }
+  .win-field.editing input { text-align: center; }
+  .win-field.bad { border-color: var(--bad-field); }
+  .set-row.wrap { flex-wrap: wrap; }
+  /* The text gives way first, so the control stays on the right while it fits. */
+  .set-row.wrap > .set-text { flex: 1 1 140px; }
+  .seg { display: inline-grid; grid-template-columns: repeat(3, auto); gap: 2px; padding: 2px; background: var(--nav); border-radius: 10px; }
+  .seg button {
+    min-height: 44px; min-width: 64px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent;
+    color: var(--nav-ink); font-size: 14px; font-weight: 500;
+  }
+  .seg button[aria-pressed="true"] { background: var(--nav-on); color: var(--ink); font-weight: 600; box-shadow: var(--shadow-tab); }
+
+  /* History */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip-hit { min-height: 44px; padding: 0; border: 0; background: transparent; display: inline-flex; align-items: center; }
+  .chip {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 3px 8px 3px 10px;
+    border-radius: 999px; border: 1.5px solid var(--cc); background: transparent; color: var(--ci); font-size: 12px; font-weight: 600;
+  }
+  .chip-hit[aria-pressed="true"] .chip { background: var(--cc); color: var(--on-solid); }
+  .chip-count {
+    min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--cs); color: var(--ci); font-size: 11px;
+    font-weight: 700; text-align: center;
+  }
+  .k-success { --cc: var(--ok-solid); --cs: var(--ok-bg); --ci: var(--ok-fg); }
+  .k-aborted { --cc: var(--warn-solid); --cs: var(--warn-soft); --ci: var(--warn-fg); }
+  .k-error { --cc: var(--bad-solid); --cs: var(--bad-bg); --ci: var(--bad-fg); }
+  .day { display: flex; flex-direction: column; gap: 8px; }
+  .day h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .day ul { margin: 0; padding: 0; list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .day li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--line-soft); }
+  .day li:first-child { border-top: 0; }
+  .h-time { flex: none; min-width: 48px; white-space: nowrap; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .h-main { flex: 1; min-width: 0; }
+  .h-title { font-size: 15px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+  .h-sub { margin-top: 2px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .h-badge { flex: none; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--cs); color: var(--ci); }
+  .center-note { margin: 24px 0 0; text-align: center; font-size: 14px; line-height: 1.45; color: var(--muted); }
 
   .app-footer {
     padding: 0 16px max(16px, env(safe-area-inset-bottom)); text-align: center;
@@ -382,6 +445,7 @@
     <nav class="tabs" data-i18n-attr="aria-label:nav.sections" aria-label="Sections">
       <a href="#start" data-tab="start" aria-current="page" data-i18n="nav.start">Start</a>
       <a href="#status" data-tab="status" data-i18n="nav.status">Status</a>
+      <a href="#history" data-tab="history" data-i18n="nav.history">History</a>
     </nav>
   </div>
 
@@ -487,7 +551,9 @@
           <div class="err-box">
             <div class="err-head">
               <p class="err-title" id="s2-err-title"></p>
+              <button type="button" class="info-btn err" id="s2-err-info-btn" aria-expanded="false" aria-controls="s2-err-info" data-i18n-attr="aria-label:start.error.infoButton" aria-label="About the time limit"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.5"/></svg></button>
             </div>
+            <p role="note" class="err-note" id="s2-err-info" hidden><span data-i18n="start.error.hint.before">Need more time? Raise the limit under </span><a href="#status" id="to-settings" data-i18n="start.error.hint.link">Status → Settings</a><span data-i18n="start.error.hint.after"> → Time to pull the shot.</span></p>
             <p class="body-text" data-i18n="start.error.cancelled">The shot was cancelled. Grind again to start over at Step 1.</p>
           </div>
           <button type="button" class="btn-plain self-start" id="s2-dismiss" data-i18n="start.error.dismiss">Dismiss</button>
@@ -515,7 +581,7 @@
     </section>
   </main>
 
-  <!-- Status: grinder, integrations -->
+  <!-- Status: grinder, integrations, settings -->
   <main class="panel" id="tab-status" hidden>
     <section class="card pad stack-12" data-i18n-attr="aria-label:status.grinder" aria-label="Grinder">
       <div class="row-12">
@@ -564,6 +630,53 @@
         </div>
       </div>
     </section>
+
+    <section class="card pad stack-14" data-i18n-attr="aria-label:settings.title" aria-label="Settings" id="settings-card">
+      <p class="card-title" data-i18n="settings.title">Settings</p>
+      <div class="set-row wrap">
+        <span class="set-text"><span class="set-name" id="appearance-name" data-i18n="settings.appearance">Appearance</span><span class="set-sub" data-i18n="settings.onDevice">on this device</span></span>
+        <span class="seg" role="group" aria-labelledby="appearance-name" id="appearance">
+          <button type="button" data-theme-choice="system" aria-pressed="true" data-i18n="settings.theme.system">System</button>
+          <button type="button" data-theme-choice="light" aria-pressed="false" data-i18n="settings.theme.light">Light</button>
+          <button type="button" data-theme-choice="dark" aria-pressed="false" data-i18n="settings.theme.dark">Dark</button>
+        </span>
+      </div>
+      <!-- The shot window: − and + in 15 s steps, or typed into the field. -->
+      <div class="stack-8" id="set-window-row" hidden>
+        <div class="set-row wrap">
+          <label class="set-text" for="set-window"><span class="set-name" data-i18n="settings.window">Time to pull the shot</span><span class="set-sub"><span data-i18n="settings.windowSub">after the grind, before a timeout</span> · <span id="set-window-range"></span></span></label>
+          <span class="stepper">
+            <button type="button" class="step-btn" id="set-window-down" data-i18n-attr="aria-label:settings.windowLess;title:settings.windowLess" aria-label="15 s shorter" title="15 s shorter"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 12h12"/></svg></button>
+            <span class="field win-field" id="set-window-field"><input id="set-window" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" aria-describedby="set-window-msg"><span class="unit" id="set-window-unit">min</span></span>
+            <button type="button" class="step-btn" id="set-window-up" data-i18n-attr="aria-label:settings.windowMore;title:settings.windowMore" aria-label="15 s longer" title="15 s longer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
+          </span>
+        </div>
+        <p class="hint" id="set-window-msg" role="status"></p>
+      </div>
+      <div class="set-row" id="set-host-row" hidden>
+        <span class="set-text"><span class="set-name" data-i18n="settings.host">Grinder IP address</span><span class="set-sub" id="set-host-value"></span></span>
+        <button type="button" class="btn-plain sm" id="set-host-change" aria-controls="set-host-form" aria-expanded="false" data-i18n="common.change">Change</button>
+      </div>
+      <form class="stack" id="set-host-form" autocomplete="off" hidden>
+        <label class="field-label" for="f-host" data-i18n="settings.host">Grinder IP address</label>
+        <span class="field"><input id="f-host" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="192.168.1.30" enterkeyhint="done" style="font-size:16px;font-weight:500"></span>
+        <p class="foot" data-i18n="settings.hostHelp">The address of an E65/E80 GbS (Generic WiFi). Leave it empty when you use an E64 WS.</p>
+        <p class="hint warn" id="set-host-error" role="alert" hidden></p>
+        <div class="actions">
+          <button type="button" class="btn-plain sm" id="set-host-cancel" data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn-send" id="set-host-save" data-i18n="common.save">Save</button>
+        </div>
+      </form>
+      <p class="foot" id="set-foot" hidden></p>
+    </section>
+  </main>
+
+  <!-- History: the last shots from GET /api/history -->
+  <main class="panel" id="tab-history" style="gap:14px" hidden>
+    <div role="group" data-i18n-attr="aria-label:history.filter" aria-label="Filter by status" class="chips" id="h-chips"></div>
+    <div class="stack-14" id="h-groups"></div>
+    <p class="center-note" id="h-empty" hidden></p>
+    <p class="foot" id="h-foot" style="margin-top:4px" hidden></p>
   </main>
 
   <footer class="app-footer" id="app-footer">gbs-anywhere</footer>
@@ -638,12 +751,16 @@
       "nav.sections": "Sections",
       "nav.start": "Start",
       "nav.status": "Status",
+      "nav.history": "History",
 
       "common.cancel": "Cancel",
       "common.back": "Back",
       "common.add": "Add",
+      "common.save": "Save",
+      "common.change": "Change",
       "common.delete": "Delete",
       "common.optional": " (optional)",
+      "common.notSaved": "Not saved: {error}",
       "common.requestFailed": "The request failed ({status}).",
       "common.and": "and",
       "unit.shot": "{time}\u00a0s · {weight}\u00a0g",
@@ -673,6 +790,7 @@
       "sys.text.knob": "Ground. Press the grinder’s rotary knob to start the shot: step 1 of 3.",
       "sys.text.needsId": "The grinder is paired, but its pairing ID is missing here: enter it above.",
       "sys.text.pairing": "Accept gbs-anywhere on the grinder to pair it.",
+      "sys.text.linking": "Connecting to the grinder at {host}…",
       "sys.text.linkingNoHost": "Connecting to the grinder…",
       "sys.text.blocked": "Grinder blocked: {message}",
       "sys.text.error": "The last shot did not reach the grinder.",
@@ -775,9 +893,14 @@
       "start.error.refused": "The grinder refused the shot",
       "start.error.unknownApp": "The grinder no longer knows this gbs-anywhere",
       "start.error.generic": "The shot did not reach the grinder",
+      "start.error.infoButton": "About the time limit",
+      "start.error.hint.before": "Need more time? Raise the limit under ",
+      "start.error.hint.link": "Status → Settings",
+      "start.error.hint.after": " → Time to pull the shot.",
       "start.error.cancelled": "The shot was cancelled. Grind again to start over at Step 1.",
       "start.error.dismiss": "Dismiss",
       "start.aborted.user": "Aborted in the app. The grinder skips this shot.",
+      "start.aborted.address": "Ended: the grinder address changed. Grind again to start over at Step 1.",
       "start.aborted.replaced": "Replaced by a newer grind. That grind is the next shot.",
 
       "start.step3.kicker": "Step 3",
@@ -838,6 +961,52 @@
       "integ.delete.textPassword": "This stops the integration and removes its saved settings, including the password. Shots are then no longer reported by themselves.",
       "integ.delete.type": "Type DELETE to confirm",
       "integ.delete.failed": "Could not delete it: {error}",
+
+      "settings.title": "Settings",
+      "settings.appearance": "Appearance",
+      "settings.onDevice": "on this device",
+      "settings.theme.system": "System",
+      "settings.theme.light": "Light",
+      "settings.theme.dark": "Dark",
+      "settings.window": "Time to pull the shot",
+      "settings.windowSub": "after the grind, before a timeout",
+      "settings.windowRange": "{min}–{max} min",
+      "settings.windowLess": "15 s shorter",
+      "settings.windowMore": "15 s longer",
+      "settings.windowIs": "That is {time} min.",
+      "settings.windowMax": "At most {time} min.",
+      "settings.windowMin": "At least {time} min.",
+      "settings.windowInvalid": "Type a time from {min} to {max} min, e.g. 2:30, {decimal} (minutes) or 150 (seconds).",
+      "settings.noLimit": "No limit",
+      "settings.host": "Grinder IP address",
+      "settings.hostNone": "None · E64 WS",
+      "settings.hostHelp": "The address of an E65/E80 GbS (Generic WiFi). Leave it empty when you use an E64 WS.",
+      "settings.saved": "The settings for time to pull the shot and the grinder IP address are saved on the computer (gbs-anywhere host) and kept after a restart. Appearance applies to this device only.",
+      "settings.notPersistent": "The settings for time to pull the shot and the grinder IP address apply until the next restart: gbs-anywhere runs without a settings file (--config). Appearance applies to this device only.",
+
+      "history.filter": "Filter by status",
+      "history.kind.success": "Success",
+      "history.kind.aborted": "Aborted",
+      "history.kind.error": "Error",
+      "history.chip": { one: "{label}, {n} shot", other: "{label}, {n} shots" },
+      "history.today": "Today",
+      "history.yesterday": "Yesterday",
+      "history.unknownDay": "Unknown day",
+      "history.timeout": "Timeout: no shot in {time}",
+      "history.abortedUser": "Aborted in the app",
+      "history.replaced": "Replaced by a newer grind",
+      "history.stoppedWaiting": "The grinder stopped waiting",
+      "history.refused": "The grinder refused the shot",
+      "history.address": "Ended: grinder address changed",
+      "history.target": "Target {targets}",
+      "history.ignored": "ignored by the grinder",
+      "history.unsupported": "This gbs-anywhere server keeps no shot history. Update gbs-anywhere to see your shots here.",
+      "history.failed": "Could not load the history: {error} Trying again…",
+      "history.loading": "Loading…",
+      "history.empty": "No shots yet. Each shot shows up here once it is done.",
+      "history.noMatch": "No shots match the filter. Tap a status above to show it again.",
+      "history.kept": { one: "The last shot is kept on this computer.", other: "The last {n} shots are kept on this computer." },
+      "history.keptMemory": { one: "The last shot is kept in memory only, until gbs-anywhere restarts.", other: "The last {n} shots are kept in memory only, until gbs-anywhere restarts." },
     },
   };
 
@@ -864,14 +1033,18 @@
     try { new Intl.NumberFormat(locale); } catch (_) { locale = lang; }
     const nf = (o) => new Intl.NumberFormat(locale, o);
     const df = (o) => new Intl.DateTimeFormat(locale, o);
-    // 09:47:05 in 24-hour locales, 9:47:05 AM (not 09:47:05 AM) in 12-hour ones.
+    // 09:47 in 24-hour locales, 9:47 AM (not 09:47 AM) in 12-hour ones.
     const h12 = /^h1[12]$/.test(df({ hour: "numeric" }).resolvedOptions().hourCycle || "");
     const hourStyle = h12 ? "numeric" : "2-digit";
     fmt = {
       one: nf({ minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false }),
       upToOne: nf({ maximumFractionDigits: 1, useGrouping: false }),
       int: nf({ maximumFractionDigits: 0 }),
+      hm: df({ hour: hourStyle, minute: "2-digit" }),
       hms: df({ hour: hourStyle, minute: "2-digit", second: "2-digit" }),
+      day: df({ day: "numeric", month: "short" }),
+      dayYear: df({ day: "numeric", month: "short", year: "numeric" }),
+      weekday: df({ weekday: "long" }),
       plural: new Intl.PluralRules(locale),
       list: Intl.ListFormat ? new Intl.ListFormat(locale, { style: "long", type: "conjunction" }) : null,
     };
@@ -955,6 +1128,7 @@
     return Math.floor(s / 60) + ":" + pad2(s % 60);
   }
   /** Clock times in the language's format. */
+  const hhmm = (d) => fmt.hm.format(d);
   const hhmmss = (d) => fmt.hms.format(d);
   function ago(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
@@ -992,13 +1166,15 @@
   let stateAt = 0;               // performance.now() when S arrived
   let online = true;
   let offlineSince = 0;          // Date.now() when gbs-anywhere stopped answering
-  let events = [], lastSeq = 0;
+  let events = [], lastSeq = 0, primed = false;
   const seenAt = new Map();      // event seq -> when it happened, on this device's clock
+  let hist = null;               // GET /api/history, or null
+  let histState = "unknown";     // "unknown" | "ok" | "unsupported"
   let kinds = null, kindsPersistent = false, kindsLoading = false;
   let tab = "start";
   let sseOpen = false;
   const ui = {
-    open: 1, planKey: null, info: false, dismissed: 0,
+    open: 1, planKey: null, info: false, errInfo: false, dismissed: 0,
     // System status: open or closed (sysOpen), as last set outside a stop
     // (sysPref), and the stop it opened for by itself (sysStop, see STOPS).
     sysOpen: false, sysPref: false, sysStop: null,
@@ -1011,12 +1187,14 @@
     brew: null, typeIn: false, missed: false,
   };
 
+  const hasNewApi = () => !!(S && S.settings);
   const wifiOf = () => (S && S.grinder && S.grinder.wifi) || null;
   function linkOn() {
     const age = S && S.grinder ? S.grinder.last_poll_age_ms : null;
     return age != null && age < 6000;
   }
   function windowS() {
+    if (S && S.settings && typeof S.settings.shot_window_s === "number") return S.settings.shot_window_s;
     const t = S && S.config && S.config.brew_timeout;
     return t && typeof t.secs === "number" ? t.secs : 0;
   }
@@ -1025,16 +1203,16 @@
     for (let i = events.length - 1; i >= 0; i--) if (kindsWanted.includes(events[i].kind)) return events[i];
     return null;
   }
-  // Ends of a brew that are no failure.
-  const ABORTS = ["aborted by user", "a newer Grind-by-Sync grind replaced it"];
+  // Ends of a brew that are no failure (history kind "aborted").
+  const ABORTS = ["aborted by user", "a newer Grind-by-Sync grind replaced it", "the grinder address changed"];
   const isAbort = (r) => ABORTS.includes(r);
-  /** An E65/E80 setup: a Generic WiFi link. */
-  const wifiSetup = () => !!wifiOf();
-  /** The E65/E80 link is starting and has not reached the grinder yet. */
+  /** An E65/E80 setup: a Generic WiFi link, or an address it is starting with. */
+  const wifiSetup = () => !!(wifiOf() || (S && S.settings && S.settings.grinder_host));
+  /** The E65/E80 link is (re)starting and has not reached the grinder yet. */
   function linkStarting() {
     if (linkOn()) return false;
     const wifi = wifiOf();
-    return !!wifi && wifi.state === "connecting";
+    return wifi ? wifi.state === "connecting" : !!(S && S.settings && S.settings.grinder_host);
   }
 
   // Integrations that report shots by themselves. When every one has failed,
@@ -1065,12 +1243,24 @@
     return { w: w > 0 ? w : null, t: t > 0 ? t : null };
   }
 
+  // The newest history entry, when it is the given machine event.
+  function histFor(ev) {
+    const h = hist && hist.shots && hist.shots[0];
+    if (!h || !ev) return null;
+    if (ev.kind === "shot_reported") {
+      return h.kind === "success" && h.time_s != null && Math.abs(h.time_s * 1000 - ev.result.time_ms) < 60 ? h : null;
+    }
+    return h.kind !== "success" && h.reason === ev.reason ? h : null;
+  }
   /** When the brew ended with this event. */
   function endTime(ev) {
-    return ev && seenAt.has(ev.seq) ? seenAt.get(ev.seq) : null;
+    if (!ev) return null;
+    if (seenAt.has(ev.seq)) return seenAt.get(ev.seq);
+    const h = histFor(ev);
+    return h && h.ended_at ? Date.parse(h.ended_at) : null;
   }
-  /** When the current (or last) brew started: from its event, or counted
-   *  back from the running timer. */
+  /** When the current (or last) brew started: from its event, counted back
+   *  from the running timer, or from the history entry of its outcome. */
   function brewStart(f) {
     const started = f.started;
     if (started && seenAt.has(started.seq)) return seenAt.get(started.seq);
@@ -1079,7 +1269,9 @@
       if (started) seenAt.set(started.seq, t);
       return t;
     }
-    return null;
+    if (!started || !f.outcome || f.outcome.seq < started.seq) return null;
+    const h = histFor(f.outcome);
+    return h && h.at ? Date.parse(h.at) : null;
   }
   const fresh = (ev) => { const t = endTime(ev); return t != null && Date.now() - t < FRESH_MS; };
   /** E64: a grind waits for the knob press only for a while. */
@@ -1118,7 +1310,7 @@
   };
 
   // --- Tabs --------------------------------------------------------------------
-  const TABS = ["start", "status"];
+  const TABS = ["start", "status", "history"];
   function showTab(name) {
     if (!TABS.includes(name)) name = "start";
     const changed = name !== tab;
@@ -1129,6 +1321,7 @@
     }
     if (changed) window.scrollTo(0, 0);
     renderAll();
+    if (name === "history") loadHistory();
   }
   /** Opens a tab and puts it in the address, without a navigation: Safari on
    *  iPhone reloaded the whole page for a plain "#tab" link. */
@@ -1146,6 +1339,15 @@
   // Back and forward between tabs, and links typed with a hash.
   window.addEventListener("popstate", () => showTab(location.hash.slice(1)));
   window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+  $("to-settings").addEventListener("click", (e) => {
+    e.preventDefault();
+    goTab("status");
+    // To the + of Time to pull the shot (rendered now), or the − at the longest.
+    const up = $("set-window-up");
+    const b = up.getAttribute("aria-disabled") === "true" ? $("set-window-down") : up;
+    b.scrollIntoView({ block: "center" });
+    b.focus();
+  });
 
   // --- Header and system status ---------------------------------------------------
   /** Why the grinder won't grind, unless it is only the shot in progress. */
@@ -1198,7 +1400,10 @@
     if (f.sc === "knob") return s("run", "clock", "running", t("sys.text.knob"));
     if (wifi && wifi.needs_pairing_id) return s("start", "alert", "pairing", t("sys.text.needsId"));
     if (wifi && wifi.state === "pairing") return s("start", "alert", "pairing", t("sys.text.pairing"));
-    if (linkStarting()) return s("start", "clock", "linking", t("sys.text.linkingNoHost"));
+    if (linkStarting()) {
+      const host = S.settings && S.settings.grinder_host;
+      return s("start", "clock", "linking", host ? t("sys.text.linking", { host }) : t("sys.text.linkingNoHost"));
+    }
     if (!linkOn()) {
       const missing = grinderMissing(wifi);
       return s("error", "alert", "noGrinder", missing.text, missing.detail);
@@ -1397,6 +1602,7 @@
       ui.planKey = key;
       const auto = plan.findIndex(([tone]) => tone === "run" || tone === "error");
       ui.open = stop ? 0 : auto >= 0 ? auto + 1 : 1;
+      ui.errInfo = false;
     }
     if (f.sc === "running" && ui.lastScenario !== "running") {
       // A typed weight stays for the next shot; left empty, the recipe's is sent.
@@ -1470,10 +1676,17 @@
       $("s2-source").textContent = [by, at ? hhmmss(new Date(at)) : null].filter(Boolean).join(" · ");
     }
     $("s2-error").hidden = f.sc !== "error";
-    if (f.sc === "error") $("s2-err-title").textContent = errorTitle(f.reason);
+    if (f.sc === "error") {
+      const timeout = f.reason === "no result reported in time";
+      $("s2-err-title").textContent = errorTitle(f.reason, f.outcome);
+      $("s2-err-info-btn").hidden = !timeout;
+      $("s2-err-info-btn").setAttribute("aria-expanded", String(ui.errInfo));
+      $("s2-err-info").hidden = !(timeout && ui.errInfo);
+    }
     $("s2-aborted").hidden = f.sc !== "aborted";
     if (f.sc === "aborted") {
-      $("s2-aborted").textContent = t(f.reason === "aborted by user" ? "start.aborted.user" : "start.aborted.replaced");
+      $("s2-aborted").textContent = t(f.reason === "aborted by user" ? "start.aborted.user"
+        : f.reason === "the grinder address changed" ? "start.aborted.address" : "start.aborted.replaced");
     }
 
     // Step 3
@@ -1498,9 +1711,12 @@
     "the grinder refused the job": "start.error.refused",
     "the grinder no longer knows this gbs-anywhere": "start.error.unknownApp",
   };
-  function errorTitle(reason) {
+  function errorTitle(reason, outcome) {
     if (reason === "no result reported in time") {
-      // How long it waited: the brew timeout (--brew-timeout-s).
+      // How long it waited, from the history; else the current setting.
+      const h = histFor(outcome);
+      const ms = h ? Date.parse(h.ended_at) - Date.parse(h.at) : NaN;
+      if (isFinite(ms) && ms > 0) return t("start.error.timeout", { window: clock(ms) });
       return windowS() > 0 ? t("start.error.timeout", { window: windowLabel() }) : t("start.error.timeoutNoLimit");
     }
     if (ERROR_REASONS[reason]) return t(ERROR_REASONS[reason]);
@@ -1558,6 +1774,7 @@
   }
 
   $("s2-info-btn").addEventListener("click", () => { ui.info = !ui.info; renderStart(); });
+  $("s2-err-info-btn").addEventListener("click", () => { ui.errInfo = !ui.errInfo; renderStart(); });
   $("s2-dismiss").addEventListener("click", () => {
     const o = lastOf(["shot_aborted"]);
     if (o) ui.dismissed = o.seq;
@@ -1730,8 +1947,9 @@
     setTone($("g-pill"), tone);
     $("g-pill-text").textContent = t("grinder.state." + state);
     const age = S.grinder.last_poll_age_ms;
+    const typed = S.settings && S.settings.grinder_host;
     const facts = [
-      ["ip", e65 ? ((wifi && urlHost(wifi.grinder)) || "–") : (hostOf(S.grinder.peer) || "–")],
+      ["ip", e65 ? (typed || (wifi && urlHost(wifi.grinder)) || "–") : (hostOf(S.grinder.peer) || "–")],
     ];
     if (e65) facts.push(["pairingId", wifi && wifi.pairing_id != null ? String(wifi.pairing_id) : t("grinder.fact.notPaired")]);
     if (wifi && wifi.pairing_code != null && wifi.state === "pairing") facts.push(["pairingCode", String(wifi.pairing_code)]);
@@ -1941,10 +2159,341 @@
     } finally { $("add-submit").disabled = false; }
   });
 
+  // Settings
+  function renderSettings() {
+    renderAppearance();
+    const st = S.settings;
+    // An older server has no settings API: only the appearance is shown.
+    for (const id of ["set-window-row", "set-foot"]) $(id).hidden = !st;
+    if (!st) { $("set-host-row").hidden = true; $("set-host-form").hidden = true; return; }
+    if ($("set-host-form").hidden) $("set-host-row").hidden = false;
+    renderWindow();
+    $("set-host-value").textContent = st.grinder_host ? st.grinder_host : t("settings.hostNone");
+    $("set-foot").textContent = t(st.persistent ? "settings.saved" : "settings.notPersistent");
+  }
+
+  // Time to pull the shot: − and + in 15 s steps (saved a moment after the
+  // last tap), or typed into the field (saved on Enter or when leaving it).
+  // The server takes 0 (no limit) or 30 to 3600 s; the app offers 0:30 to
+  // 10:00 and shows a longer time or no limit set elsewhere as it is.
+  const WIN_MIN = 30, WIN_MAX = 600, WIN_STEP = 15;
+  const win = { pending: null, saved: null, seq: 0, timer: null, msg: "", warn: false };
+  /** The shot window as shown: the one waiting to be saved, else the one
+   *  just saved (a state poll that left before the save still brings the
+   *  old one, for a moment), else the server's. */
+  function winValue() {
+    if (win.pending != null) return win.pending;
+    const v = S.settings.shot_window_s;
+    if (win.saved && v !== win.saved.value && Date.now() - win.saved.at < 5000) return win.saved.value;
+    win.saved = null;
+    return v;
+  }
+  const winText = (v) => (v === 0 ? t("settings.noLimit") : clock(v * 1000));
+  function renderWindow() {
+    const v = winValue();
+    const input = $("set-window");
+    if (document.activeElement !== input) {
+      input.value = winText(v);
+      input.dataset.shown = input.value;
+      $("set-window-field").classList.toggle("none", v === 0);
+      $("set-window-field").classList.remove("editing");
+      $("set-window-unit").hidden = v === 0;
+    }
+    // aria-disabled rather than disabled: the button keeps the focus.
+    $("set-window-down").setAttribute("aria-disabled", String(v !== 0 && v <= WIN_MIN));
+    $("set-window-up").setAttribute("aria-disabled", String(v === 0 || v >= WIN_MAX));
+    $("set-window-range").textContent = t("settings.windowRange", { min: clock(WIN_MIN * 1000), max: clock(WIN_MAX * 1000) });
+    $("set-window-field").classList.toggle("bad", win.warn && document.activeElement === input);
+    const msg = $("set-window-msg");
+    if (msg.textContent !== win.msg) msg.textContent = win.msg;
+    msg.className = "hint" + (win.warn ? " warn" : "");
+  }
+  function windowNote(text, warn) { win.msg = text || ""; win.warn = !!warn; }
+
+  /** Seconds from what was typed, or NaN: "2:30"; "150 s", "2 min"; a
+   *  number with decimals is minutes ("2,5"), except two decimals under 60,
+   *  which are seconds ("2,30" is 2:30, for keypads without a colon); a
+   *  whole number is minutes up to 10 and seconds from 30 (in between it
+   *  could be either). */
+  function parseWindow(text) {
+    let s = String(text || "").trim().toLowerCase();
+    let unit = "";
+    const u = /^(.*?)\s*(min|m|sec|s)\.?$/.exec(s);
+    if (u) { s = u[1]; unit = u[2].charAt(0) === "m" ? "min" : "s"; }
+    let m = /^(\d{1,2}):(\d{1,2})$/.exec(s);
+    if (m) return unit !== "s" && Number(m[2]) < 60 ? Number(m[1]) * 60 + Number(m[2]) : NaN;
+    m = /^(\d{1,4})(?:[.,](\d{1,3}))?$/.exec(s);
+    if (!m) return NaN;
+    const n = Number(m[1] + (m[2] ? "." + m[2] : ""));
+    if (unit === "s") return Math.round(n);
+    if (unit === "min") return Math.round(n * 60);
+    if (m[2] && m[2].length === 2 && Number(m[2]) < 60) return Number(m[1]) * 60 + Number(m[2]);
+    if (m[2] || n <= 10) return Math.round(n * 60);
+    return n >= WIN_MIN ? n : NaN;
+  }
+  /** `secs` within the offered range, with a note when it was moved into it. */
+  function clampWindow(secs) {
+    if (secs > WIN_MAX) return { secs: WIN_MAX, note: t("settings.windowMax", { time: clock(WIN_MAX * 1000) }) };
+    if (secs < WIN_MIN) return { secs: WIN_MIN, note: t("settings.windowMin", { time: clock(WIN_MIN * 1000) }) };
+    return { secs, note: "" };
+  }
+
+  async function saveWindow(value) {
+    clearTimeout(win.timer);
+    // Only the newest save's answer counts; an older one may come back later.
+    const seq = ++win.seq;
+    try {
+      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shot_window_s: value }) });
+      if (seq !== win.seq) return;
+      if (st && typeof st.shot_window_s === "number") {
+        S.settings = st;
+        win.saved = { value: st.shot_window_s, at: Date.now() };
+      }
+      if (win.warn) windowNote("");   // an earlier failure is past
+    } catch (x) {
+      if (seq === win.seq) windowNote(t("common.notSaved", { error: x.message }), true);
+    } finally {
+      // A newer value waits for its own save.
+      if (win.pending === value) win.pending = null;
+      renderAll();
+    }
+  }
+  function stepWindow(dir) {
+    const cur = winValue();
+    if (dir > 0 ? cur === 0 || cur >= WIN_MAX : cur !== 0 && cur <= WIN_MIN) return;   // at the end
+    let next;
+    if (cur === 0) next = WIN_MAX;   // from no limit, − gives the longest
+    else next = dir > 0 ? Math.floor(cur / WIN_STEP) * WIN_STEP + WIN_STEP : Math.ceil(cur / WIN_STEP) * WIN_STEP - WIN_STEP;
+    next = Math.min(WIN_MAX, Math.max(WIN_MIN, next));
+    if (next === cur) return;
+    win.pending = next;
+    windowNote("");
+    renderWindow();
+    clearTimeout(win.timer);
+    win.timer = setTimeout(() => saveWindow(next), 700);
+  }
+  $("set-window-down").addEventListener("click", () => stepWindow(-1));
+  $("set-window-up").addEventListener("click", () => stepWindow(1));
+
+  /** Takes what was typed; `leaving`: the field lost focus. Returns false
+   *  when it cannot be read (the note says how to write it). */
+  function commitWindow(leaving) {
+    const input = $("set-window");
+    const typed = input.value.trim();
+    if (!typed || typed === input.dataset.shown) return true;
+    const secs = parseWindow(typed);
+    if (!isFinite(secs)) {
+      windowNote(t("settings.windowInvalid", { min: clock(WIN_MIN * 1000), max: clock(WIN_MAX * 1000), decimal: fmt.upToOne.format(2.5) }), true);
+      if (leaving) input.value = input.dataset.shown;
+      renderWindow();
+      return false;
+    }
+    const c = clampWindow(secs);
+    windowNote(c.note);
+    input.value = winText(c.secs);
+    input.dataset.shown = input.value;
+    if (c.secs !== winValue()) { win.pending = c.secs; saveWindow(c.secs); }
+    renderWindow();
+    return true;
+  }
+  $("set-window").addEventListener("focus", (e) => {
+    // An empty field with the time as placeholder: what is typed replaces
+    // it, and leaving it empty keeps it. No unit: 150 is seconds, 2,5 minutes.
+    const input = e.target;
+    $("set-window-unit").hidden = true;
+    $("set-window-field").classList.remove("none");
+    $("set-window-field").classList.add("editing");
+    input.placeholder = winValue() === 0 ? "" : input.dataset.shown || "";
+    input.value = "";
+    windowNote("");
+    renderWindow();
+  });
+  $("set-window").addEventListener("input", (e) => {
+    // What the typing comes to, so "2,30" or "150" can be checked before it is saved.
+    const typed = e.target.value.trim();
+    const secs = parseWindow(typed);
+    if (!typed || !isFinite(secs)) windowNote("");
+    else {
+      const c = clampWindow(secs);
+      windowNote(c.note || (winText(c.secs) !== typed ? t("settings.windowIs", { time: winText(c.secs) }) : ""));
+    }
+    renderWindow();
+  });
+  $("set-window").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); if (commitWindow(false)) e.target.blur(); }
+    else if (e.key === "Escape") { e.target.value = ""; windowNote(""); e.target.blur(); }
+  });
+  $("set-window").addEventListener("blur", () => { commitWindow(true); renderWindow(); });
+  // Appearance: System, Light or Dark, kept per device (gbs.theme); the
+  // script in <head> applies it.
+  const themeChoice = () => { const v = store.get("theme"); return v === "light" || v === "dark" ? v : "system"; };
+  function renderAppearance() {
+    const choice = themeChoice();
+    for (const b of $("appearance").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.themeChoice === choice));
+  }
+  for (const b of $("appearance").querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      store.set("theme", b.dataset.themeChoice);
+      if (window.gbsApplyTheme) window.gbsApplyTheme();
+      renderAppearance();
+    });
+  }
+
+  // Changed in another tab of this browser: follow it here too.
+  window.addEventListener("storage", (e) => {
+    if (e.key === "gbs.theme") renderAppearance();   // the head script applies it
+  });
+
+  function hostEditor(open) {
+    $("set-host-form").hidden = !open;
+    $("set-host-row").hidden = open;
+    $("set-host-change").setAttribute("aria-expanded", String(open));
+    $("set-host-error").hidden = true;
+    if (open) { $("f-host").value = (S.settings && S.settings.grinder_host) || ""; $("f-host").focus(); }
+  }
+  $("set-host-change").addEventListener("click", () => hostEditor(true));
+  $("set-host-cancel").addEventListener("click", () => hostEditor(false));
+  $("set-host-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = $("f-host").value.trim();
+    $("set-host-save").disabled = true; $("set-host-error").hidden = true;
+    try {
+      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: v || null }) });
+      if (st && "grinder_host" in st) S.settings = st;
+      hostEditor(false);
+      await tick();
+    } catch (x) {
+      $("set-host-error").textContent = t("common.notSaved", { error: x.message }); $("set-host-error").hidden = false;
+    } finally { $("set-host-save").disabled = false; }
+  });
+
   function renderStatus() {
     if (!S || tab !== "status") return;
     renderGrinder();
     renderIntegrations();
+    renderSettings();
+  }
+
+  // --- History tab -----------------------------------------------------------------
+  const HKINDS = ["success", "aborted", "error"];
+  const kindLabel = (k) => (HKINDS.includes(k) ? t("history.kind." + k) : k);
+  let hHidden = {};
+  try { hHidden = JSON.parse(store.get("historyHidden") || "{}") || {}; } catch (_) {}
+  let histLoading = false, histTried = 0, histError = "";
+
+  async function loadHistory() {
+    if (histLoading) return;
+    if (!hasNewApi()) {
+      if (S) { histState = "unsupported"; renderHistory(); }
+      return;
+    }
+    histLoading = true;
+    histTried = Date.now();
+    try {
+      const h = await api("/api/history");
+      if (h && Array.isArray(h.shots)) { hist = h; histState = "ok"; } else histState = "unsupported";
+    } catch (e) {
+      // Not there on an older server; otherwise tried again shortly (see refresh).
+      if (e.status === 404) histState = "unsupported";
+      else { histState = "failed"; histError = e.message; }
+    }
+    histLoading = false;
+    renderHistory();
+    renderStart();
+  }
+
+  /** "Today · 11 Oct", "Yesterday · 10 Oct", "Thursday · 9 Oct". */
+  function dayLabel(d) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const that = new Date(d); that.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - that) / 86400000);
+    const date = (d.getFullYear() !== today.getFullYear() ? fmt.dayYear : fmt.day).format(d);
+    const name = diff === 0 ? t("history.today") : diff === 1 ? t("history.yesterday") : fmt.weekday.format(d);
+    return name + " · " + date;
+  }
+
+  // The machine's reasons for ending a brew, and their short history titles.
+  const HISTORY_REASONS = {
+    "aborted by user": "history.abortedUser",
+    "a newer Grind-by-Sync grind replaced it": "history.replaced",
+    "the grinder stopped waiting before the shot came": "history.stoppedWaiting",
+    "the grinder refused the job": "history.refused",
+    "the grinder address changed": "history.address",
+    "the grinder no longer knows this gbs-anywhere": "start.error.unknownApp",
+  };
+  function shotTitle(s) {
+    if (s.kind === "success") {
+      if (s.time_s == null) return "–";
+      return s.weight_g != null ? t("unit.shot", { time: secs(s.time_s), weight: grams(s.weight_g) }) : t("unit.seconds", { time: secs(s.time_s) });
+    }
+    const r = s.reason || "";
+    if (r === "no result reported in time") {
+      const ms = Date.parse(s.ended_at) - Date.parse(s.at);
+      return t("history.timeout", { time: isFinite(ms) ? clock(ms) : windowLabel() });
+    }
+    if (HISTORY_REASONS[r]) return t(HISTORY_REASONS[r]);
+    // A reason this app does not know: as the server says it.
+    return r ? cap(r) : kindLabel(s.kind);
+  }
+  function shotSub(s) {
+    const parts = [];
+    const tgt = [s.target_time_s != null ? t("unit.seconds", { time: secs(s.target_time_s) }) : null,
+      s.target_weight_g != null ? t("unit.grams", { weight: gramsShort(s.target_weight_g) }) : null].filter(Boolean);
+    if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
+    if (s.kind === "success" && s.time_s != null && (s.time_s * 1000 <= MIN_MS || s.time_s * 1000 > MAX_MS)) parts.push(t("history.ignored"));
+    return parts.join(" · ");
+  }
+
+  function renderHistory() {
+    if (tab !== "history") return;
+    const supported = histState !== "unsupported";
+    const shots = (hist && hist.shots) || [];
+    const chips = $("h-chips"), groups = $("h-groups"), empty = $("h-empty"), foot = $("h-foot");
+    chips.hidden = !supported || !hist;
+    if (!supported) {
+      groups.replaceChildren();
+      empty.hidden = false;
+      empty.textContent = t("history.unsupported");
+      foot.hidden = true;
+      return;
+    }
+    if (!hist) {
+      groups.replaceChildren(); empty.hidden = false; foot.hidden = true;
+      empty.textContent = histState === "failed" ? t("history.failed", { error: histError }) : t("history.loading");
+      return;
+    }
+    chips.replaceChildren(...HKINDS.map((k) => {
+      const on = !hHidden[k];
+      const n = shots.filter((s) => s.kind === k).length;
+      return el("button", {
+        type: "button", class: "chip-hit k-" + k, "aria-pressed": String(on),
+        "aria-label": t("history.chip", { label: kindLabel(k), n }),
+        onclick: () => { hHidden[k] = on; store.set("historyHidden", JSON.stringify(hHidden)); renderHistory(); },
+      }, el("span", { class: "chip" }, kindLabel(k), el("span", { class: "chip-count", text: fmt.int.format(n) })));
+    }));
+    const visible = shots.filter((s) => !hHidden[s.kind]);
+    const byDay = new Map();
+    for (const s of visible) {
+      const d = new Date(s.at);
+      const label = isNaN(d) ? t("history.unknownDay") : dayLabel(d);
+      if (!byDay.has(label)) byDay.set(label, { label, items: [] });
+      byDay.get(label).items.push(s);
+    }
+    const days = [...byDay.values()];
+    groups.replaceChildren(...days.map((g) => el("section", { class: "day" },
+      el("h2", { text: g.label }),
+      el("ul", null, g.items.map((s) => {
+        const d = new Date(s.at);
+        const sub = shotSub(s);
+        return el("li", { class: "k-" + s.kind },
+          el("p", { class: "h-time", text: isNaN(d) ? "–" : hhmm(d) }),
+          el("div", { class: "h-main" }, el("p", { class: "h-title", text: shotTitle(s) }), sub ? el("p", { class: "h-sub", text: sub }) : null),
+          el("span", { class: "h-badge", text: kindLabel(s.kind) }));
+      })))));
+    empty.hidden = visible.length > 0;
+    empty.textContent = t(shots.length === 0 ? "history.empty" : "history.noMatch");
+    foot.hidden = false;
+    foot.textContent = t(hist.persistent === false ? "history.keptMemory" : "history.kept", { n: hist.capacity || 200 });
   }
 
   // --- Bottom sheet ------------------------------------------------------------------
@@ -1998,6 +2547,7 @@
     $("app-footer").title = String(S.version || "");
     renderStart();
     renderStatus();
+    renderHistory();
   }
 
   async function refresh() {
@@ -2008,14 +2558,21 @@
     // The server restarted: a new boot_id, or (without one) event numbers that went back.
     const restarted = !!S && ((st.boot_id && S.boot_id && st.boot_id !== S.boot_id)
       || (typeof st.last_seq === "number" && st.last_seq < lastSeq));
+    const hadNewApi = hasNewApi();
     S = st; stateAt = performance.now();
     if (restarted) {
       events = []; lastSeq = 0; seenAt.clear();
       ui.mine.clear(); ui.mineRange = null; ui.dismissed = 0; ui.planKey = null;
       kinds = null;
     }
+    // Upgraded in place: the history may be there now.
+    if (primed && (restarted || (!hadNewApi && hasNewApi()))) {
+      if (histState !== "ok" || restarted) { histState = "unknown"; if (hasNewApi()) loadHistory(); }
+    }
     if (!kinds) loadKinds();
-    if (st.last_seq !== lastSeq) {
+    let shotDone = false;
+    let caughtUp = st.last_seq === lastSeq;
+    if (!caughtUp) {
       try {
         const fresh = await api("/api/events?after=" + lastSeq);
         if (Array.isArray(fresh)) {
@@ -2025,6 +2582,7 @@
             // The server says how long ago, so an event caught up after a gap
             // (phone asleep, server restarted) keeps its real time.
             if (typeof e.age_ms === "number") seenAt.set(e.seq, Date.now() - e.age_ms);
+            if (e.kind === "shot_reported" || e.kind === "shot_aborted") shotDone = true;
             lastSeq = e.seq;
           }
           markMine();
@@ -2035,9 +2593,17 @@
             for (const k of ui.mine) if (k < min) ui.mine.delete(k);
           }
           lastSeq = Math.max(lastSeq, st.last_seq);
+          caughtUp = true;
         }
       } catch (_) {}
     }
+    // The first catch-up after the page opened loads the history; a finished
+    // shot loads it again.
+    if (!primed && caughtUp) {
+      primed = true;
+      if (hasNewApi()) await loadHistory(); else histState = "unsupported";
+    } else if (shotDone && hasNewApi()) loadHistory();
+    else if (histState === "failed" && Date.now() - histTried > 5000) loadHistory();
     renderAll();
   }
 

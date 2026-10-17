@@ -18,7 +18,7 @@
 //! for the grinder to time out.
 
 use std::collections::VecDeque;
-use std::net::SocketAddr;
+use std::net::{Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -33,7 +33,7 @@ use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
 use crate::integration::Backoff;
-use crate::protocol::machine::EventRecord;
+use crate::protocol::machine::{EventRecord, REPLACED_BY_NEWER_GRIND};
 use crate::protocol::wifi::{
     self, API_VERSION, BrewAccept, BrewDone, BrewJob, BrewJobsRes, BrewResult, Paired,
     PairingApplication, PairingApplicationRes, PairingStatusRes,
@@ -89,20 +89,87 @@ pub struct WifiConfig {
 
 impl WifiConfig {
     /// From an address as people type it: `192.168.1.30`, `grinder.local`,
-    /// `host:port` or a full URL.
+    /// `host:port`, or (on the command line, for tests) a full URL. The app
+    /// can only set what [`grinder_address`] allows.
     pub fn from_host(host: &str) -> anyhow::Result<Self> {
         let host = host.trim().trim_end_matches('/');
         if host.is_empty() {
             bail!("the grinder address is empty");
         }
+        if host.len() > MAX_URL_LEN || host.chars().any(|c| c.is_whitespace() || c.is_control()) {
+            bail!("the grinder address has spaces or is too long: {ADDRESS_HINT}");
+        }
+        let base_url = base_url(host);
+        let url = reqwest::Url::parse(&base_url).ok();
+        if url.as_ref().and_then(reqwest::Url::host_str).is_none() {
+            bail!("`{host}` is not an address: enter the grinder's IP address, e.g. 192.168.1.30");
+        }
         Ok(Self {
-            base_url: base_url(host),
+            base_url,
             pairing_file: None,
             pairing_id: None,
             poll: POLL,
             restart_quiet: RESTART_QUIET,
             refused_for: REFUSED_FOR,
         })
+    }
+}
+
+/// What to type as the grinder's address.
+const ADDRESS_HINT: &str = "enter the grinder's IP address, e.g. 192.168.1.30 (optionally :port)";
+
+/// The longest address the app may set: a host name has at most 253
+/// characters, then the port.
+const MAX_ADDRESS_LEN: usize = 255;
+
+/// The longest address `--grinder` takes (it may be a whole URL).
+const MAX_URL_LEN: usize = 2048;
+
+/// The grinder's address as the app may set it: `host`, `host:port` or
+/// `[v6]:port`; no scheme, path, login, spaces or control characters, so
+/// requests always go to `https://<host>:<port>` on the grinder. Returns it
+/// tidied up: trimmed, in lower case, an IPv6 address in brackets, and
+/// without an empty port.
+pub fn grinder_address(input: &str) -> anyhow::Result<String> {
+    let s = input.trim();
+    if s.is_empty() || s.len() > MAX_ADDRESS_LEN {
+        bail!("{ADDRESS_HINT}");
+    }
+    if let Ok(ip) = s.parse::<Ipv6Addr>() {
+        return Ok(format!("[{ip}]"));
+    }
+    let (host, port) = match s.strip_prefix('[') {
+        Some(rest) => {
+            let (v6, after) = rest.split_once(']').context(ADDRESS_HINT)?;
+            let ip: Ipv6Addr = v6.parse().ok().context(ADDRESS_HINT)?;
+            let port = match after {
+                "" => None,
+                p => Some(p.strip_prefix(':').context(ADDRESS_HINT)?),
+            };
+            (format!("[{ip}]"), port)
+        }
+        None => {
+            let (host, port) = match s.split_once(':') {
+                Some((h, p)) => (h, Some(p)),
+                None => (s, None),
+            };
+            let name_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '.';
+            if host.is_empty() || host.starts_with(['-', '.']) || !host.chars().all(name_char) {
+                bail!("{ADDRESS_HINT}");
+            }
+            (host.to_ascii_lowercase(), port)
+        }
+    };
+    match port {
+        None | Some("") => Ok(host),
+        Some(p) => {
+            let port = p
+                .parse::<u16>()
+                .ok()
+                .filter(|p| *p > 0)
+                .context(ADDRESS_HINT)?;
+            Ok(format!("{host}:{port}"))
+        }
     }
 }
 
@@ -180,7 +247,10 @@ pub enum PairingIdRefusal {
 impl std::fmt::Display for PairingIdRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Self::NoLink => "no E65/E80 grinder is set up: start gbs-anywhere with --grinder",
+            Self::NoLink => {
+                "no E65/E80 grinder is set up: enter its address in the app's settings, or \
+                 start gbs-anywhere with --grinder"
+            }
             Self::NotNeeded => "gbs-anywhere is paired with the grinder and needs no pairing ID",
             Self::Busy => "another pairing ID is being checked, try again in a moment",
         })
@@ -304,6 +374,9 @@ pub struct WifiGrinder {
     polls: u64,
     /// What went wrong with the last shot (shown in the app).
     problem: Option<String>,
+    /// Which link this is to the server: what an older link that was
+    /// replaced (new grinder address) still reports is ignored.
+    owner: u64,
     /// The grinder could not be reached last time (it is off or in standby):
     /// further failures are not logged until it answers again, and the app
     /// says so (`WifiLink::unreachable`).
@@ -350,15 +423,22 @@ impl WifiGrinder {
             polls: 0,
             problem: None,
             unreachable: false,
+            owner: 0,
         })
     }
 
-    /// Runs until the process ends: pairs when needed, then serves the
-    /// grinder's jobs, retrying with backoff on errors.
+    /// Where the grinder is, as requests go to it.
+    pub fn base_url(&self) -> &str {
+        &self.cfg.base_url
+    }
+
+    /// Runs until the process ends or the link is replaced: pairs when
+    /// needed, then serves the grinder's jobs, retrying with backoff on
+    /// errors.
     pub async fn run(mut self, server: Arc<Server>) {
         // Room for one: only the latest typed ID matters.
         let (tx, mut ids) = mpsc::channel(1);
-        server.set_wifi_ids(tx);
+        self.owner = server.attach_wifi(tx);
         // One subscription for the whole run, so a shot reported while a
         // request is being retried is still answered.
         let mut events = server.subscribe();
@@ -603,7 +683,7 @@ impl WifiGrinder {
                         // The pairing in use works: no fallback needed.
                         self.pairing.save(self.cfg.pairing_file.as_deref())?;
                     }
-                    server.note_request(reply.peer, true);
+                    server.note_wifi_poll(self.owner, reply.peer);
                     if server.grinder_link().wifi.is_none_or(|w| w.state != WifiState::Paired) {
                         let idle = "paired, waiting for a Grind-by-Sync grind";
                         self.status(server, WifiState::Paired, None, idle);
@@ -680,9 +760,7 @@ impl WifiGrinder {
                 // If someone reported or aborted it a moment ago, that event
                 // answers it instead; only a brew already over leaves it.
                 let over = server.with(|m, now| {
-                    m.give_up(now, "a newer Grind-by-Sync grind replaced it")
-                        .is_err()
-                        && m.phase(now) == Phase::Ready
+                    m.give_up(now, REPLACED_BY_NEWER_GRIND).is_err() && m.phase(now) == Phase::Ready
                 });
                 if over {
                     self.current = None;
@@ -942,7 +1020,12 @@ impl WifiGrinder {
         pairing_code: Option<u32>,
         detail: impl Into<String>,
     ) {
-        server.set_wifi(self.link(state, pairing_code, detail.into()));
+        server.set_wifi(self.owner, self.link(state, pairing_code, detail.into()));
+    }
+
+    /// The state the link shows first, before it ran.
+    pub fn connecting(&self) -> WifiLink {
+        self.link(WifiState::Connecting, None, "connecting".to_owned())
     }
 
     fn link(&self, state: WifiState, pairing_code: Option<u32>, detail: String) -> WifiLink {
@@ -963,22 +1046,25 @@ impl WifiGrinder {
     fn refresh(&self, server: &Server) {
         if let Some(mut link) = server.grinder_link().wifi {
             link.problem = self.problem.clone();
-            server.set_wifi(link);
+            server.set_wifi(self.owner, link);
         }
     }
 
     fn ask_for_pairing_id(&self, server: &Server, detail: &str, unknown: Option<u32>) {
-        server.set_wifi(WifiLink {
-            grinder: self.cfg.base_url.clone(),
-            state: WifiState::Error,
-            pairing_code: None,
-            needs_pairing_id: true,
-            unknown_pairing_id: unknown,
-            detail: detail.to_owned(),
-            problem: None,
-            pairing_id: None,
-            unreachable: false,
-        });
+        server.set_wifi(
+            self.owner,
+            WifiLink {
+                grinder: self.cfg.base_url.clone(),
+                state: WifiState::Error,
+                pairing_code: None,
+                needs_pairing_id: true,
+                unknown_pairing_id: unknown,
+                detail: detail.to_owned(),
+                problem: None,
+                pairing_id: None,
+                unreachable: false,
+            },
+        );
     }
 }
 
