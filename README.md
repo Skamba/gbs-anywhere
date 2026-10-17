@@ -218,7 +218,9 @@ device: by default the app follows the device's light or dark mode.
 
 The **History** tab shows the last 200 shots the grinder asked for, with
 their time, weight and target (kept in `history.json` next to the settings
-file).
+file). The **Log** tab shows the last 1,000 lines of gbs-anywhere's log (INFO
+and up, as `docker logs` prints them by default), ready to copy into a bug
+report.
 
 ## Options
 
@@ -250,8 +252,8 @@ e.g. `POST /api/shot/result` with `{"time_s":30,"weight_g":36}`, or follow
 [`src/server/control_api.rs`](src/server/control_api.rs).
 
 The API has no login: anyone on your network who can open the app can add or
-remove integrations and change the settings, including the grinder address,
-as they can report shots. Passwords are never sent back.
+remove integrations, change the settings, including the grinder address, and
+read the log, as they can report shots. Passwords are never sent back.
 
 ## Build and contribute
 

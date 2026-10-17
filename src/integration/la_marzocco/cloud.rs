@@ -327,8 +327,9 @@ impl CloudClient {
         })
     }
 
-    /// Authenticated `GET`, signing in again once on 401.
-    async fn get(&mut self, path: &str) -> anyhow::Result<Value> {
+    /// Authenticated `GET`, signing in again once on 401. Errors name `what`
+    /// was asked for rather than the path, which holds the serial number.
+    async fn get(&mut self, path: &str, what: &str) -> anyhow::Result<Value> {
         for attempt in 0..2 {
             let token = self.access_token().await?;
             let mut req = self
@@ -341,7 +342,7 @@ impl CloudClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| anyhow::anyhow!("GET {path}: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("{what}: {e}"))?;
             let status = resp.status();
             if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
                 self.token = None;
@@ -349,18 +350,18 @@ impl CloudClient {
             }
             if !status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
-                bail!("GET {path} failed: {status} {}", body.trim());
+                bail!("{what} failed: {status} {}", body.trim());
             }
             return resp
                 .json()
                 .await
-                .with_context(|| format!("GET {path}: bad JSON"));
+                .with_context(|| format!("{what}: bad JSON"));
         }
-        bail!("GET {path}: still unauthorized after signing in again")
+        bail!("{what}: still unauthorized after signing in again")
     }
 
     pub async fn things(&mut self) -> anyhow::Result<Vec<Thing>> {
-        let v = self.get("things").await?;
+        let v = self.get("things", "machine list").await?;
         serde_json::from_value(v).context("things: unexpected shape")
     }
 
@@ -371,7 +372,10 @@ impl CloudClient {
         days: u32,
     ) -> anyhow::Result<Vec<LastCoffee>> {
         let v = self
-            .get(&format!("things/{serial}/stats/LAST_COFFEE/1?days={days}"))
+            .get(
+                &format!("things/{serial}/stats/LAST_COFFEE/1?days={days}"),
+                "coffee log",
+            )
             .await?;
         let mut list: Vec<LastCoffee> = serde_json::from_value(v["output"]["lastCoffees"].clone())
             .context("LAST_COFFEE: unexpected shape")?;
