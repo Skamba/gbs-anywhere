@@ -9,19 +9,24 @@
 <link rel="icon" href="data:,">
 <script>
   // Light or dark, before the first paint so the page never flashes: the
-  // system's, followed live. Sets data-theme on <html>, which picks the
-  // palette below.
+  // choice from Status → Settings → Appearance (this device only), else the
+  // system's. Sets data-theme on <html>, which picks the palette below.
   (function () {
     var root = document.documentElement;
     var system = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
     function apply() {
-      var dark = !!(system && system.matches);
+      var choice = null;
+      try { choice = localStorage.getItem("gbs.theme"); } catch (e) {}
+      var dark = choice === "dark" || (choice !== "light" && !!(system && system.matches));
       root.setAttribute("data-theme", dark ? "dark" : "light");
       // Keep in step with --bg below (the stylesheet is not read yet here).
       var meta = document.querySelector('meta[name="theme-color"]');
       if (meta) meta.setAttribute("content", dark ? "#14110E" : "#F4F1EC");
     }
     apply();
+    window.gbsApplyTheme = apply;
+    // A choice made in another tab of this app applies here too.
+    window.addEventListener("storage", function (e) { if (e.key === "gbs.theme") apply(); });
     if (system) {
       if (system.addEventListener) system.addEventListener("change", apply);
       else if (system.addListener) system.addListener(apply);
@@ -77,8 +82,8 @@
     --shadow-menu: 0 8px 24px rgba(31, 27, 22, .16);
   }
   /* The dark palette. data-theme is set before the first paint by the
-     script in <head>, from the system, so this is the only place dark
-     colours are defined. */
+     script in <head>, from the Appearance setting or the system, so this is
+     the only place dark colours are defined. */
   :root[data-theme="dark"] {
     color-scheme: dark;
     --bg: #14110E; --surface: #201B16; --sunk: #17130F; --ink: #F3EDE5; --text: #D2C8BB; --muted: #A69A8C;
@@ -154,6 +159,7 @@
   .pad { padding: 16px; }
   .stack { display: flex; flex-direction: column; gap: 10px; }
   .stack-12 { display: flex; flex-direction: column; gap: 12px; }
+  .stack-14 { display: flex; flex-direction: column; gap: 14px; }
   .stack-8 { display: flex; flex-direction: column; gap: 8px; }
   .row { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .row.wrap { flex-wrap: wrap; }
@@ -210,6 +216,7 @@
     flex: none; width: 44px; height: 44px; margin: -4px; border: 0; border-radius: 50%; background: transparent;
     color: var(--muted); display: grid; place-items: center;
   }
+  .info-btn.err { margin: -6px; color: var(--bad-fg); }
   .left-pill {
     flex: none; padding: 6px 12px; border-radius: 999px; background: var(--run-bg); color: var(--run-fg);
     font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums;
@@ -257,6 +264,8 @@
   }
   .err-head { display: flex; align-items: center; gap: 4px; }
   .err-title { font-size: 15px; font-weight: 650; color: var(--bad-fg); }
+  .err-note { padding: 8px 10px; border-radius: 10px; background: var(--surface); font-size: 13px; line-height: 1.45; color: var(--text); }
+  .err-note a { color: var(--accent); font-weight: 600; }
   .err-box .body-text { line-height: 1.45; }
 
   /* Step 3 */
@@ -344,6 +353,32 @@
   .form-field .field input { font-size: 16px; font-weight: 500; }
   .form-field .help { font-size: 12px; line-height: 1.4; color: var(--muted); }
   .actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+  .set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; min-width: 0; }
+  .set-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .set-name { font-weight: 600; }
+  .set-sub { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+  .stepper { flex: none; display: inline-flex; align-items: center; gap: 6px; }
+  .step-btn {
+    flex: none; width: 44px; height: 44px; border: 1px solid var(--field); border-radius: 10px; background: var(--surface);
+    color: var(--ink); display: grid; place-items: center;
+  }
+  .step-btn[aria-disabled="true"] { opacity: .4; cursor: default; }
+  #set-window-msg:not(:empty) { margin-top: 8px; }
+  .win-field { width: 116px; justify-content: center; gap: 4px; }
+  .win-field input { flex: 1 1 auto; width: 0; min-width: 0; font-size: 17px; text-align: right; }
+  .win-field .unit { font-size: 15px; }
+  .win-field.none input { text-align: center; font-size: 15px; }
+  .win-field.editing input { text-align: center; }
+  .win-field.bad { border-color: var(--bad-field); }
+  .set-row.wrap { flex-wrap: wrap; }
+  /* The text gives way first, so the control stays on the right while it fits. */
+  .set-row.wrap > .set-text { flex: 1 1 140px; }
+  .seg { display: inline-grid; grid-template-columns: repeat(3, auto); gap: 2px; padding: 2px; background: var(--nav); border-radius: 10px; }
+  .seg button {
+    min-height: 44px; min-width: 64px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent;
+    color: var(--nav-ink); font-size: 14px; font-weight: 500;
+  }
+  .seg button[aria-pressed="true"] { background: var(--nav-on); color: var(--ink); font-weight: 600; box-shadow: var(--shadow-tab); }
 
   .app-footer {
     padding: 0 16px max(16px, env(safe-area-inset-bottom)); text-align: center;
@@ -487,7 +522,9 @@
           <div class="err-box">
             <div class="err-head">
               <p class="err-title" id="s2-err-title"></p>
+              <button type="button" class="info-btn err" id="s2-err-info-btn" aria-expanded="false" aria-controls="s2-err-info" data-i18n-attr="aria-label:start.error.infoButton" aria-label="About the time limit"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.5"/></svg></button>
             </div>
+            <p role="note" class="err-note" id="s2-err-info" hidden><span data-i18n="start.error.hint.before">Need more time? Raise the limit under </span><a href="#status" id="to-settings" data-i18n="start.error.hint.link">Status → Settings</a><span data-i18n="start.error.hint.after"> → Time to pull the shot.</span></p>
             <p class="body-text" data-i18n="start.error.cancelled">The shot was cancelled. Grind again to start over at Step 1.</p>
           </div>
           <button type="button" class="btn-plain self-start" id="s2-dismiss" data-i18n="start.error.dismiss">Dismiss</button>
@@ -515,7 +552,7 @@
     </section>
   </main>
 
-  <!-- Status: grinder, integrations -->
+  <!-- Status: grinder, integrations, settings -->
   <main class="panel" id="tab-status" hidden>
     <section class="card pad stack-12" data-i18n-attr="aria-label:status.grinder" aria-label="Grinder">
       <div class="row-12">
@@ -563,6 +600,45 @@
           </form>
         </div>
       </div>
+    </section>
+
+    <section class="card pad stack-14" data-i18n-attr="aria-label:settings.title" aria-label="Settings" id="settings-card">
+      <p class="card-title" data-i18n="settings.title">Settings</p>
+      <div class="set-row wrap">
+        <span class="set-text"><span class="set-name" id="appearance-name" data-i18n="settings.appearance">Appearance</span><span class="set-sub" data-i18n="settings.onDevice">on this device</span></span>
+        <span class="seg" role="group" aria-labelledby="appearance-name" id="appearance">
+          <button type="button" data-theme-choice="system" aria-pressed="true" data-i18n="settings.theme.system">System</button>
+          <button type="button" data-theme-choice="light" aria-pressed="false" data-i18n="settings.theme.light">Light</button>
+          <button type="button" data-theme-choice="dark" aria-pressed="false" data-i18n="settings.theme.dark">Dark</button>
+        </span>
+      </div>
+      <!-- The shot window: − and + in 15 s steps, or typed into the field. -->
+      <div class="stack-8" id="set-window-row" hidden>
+        <div class="set-row wrap">
+          <label class="set-text" for="set-window"><span class="set-name" data-i18n="settings.window">Time to pull the shot</span><span class="set-sub"><span data-i18n="settings.windowSub">after the grind, before a timeout</span> · <span id="set-window-range"></span></span></label>
+          <span class="stepper">
+            <button type="button" class="step-btn" id="set-window-down" data-i18n-attr="aria-label:settings.windowLess;title:settings.windowLess" aria-label="15 s shorter" title="15 s shorter"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 12h12"/></svg></button>
+            <span class="field win-field" id="set-window-field"><input id="set-window" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" aria-describedby="set-window-msg"><span class="unit" id="set-window-unit">min</span></span>
+            <button type="button" class="step-btn" id="set-window-up" data-i18n-attr="aria-label:settings.windowMore;title:settings.windowMore" aria-label="15 s longer" title="15 s longer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
+          </span>
+        </div>
+        <p class="hint" id="set-window-msg" role="status"></p>
+      </div>
+      <div class="set-row" id="set-host-row" hidden>
+        <span class="set-text"><span class="set-name" data-i18n="settings.host">Grinder IP address</span><span class="set-sub" id="set-host-value"></span></span>
+        <button type="button" class="btn-plain sm" id="set-host-change" aria-controls="set-host-form" aria-expanded="false" data-i18n="common.change">Change</button>
+      </div>
+      <form class="stack" id="set-host-form" autocomplete="off" hidden>
+        <label class="field-label" for="f-host" data-i18n="settings.host">Grinder IP address</label>
+        <span class="field"><input id="f-host" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="192.168.1.30" enterkeyhint="done" style="font-size:16px;font-weight:500"></span>
+        <p class="foot" data-i18n="settings.hostHelp">The address of an E65/E80 GbS (Generic WiFi). Leave it empty when you use an E64 WS.</p>
+        <p class="hint warn" id="set-host-error" role="alert" hidden></p>
+        <div class="actions">
+          <button type="button" class="btn-plain sm" id="set-host-cancel" data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn-send" id="set-host-save" data-i18n="common.save">Save</button>
+        </div>
+      </form>
+      <p class="foot" id="set-foot" hidden></p>
     </section>
   </main>
 
@@ -642,8 +718,11 @@
       "common.cancel": "Cancel",
       "common.back": "Back",
       "common.add": "Add",
+      "common.save": "Save",
+      "common.change": "Change",
       "common.delete": "Delete",
       "common.optional": " (optional)",
+      "common.notSaved": "Not saved: {error}",
       "common.requestFailed": "The request failed ({status}).",
       "common.and": "and",
       "unit.shot": "{time}\u00a0s · {weight}\u00a0g",
@@ -673,6 +752,7 @@
       "sys.text.knob": "Ground. Press the grinder’s rotary knob to start the shot: step 1 of 3.",
       "sys.text.needsId": "The grinder is paired, but its pairing ID is missing here: enter it above.",
       "sys.text.pairing": "Accept gbs-anywhere on the grinder to pair it.",
+      "sys.text.linking": "Connecting to the grinder at {host}…",
       "sys.text.linkingNoHost": "Connecting to the grinder…",
       "sys.text.blocked": "Grinder blocked: {message}",
       "sys.text.error": "The last shot did not reach the grinder.",
@@ -775,9 +855,14 @@
       "start.error.refused": "The grinder refused the shot",
       "start.error.unknownApp": "The grinder no longer knows this gbs-anywhere",
       "start.error.generic": "The shot did not reach the grinder",
+      "start.error.infoButton": "About the time limit",
+      "start.error.hint.before": "Need more time? Raise the limit under ",
+      "start.error.hint.link": "Status → Settings",
+      "start.error.hint.after": " → Time to pull the shot.",
       "start.error.cancelled": "The shot was cancelled. Grind again to start over at Step 1.",
       "start.error.dismiss": "Dismiss",
       "start.aborted.user": "Aborted in the app. The grinder skips this shot.",
+      "start.aborted.address": "Ended: the grinder address changed. Grind again to start over at Step 1.",
       "start.aborted.replaced": "Replaced by a newer grind. That grind is the next shot.",
 
       "start.step3.kicker": "Step 3",
@@ -838,6 +923,29 @@
       "integ.delete.textPassword": "This stops the integration and removes its saved settings, including the password. Shots are then no longer reported by themselves.",
       "integ.delete.type": "Type DELETE to confirm",
       "integ.delete.failed": "Could not delete it: {error}",
+
+      "settings.title": "Settings",
+      "settings.appearance": "Appearance",
+      "settings.onDevice": "on this device",
+      "settings.theme.system": "System",
+      "settings.theme.light": "Light",
+      "settings.theme.dark": "Dark",
+      "settings.window": "Time to pull the shot",
+      "settings.windowSub": "after the grind, before a timeout",
+      "settings.windowRange": "{min}–{max} min",
+      "settings.windowLess": "15 s shorter",
+      "settings.windowMore": "15 s longer",
+      "settings.windowIs": "That is {time} min.",
+      "settings.windowMax": "At most {time} min.",
+      "settings.windowMin": "At least {time} min.",
+      "settings.windowInvalid": "Type a time from {min} to {max} min, e.g. 2:30, {decimal} (minutes) or 150 (seconds).",
+      "settings.noLimit": "No limit",
+      "settings.host": "Grinder IP address",
+      "settings.hostNone": "None · E64 WS",
+      "settings.hostHelp": "The address of an E65/E80 GbS (Generic WiFi). Leave it empty when you use an E64 WS.",
+      "settings.saved": "The settings for time to pull the shot and the grinder IP address are saved on the computer (gbs-anywhere host) and kept after a restart. Appearance applies to this device only.",
+      "settings.notPersistent": "The settings for time to pull the shot and the grinder IP address apply until the next restart: gbs-anywhere runs without a settings file (--config). Appearance applies to this device only.",
+
     },
   };
 
@@ -998,7 +1106,7 @@
   let tab = "start";
   let sseOpen = false;
   const ui = {
-    open: 1, planKey: null, info: false, dismissed: 0,
+    open: 1, planKey: null, info: false, errInfo: false, dismissed: 0,
     // System status: open or closed (sysOpen), as last set outside a stop
     // (sysPref), and the stop it opened for by itself (sysStop, see STOPS).
     sysOpen: false, sysPref: false, sysStop: null,
@@ -1017,6 +1125,7 @@
     return age != null && age < 6000;
   }
   function windowS() {
+    if (S && S.settings && typeof S.settings.shot_window_s === "number") return S.settings.shot_window_s;
     const t = S && S.config && S.config.brew_timeout;
     return t && typeof t.secs === "number" ? t.secs : 0;
   }
@@ -1026,15 +1135,15 @@
     return null;
   }
   // Ends of a brew that are no failure.
-  const ABORTS = ["aborted by user", "a newer Grind-by-Sync grind replaced it"];
+  const ABORTS = ["aborted by user", "a newer Grind-by-Sync grind replaced it", "the grinder address changed"];
   const isAbort = (r) => ABORTS.includes(r);
-  /** An E65/E80 setup: a Generic WiFi link. */
-  const wifiSetup = () => !!wifiOf();
-  /** The E65/E80 link is starting and has not reached the grinder yet. */
+  /** An E65/E80 setup: a Generic WiFi link, or an address it is starting with. */
+  const wifiSetup = () => !!(wifiOf() || (S && S.settings && S.settings.grinder_host));
+  /** The E65/E80 link is (re)starting and has not reached the grinder yet. */
   function linkStarting() {
     if (linkOn()) return false;
     const wifi = wifiOf();
-    return !!wifi && wifi.state === "connecting";
+    return wifi ? wifi.state === "connecting" : !!(S && S.settings && S.settings.grinder_host);
   }
 
   // Integrations that report shots by themselves. When every one has failed,
@@ -1146,6 +1255,15 @@
   // Back and forward between tabs, and links typed with a hash.
   window.addEventListener("popstate", () => showTab(location.hash.slice(1)));
   window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+  $("to-settings").addEventListener("click", (e) => {
+    e.preventDefault();
+    goTab("status");
+    // To the + of Time to pull the shot (rendered now), or the − at the longest.
+    const up = $("set-window-up");
+    const b = up.getAttribute("aria-disabled") === "true" ? $("set-window-down") : up;
+    b.scrollIntoView({ block: "center" });
+    b.focus();
+  });
 
   // --- Header and system status ---------------------------------------------------
   /** Why the grinder won't grind, unless it is only the shot in progress. */
@@ -1198,7 +1316,10 @@
     if (f.sc === "knob") return s("run", "clock", "running", t("sys.text.knob"));
     if (wifi && wifi.needs_pairing_id) return s("start", "alert", "pairing", t("sys.text.needsId"));
     if (wifi && wifi.state === "pairing") return s("start", "alert", "pairing", t("sys.text.pairing"));
-    if (linkStarting()) return s("start", "clock", "linking", t("sys.text.linkingNoHost"));
+    if (linkStarting()) {
+      const host = S.settings && S.settings.grinder_host;
+      return s("start", "clock", "linking", host ? t("sys.text.linking", { host }) : t("sys.text.linkingNoHost"));
+    }
     if (!linkOn()) {
       const missing = grinderMissing(wifi);
       return s("error", "alert", "noGrinder", missing.text, missing.detail);
@@ -1397,6 +1518,7 @@
       ui.planKey = key;
       const auto = plan.findIndex(([tone]) => tone === "run" || tone === "error");
       ui.open = stop ? 0 : auto >= 0 ? auto + 1 : 1;
+      ui.errInfo = false;
     }
     if (f.sc === "running" && ui.lastScenario !== "running") {
       // A typed weight stays for the next shot; left empty, the recipe's is sent.
@@ -1470,10 +1592,17 @@
       $("s2-source").textContent = [by, at ? hhmmss(new Date(at)) : null].filter(Boolean).join(" · ");
     }
     $("s2-error").hidden = f.sc !== "error";
-    if (f.sc === "error") $("s2-err-title").textContent = errorTitle(f.reason);
+    if (f.sc === "error") {
+      const timeout = f.reason === "no result reported in time";
+      $("s2-err-title").textContent = errorTitle(f.reason);
+      $("s2-err-info-btn").hidden = !timeout;
+      $("s2-err-info-btn").setAttribute("aria-expanded", String(ui.errInfo));
+      $("s2-err-info").hidden = !(timeout && ui.errInfo);
+    }
     $("s2-aborted").hidden = f.sc !== "aborted";
     if (f.sc === "aborted") {
-      $("s2-aborted").textContent = t(f.reason === "aborted by user" ? "start.aborted.user" : "start.aborted.replaced");
+      $("s2-aborted").textContent = t(f.reason === "aborted by user" ? "start.aborted.user"
+        : f.reason === "the grinder address changed" ? "start.aborted.address" : "start.aborted.replaced");
     }
 
     // Step 3
@@ -1500,7 +1629,7 @@
   };
   function errorTitle(reason) {
     if (reason === "no result reported in time") {
-      // How long it waited: the brew timeout (--brew-timeout-s).
+      // How long it waited: the shot window as it is set now.
       return windowS() > 0 ? t("start.error.timeout", { window: windowLabel() }) : t("start.error.timeoutNoLimit");
     }
     if (ERROR_REASONS[reason]) return t(ERROR_REASONS[reason]);
@@ -1558,6 +1687,7 @@
   }
 
   $("s2-info-btn").addEventListener("click", () => { ui.info = !ui.info; renderStart(); });
+  $("s2-err-info-btn").addEventListener("click", () => { ui.errInfo = !ui.errInfo; renderStart(); });
   $("s2-dismiss").addEventListener("click", () => {
     const o = lastOf(["shot_aborted"]);
     if (o) ui.dismissed = o.seq;
@@ -1730,8 +1860,9 @@
     setTone($("g-pill"), tone);
     $("g-pill-text").textContent = t("grinder.state." + state);
     const age = S.grinder.last_poll_age_ms;
+    const typed = S.settings && S.settings.grinder_host;
     const facts = [
-      ["ip", e65 ? ((wifi && urlHost(wifi.grinder)) || "–") : (hostOf(S.grinder.peer) || "–")],
+      ["ip", e65 ? (typed || (wifi && urlHost(wifi.grinder)) || "–") : (hostOf(S.grinder.peer) || "–")],
     ];
     if (e65) facts.push(["pairingId", wifi && wifi.pairing_id != null ? String(wifi.pairing_id) : t("grinder.fact.notPaired")]);
     if (wifi && wifi.pairing_code != null && wifi.state === "pairing") facts.push(["pairingCode", String(wifi.pairing_code)]);
@@ -1941,10 +2072,219 @@
     } finally { $("add-submit").disabled = false; }
   });
 
+  // Settings
+  function renderSettings() {
+    renderAppearance();
+    const st = S.settings;
+    // An older server has no settings API: only the appearance is shown.
+    for (const id of ["set-window-row", "set-foot"]) $(id).hidden = !st;
+    if (!st) { $("set-host-row").hidden = true; $("set-host-form").hidden = true; return; }
+    if ($("set-host-form").hidden) $("set-host-row").hidden = false;
+    renderWindow();
+    $("set-host-value").textContent = st.grinder_host ? st.grinder_host : t("settings.hostNone");
+    $("set-foot").textContent = t(st.persistent ? "settings.saved" : "settings.notPersistent");
+  }
+
+  // Time to pull the shot: − and + in 15 s steps (saved a moment after the
+  // last tap), or typed into the field (saved on Enter or when leaving it).
+  // The server takes 0 (no limit) or 30 to 3600 s; the app offers 0:30 to
+  // 10:00 and shows a longer time or no limit set elsewhere as it is.
+  const WIN_MIN = 30, WIN_MAX = 600, WIN_STEP = 15;
+  const win = { pending: null, saved: null, seq: 0, timer: null, msg: "", warn: false };
+  /** The shot window as shown: the one waiting to be saved, else the one
+   *  just saved (a state poll that left before the save still brings the
+   *  old one, for a moment), else the server's. */
+  function winValue() {
+    if (win.pending != null) return win.pending;
+    const v = S.settings.shot_window_s;
+    if (win.saved && v !== win.saved.value && Date.now() - win.saved.at < 5000) return win.saved.value;
+    win.saved = null;
+    return v;
+  }
+  const winText = (v) => (v === 0 ? t("settings.noLimit") : clock(v * 1000));
+  function renderWindow() {
+    const v = winValue();
+    const input = $("set-window");
+    if (document.activeElement !== input) {
+      input.value = winText(v);
+      input.dataset.shown = input.value;
+      $("set-window-field").classList.toggle("none", v === 0);
+      $("set-window-field").classList.remove("editing");
+      $("set-window-unit").hidden = v === 0;
+    }
+    // aria-disabled rather than disabled: the button keeps the focus.
+    $("set-window-down").setAttribute("aria-disabled", String(v !== 0 && v <= WIN_MIN));
+    $("set-window-up").setAttribute("aria-disabled", String(v === 0 || v >= WIN_MAX));
+    $("set-window-range").textContent = t("settings.windowRange", { min: clock(WIN_MIN * 1000), max: clock(WIN_MAX * 1000) });
+    $("set-window-field").classList.toggle("bad", win.warn && document.activeElement === input);
+    const msg = $("set-window-msg");
+    if (msg.textContent !== win.msg) msg.textContent = win.msg;
+    msg.className = "hint" + (win.warn ? " warn" : "");
+  }
+  function windowNote(text, warn) { win.msg = text || ""; win.warn = !!warn; }
+
+  /** Seconds from what was typed, or NaN: "2:30"; "150 s", "2 min"; a
+   *  number with decimals is minutes ("2,5"), except two decimals under 60,
+   *  which are seconds ("2,30" is 2:30, for keypads without a colon); a
+   *  whole number is minutes up to 10 and seconds from 30 (in between it
+   *  could be either). */
+  function parseWindow(text) {
+    let s = String(text || "").trim().toLowerCase();
+    let unit = "";
+    const u = /^(.*?)\s*(min|m|sec|s)\.?$/.exec(s);
+    if (u) { s = u[1]; unit = u[2].charAt(0) === "m" ? "min" : "s"; }
+    let m = /^(\d{1,2}):(\d{1,2})$/.exec(s);
+    if (m) return unit !== "s" && Number(m[2]) < 60 ? Number(m[1]) * 60 + Number(m[2]) : NaN;
+    m = /^(\d{1,4})(?:[.,](\d{1,3}))?$/.exec(s);
+    if (!m) return NaN;
+    const n = Number(m[1] + (m[2] ? "." + m[2] : ""));
+    if (unit === "s") return Math.round(n);
+    if (unit === "min") return Math.round(n * 60);
+    if (m[2] && m[2].length === 2 && Number(m[2]) < 60) return Number(m[1]) * 60 + Number(m[2]);
+    if (m[2] || n <= 10) return Math.round(n * 60);
+    return n >= WIN_MIN ? n : NaN;
+  }
+  /** `secs` within the offered range, with a note when it was moved into it. */
+  function clampWindow(secs) {
+    if (secs > WIN_MAX) return { secs: WIN_MAX, note: t("settings.windowMax", { time: clock(WIN_MAX * 1000) }) };
+    if (secs < WIN_MIN) return { secs: WIN_MIN, note: t("settings.windowMin", { time: clock(WIN_MIN * 1000) }) };
+    return { secs, note: "" };
+  }
+
+  async function saveWindow(value) {
+    clearTimeout(win.timer);
+    // Only the newest save's answer counts; an older one may come back later.
+    const seq = ++win.seq;
+    try {
+      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shot_window_s: value }) });
+      if (seq !== win.seq) return;
+      if (st && typeof st.shot_window_s === "number") {
+        S.settings = st;
+        win.saved = { value: st.shot_window_s, at: Date.now() };
+      }
+      if (win.warn) windowNote("");   // an earlier failure is past
+    } catch (x) {
+      if (seq === win.seq) windowNote(t("common.notSaved", { error: x.message }), true);
+    } finally {
+      // A newer value waits for its own save.
+      if (win.pending === value) win.pending = null;
+      renderAll();
+    }
+  }
+  function stepWindow(dir) {
+    const cur = winValue();
+    if (dir > 0 ? cur === 0 || cur >= WIN_MAX : cur !== 0 && cur <= WIN_MIN) return;   // at the end
+    let next;
+    if (cur === 0) next = WIN_MAX;   // from no limit, − gives the longest
+    else next = dir > 0 ? Math.floor(cur / WIN_STEP) * WIN_STEP + WIN_STEP : Math.ceil(cur / WIN_STEP) * WIN_STEP - WIN_STEP;
+    next = Math.min(WIN_MAX, Math.max(WIN_MIN, next));
+    if (next === cur) return;
+    win.pending = next;
+    windowNote("");
+    renderWindow();
+    clearTimeout(win.timer);
+    win.timer = setTimeout(() => saveWindow(next), 700);
+  }
+  $("set-window-down").addEventListener("click", () => stepWindow(-1));
+  $("set-window-up").addEventListener("click", () => stepWindow(1));
+
+  /** Takes what was typed; `leaving`: the field lost focus. Returns false
+   *  when it cannot be read (the note says how to write it). */
+  function commitWindow(leaving) {
+    const input = $("set-window");
+    const typed = input.value.trim();
+    if (!typed || typed === input.dataset.shown) return true;
+    const secs = parseWindow(typed);
+    if (!isFinite(secs)) {
+      windowNote(t("settings.windowInvalid", { min: clock(WIN_MIN * 1000), max: clock(WIN_MAX * 1000), decimal: fmt.upToOne.format(2.5) }), true);
+      if (leaving) input.value = input.dataset.shown;
+      renderWindow();
+      return false;
+    }
+    const c = clampWindow(secs);
+    windowNote(c.note);
+    input.value = winText(c.secs);
+    input.dataset.shown = input.value;
+    if (c.secs !== winValue()) { win.pending = c.secs; saveWindow(c.secs); }
+    renderWindow();
+    return true;
+  }
+  $("set-window").addEventListener("focus", (e) => {
+    // An empty field with the time as placeholder: what is typed replaces
+    // it, and leaving it empty keeps it. No unit: 150 is seconds, 2,5 minutes.
+    const input = e.target;
+    $("set-window-unit").hidden = true;
+    $("set-window-field").classList.remove("none");
+    $("set-window-field").classList.add("editing");
+    input.placeholder = winValue() === 0 ? "" : input.dataset.shown || "";
+    input.value = "";
+    windowNote("");
+    renderWindow();
+  });
+  $("set-window").addEventListener("input", (e) => {
+    // What the typing comes to, so "2,30" or "150" can be checked before it is saved.
+    const typed = e.target.value.trim();
+    const secs = parseWindow(typed);
+    if (!typed || !isFinite(secs)) windowNote("");
+    else {
+      const c = clampWindow(secs);
+      windowNote(c.note || (winText(c.secs) !== typed ? t("settings.windowIs", { time: winText(c.secs) }) : ""));
+    }
+    renderWindow();
+  });
+  $("set-window").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); if (commitWindow(false)) e.target.blur(); }
+    else if (e.key === "Escape") { e.target.value = ""; windowNote(""); e.target.blur(); }
+  });
+  $("set-window").addEventListener("blur", () => { commitWindow(true); renderWindow(); });
+  // Appearance: System, Light or Dark, kept per device (gbs.theme); the
+  // script in <head> applies it.
+  const themeChoice = () => { const v = store.get("theme"); return v === "light" || v === "dark" ? v : "system"; };
+  function renderAppearance() {
+    const choice = themeChoice();
+    for (const b of $("appearance").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.themeChoice === choice));
+  }
+  for (const b of $("appearance").querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      store.set("theme", b.dataset.themeChoice);
+      if (window.gbsApplyTheme) window.gbsApplyTheme();
+      renderAppearance();
+    });
+  }
+
+  // Changed in another tab of this browser: follow it here too.
+  window.addEventListener("storage", (e) => {
+    if (e.key === "gbs.theme") renderAppearance();   // the head script applies it
+  });
+
+  function hostEditor(open) {
+    $("set-host-form").hidden = !open;
+    $("set-host-row").hidden = open;
+    $("set-host-change").setAttribute("aria-expanded", String(open));
+    $("set-host-error").hidden = true;
+    if (open) { $("f-host").value = (S.settings && S.settings.grinder_host) || ""; $("f-host").focus(); }
+  }
+  $("set-host-change").addEventListener("click", () => hostEditor(true));
+  $("set-host-cancel").addEventListener("click", () => hostEditor(false));
+  $("set-host-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const v = $("f-host").value.trim();
+    $("set-host-save").disabled = true; $("set-host-error").hidden = true;
+    try {
+      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: v || null }) });
+      if (st && "grinder_host" in st) S.settings = st;
+      hostEditor(false);
+      await tick();
+    } catch (x) {
+      $("set-host-error").textContent = t("common.notSaved", { error: x.message }); $("set-host-error").hidden = false;
+    } finally { $("set-host-save").disabled = false; }
+  });
+
   function renderStatus() {
     if (!S || tab !== "status") return;
     renderGrinder();
     renderIntegrations();
+    renderSettings();
   }
 
   // --- Bottom sheet ------------------------------------------------------------------

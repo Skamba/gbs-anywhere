@@ -5,7 +5,8 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations; `boot_id` changes on every start, so an app can tell its event numbers start over |
+//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations, settings; `boot_id` changes on every start, so an app can tell its event numbers start over |
+//! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30"}` (any of them) — changes and saves them; they win over flags from then on |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
@@ -35,7 +36,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::integration::{self, ChangeError, Settings};
-use crate::server::Server;
+use crate::server::{Server, SettingsChange};
 
 pub fn control_router(state: Arc<Server>) -> axum::Router {
     axum::Router::new()
@@ -45,6 +46,7 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
         .route("/apple-touch-icon.png", get(no_icon))
         .route("/apple-touch-icon-precomposed.png", get(no_icon))
         .route("/api/state", get(get_state))
+        .route("/api/settings", put(put_settings))
         .route("/api/events", get(get_events))
         .route("/api/events/stream", get(stream_events))
         .route("/api/shot/result", post(shot_result))
@@ -63,6 +65,7 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
 pub fn state_json(x: &Server) -> Value {
     let link = x.grinder_link();
     let integrations = x.integrations().list();
+    let settings = x.settings_json();
     x.with(|m, now| {
         let mako = m.mako(now);
         let blocked = mako.grind_blocked().map(|b| {
@@ -87,6 +90,7 @@ pub fn state_json(x: &Server) -> Value {
             "boot_id": x.boot_id(),
             "version": crate::version(),
             "config": m.config(),
+            "settings": settings,
         })
     })
 }
@@ -191,6 +195,18 @@ async fn stream_events(State(x): State<Arc<Server>>) -> impl IntoResponse {
         }
     });
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+async fn put_settings(State(x): State<Arc<Server>>, Json(body): Json<Value>) -> Response {
+    let change = match SettingsChange::parse(&body) {
+        Ok(c) => c,
+        Err(e) => return error(StatusCode::BAD_REQUEST, &e),
+    };
+    match x.change_settings(change) {
+        Ok(settings) => Json(settings).into_response(),
+        // The file could not be written, or the pairing file read.
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    }
 }
 
 async fn integration_kinds(State(x): State<Arc<Server>>) -> Json<Value> {

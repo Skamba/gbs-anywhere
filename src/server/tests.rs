@@ -15,17 +15,33 @@ use crate::protocol::{
 /// Serves both routers on one port, like the binary with the app on the
 /// grinder port.
 async fn start() -> String {
+    start_server().await.0
+}
+
+/// Like [`start`], also returning the server.
+async fn start_server() -> (String, Arc<Server>) {
     let _ = rustls::crypto::ring::default_provider().install_default();
-    let state = Server::new(MachineConfig {
+    let config = MachineConfig {
         // Long enough for a few polls below, short enough to keep tests fast.
         finishing_hold: Duration::from_millis(300),
         ..MachineConfig::default()
-    });
-    let app = control_router(state.clone()).merge(grinder_router(state));
+    };
+    let state = Server::new(config);
+    let app = control_router(state.clone()).merge(grinder_router(state.clone()));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     spawn_server(listener, app, addr);
-    format!("http://{addr}")
+    (format!("http://{addr}"), state)
+}
+
+/// A directory of its own under the system's temp directory.
+fn temp_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "gbs-anywhere-routes-{name}-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 /// A client that polls and posts like the grinder and remembers which shot
@@ -241,4 +257,143 @@ async fn control_api_rejects_what_it_cannot_do() {
     assert_eq!(code, 400, "out of range");
     let (code, _) = call(post, url, pairing(1234)).await;
     assert_eq!(code, 409, "no --grinder");
+}
+
+#[tokio::test]
+async fn settings_change_in_the_app_and_are_saved() {
+    let (base, x) = start_server().await;
+    let dir = temp_dir("settings");
+    let path = dir.join("settings.json");
+    let startup = Startup {
+        pairing_file: Some(dir.join("grinder-pairing.json")),
+        ..Startup::default()
+    };
+    x.start_settings(startup, Some(SettingsFile::open(&path).unwrap()))
+        .unwrap();
+    let put = |body: Value| {
+        call(
+            reqwest::Method::PUT,
+            format!("{base}/api/settings"),
+            Some(body),
+        )
+    };
+
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    let settings = &state["settings"];
+    assert_eq!(settings["shot_window_s"], 180);
+    assert_eq!(settings["grinder_host"], Value::Null);
+    assert_eq!(
+        settings["source"],
+        json!({ "shot_window_s": "default", "grinder_host": "default" })
+    );
+    assert_eq!(settings["persistent"], true);
+
+    let (code, settings) = put(json!({ "shot_window_s": 120 })).await;
+    assert_eq!(code, 200);
+    assert_eq!(settings["shot_window_s"], 120);
+    assert_eq!(settings["source"]["shot_window_s"], "app");
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(
+        state["config"]["brew_timeout"]["secs"], 120,
+        "the machine uses it"
+    );
+
+    for bad in [
+        json!({ "shot_window_s": 20 }),
+        json!({ "shot_window_s": 90.5 }),
+        json!({ "grinder_host": 1 }),
+        json!({ "grinder_host": "http://127.0.0.1:9" }),
+        json!({ "grinder_host": "127.0.0.1\n:9" }),
+        json!({ "grinder_host": "a".repeat(300) }),
+        json!({ "nope": 1 }),
+    ] {
+        let (code, body) = put(bad.clone()).await;
+        assert_eq!(code, 400, "{bad}");
+        assert!(body["error"].is_string());
+    }
+
+    // An E65/E80 address starts the link (here to a closed local port), and
+    // the pairing is kept where it was set up to be.
+    let (code, settings) = put(json!({ "grinder_host": " 127.0.0.1:9 " })).await;
+    assert_eq!(code, 200);
+    assert_eq!(settings["grinder_host"], "127.0.0.1:9", "tidied up");
+    wait_for("the link", || x.grinder_link().wifi.is_some()).await;
+    let wifi = x.grinder_link().wifi.unwrap();
+    assert_eq!(wifi.grinder, "https://127.0.0.1:9", "always HTTPS");
+    assert_eq!(wifi.pairing_id, None);
+    assert!(dir.join("grinder-pairing.json").exists());
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(
+        saved["settings"],
+        json!({ "shot_window_s": 120, "grinder_host": "127.0.0.1:9" })
+    );
+
+    // No address: the link stops, and a pairing ID has nowhere to go.
+    let (code, settings) = put(json!({ "grinder_host": null })).await;
+    assert_eq!(code, 200);
+    assert_eq!(settings["grinder_host"], Value::Null);
+    assert_eq!(settings["source"]["grinder_host"], "app");
+    wait_for("the link to stop", || x.grinder_link().wifi.is_none()).await;
+    let url = format!("{base}/api/grinder/pairing");
+    let (code, _) = call(reqwest::Method::POST, url, Some(json!({ "pairing_id": 7 }))).await;
+    assert_eq!(code, 409);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn a_new_grinder_address_ends_the_shot_it_waited_for() {
+    let (base, x) = start_server().await;
+    x.start_settings(
+        Startup {
+            grinder_host: Some("http://127.0.0.1:9".into()),
+            ..Startup::default()
+        },
+        None,
+    )
+    .unwrap();
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["settings"]["source"]["grinder_host"], "command_line");
+    assert_eq!(state["settings"]["persistent"], false);
+    let put = |host: &str| {
+        call(
+            reqwest::Method::PUT,
+            format!("{base}/api/settings"),
+            Some(json!({ "grinder_host": host })),
+        )
+    };
+    let ended = || {
+        x.with(|m, _| {
+            m.events_after(0).any(|e| {
+                e.event
+                    == crate::protocol::MachineEvent::ShotAborted {
+                        reason: settings::GRINDER_CHANGED,
+                    }
+            })
+        })
+    };
+
+    // An E64 WS knob press on the same server is not the link's business.
+    x.with(|m, now| m.on_start_request(now, Some(9)));
+    assert_eq!(put("127.0.0.1:10").await.0, 200);
+    assert!(!ended());
+    // The new link shows at once (connecting, or already failing to reach
+    // the closed port), never no link at all.
+    let wifi = x.grinder_link().wifi.expect("shown at once");
+    assert_eq!(wifi.grinder, "https://127.0.0.1:10");
+    x.with(|m, now| m.abort(now)).unwrap();
+
+    // A brew for the old link's job cannot reach the grinder any more.
+    let job = crate::protocol::GrindResult::parse(br#"{"SYNC_BEVERAGE_WEIGHT":40}"#).unwrap();
+    wait_for("ready again", || {
+        x.with(|m, now| m.on_brew_job(now, job.clone(), Some(28_000)))
+    })
+    .await;
+    assert_eq!(put("127.0.0.1:11").await.0, 200);
+    assert!(ended());
+    wait_for("the new link", || {
+        x.grinder_link()
+            .wifi
+            .is_some_and(|w| w.grinder == "https://127.0.0.1:11")
+    })
+    .await;
 }
