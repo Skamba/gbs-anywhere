@@ -397,3 +397,70 @@ async fn a_new_grinder_address_ends_the_shot_it_waited_for() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn shots_the_grinder_asked_for_go_into_the_history() {
+    let (base, x) = start_server().await;
+    let dir = temp_dir("history");
+    x.record_history(Some(&dir.join("history.json"))).unwrap();
+    let mut grinder = Grinder::new(&base);
+    let post = reqwest::Method::POST;
+
+    // A flush started by hand is not a shot.
+    let (code, _) = call(post.clone(), format!("{base}/api/shot/start"), None).await;
+    assert_eq!(code, 200);
+    let shot = json!({ "time_s": 5, "weight_g": 20 });
+    call(post.clone(), format!("{base}/api/shot/result"), Some(shot)).await;
+    while grinder.poll().await.status != MachineStatus::On {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // A grind, the knob press, and the shot typed in.
+    grinder
+        .post(PATH_BREWRATIO, json!({ "SYNC_BEVERAGE_WEIGHT": 36.0 }))
+        .await;
+    grinder
+        .post(PATH_SCRIPTS_EXECUTE, json!({ "ID": START_BREW_SCRIPT_ID }))
+        .await;
+    let shot = json!({ "time_s": 28.5, "weight_g": 37.2 });
+    let (code, _) = call(post.clone(), format!("{base}/api/shot/result"), Some(shot)).await;
+    assert_eq!(code, 200);
+    wait_for("the shot", || x.history().list().len() == 1).await;
+    while grinder.poll().await.status != MachineStatus::On {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // Another knob press, aborted.
+    grinder
+        .post(PATH_SCRIPTS_EXECUTE, json!({ "ID": START_BREW_SCRIPT_ID }))
+        .await;
+    call(post, format!("{base}/api/shot/abort"), None).await;
+    wait_for("the abort", || x.history().list().len() == 2).await;
+
+    let (code, body) = call(reqwest::Method::GET, format!("{base}/api/history"), None).await;
+    assert_eq!(code, 200);
+    assert_eq!(
+        (&body["capacity"], &body["persistent"]),
+        (&json!(200), &json!(true))
+    );
+    let shots = body["shots"].as_array().unwrap();
+    assert_eq!(shots[0]["kind"], "aborted", "newest first");
+    assert_eq!(shots[0]["reason"], "aborted by user");
+    assert_eq!(shots[0]["time_s"], Value::Null);
+    let shot = &shots[1];
+    assert_eq!(shot["kind"], "success");
+    assert_eq!(
+        (&shot["time_s"], &shot["weight_g"]),
+        (&json!(28.5), &json!(37.2))
+    );
+    assert_eq!(shot["target_weight_g"], 36.0);
+    assert_eq!(shot["target_time_s"], Value::Null, "the E64 WS sends none");
+    assert_eq!(shot["reason"], Value::Null);
+    assert!(shot["id"].as_str().is_some_and(|id| !id.is_empty()));
+    assert!(shot["at"].as_str().unwrap().ends_with('Z'));
+    assert!(shot["ended_at"].as_str().unwrap() >= shot["at"].as_str().unwrap());
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("history.json")).unwrap()).unwrap();
+    assert_eq!(saved["shots"].as_array().unwrap().len(), 2);
+    let _ = std::fs::remove_dir_all(dir);
+}

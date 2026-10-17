@@ -21,8 +21,9 @@ FROM gcr.io/distroless/cc-debian13:nonroot
 COPY --from=build /usr/local/bin/gbs-anywhere /usr/local/bin/gbs-anywhere
 COPY LICENSE /usr/share/doc/gbs-anywhere/LICENSE
 LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
-# What is set up in the app (integrations, settings) and an E65/E80 pairing
-# are saved here; mount a volume to keep them when the container is recreated.
+# What is set up in the app (integrations, settings), an E65/E80 pairing and
+# the shot history are saved here; mount a volume to keep them when the
+# container is recreated.
 COPY --from=build --chown=65532:65532 /out/data /data
 ENV CONFIG_FILE=/data/gbs-anywhere.json
 VOLUME ["/data"]

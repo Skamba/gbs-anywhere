@@ -44,6 +44,7 @@
     --muted: #6B6157;
     --strong: #3F3830;
     --line: #E3DCD2;
+    --line-soft: #EEE8E0;
     --field: #D6CEC3;
     --nav: #E9E3DA;
     --nav-ink: #5C5248;
@@ -87,7 +88,7 @@
   :root[data-theme="dark"] {
     color-scheme: dark;
     --bg: #14110E; --surface: #201B16; --sunk: #17130F; --ink: #F3EDE5; --text: #D2C8BB; --muted: #A69A8C;
-    --strong: #E5DCD1; --line: #352D26; --field: #4A4037; --nav: #29231D; --nav-ink: #B9AD9F;
+    --strong: #E5DCD1; --line: #352D26; --line-soft: #2B241E; --field: #4A4037; --nav: #29231D; --nav-ink: #B9AD9F;
     --nav-on: #3B332B; --tile: #2E2720; --accent: #DB9A5E; --on-accent: #1F1B16; --on-solid: #FFFFFF;
     --neutral-bg: #2F2822; --neutral-fg: #CBBFB2; --start-bg: #3F2C19; --start-fg: #EFB883;
     --run-bg: #16303F; --run-fg: #9FD1EA; --run-dot: #5AB3DD; --run-note: #132733;
@@ -131,7 +132,7 @@
   .pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--td); flex: none; }
   nav.tabs {
-    display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px;
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px;
     margin: 0 16px 16px; padding: 4px; background: var(--nav); border-radius: 12px;
   }
   nav.tabs a {
@@ -380,6 +381,33 @@
   }
   .seg button[aria-pressed="true"] { background: var(--nav-on); color: var(--ink); font-weight: 600; box-shadow: var(--shadow-tab); }
 
+  /* History */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip-hit { min-height: 44px; padding: 0; border: 0; background: transparent; display: inline-flex; align-items: center; }
+  .chip {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 3px 8px 3px 10px;
+    border-radius: 999px; border: 1.5px solid var(--cc); background: transparent; color: var(--ci); font-size: 12px; font-weight: 600;
+  }
+  .chip-hit[aria-pressed="true"] .chip { background: var(--cc); color: var(--on-solid); }
+  .chip-count {
+    min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--cs); color: var(--ci); font-size: 11px;
+    font-weight: 700; text-align: center;
+  }
+  .k-success { --cc: var(--ok-solid); --cs: var(--ok-bg); --ci: var(--ok-fg); }
+  .k-aborted { --cc: var(--warn-solid); --cs: var(--warn-soft); --ci: var(--warn-fg); }
+  .k-error { --cc: var(--bad-solid); --cs: var(--bad-bg); --ci: var(--bad-fg); }
+  .day { display: flex; flex-direction: column; gap: 8px; }
+  .day h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+  .day ul { margin: 0; padding: 0; list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .day li { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid var(--line-soft); }
+  .day li:first-child { border-top: 0; }
+  .h-time { flex: none; min-width: 48px; white-space: nowrap; font-size: 15px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .h-main { flex: 1; min-width: 0; }
+  .h-title { font-size: 15px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+  .h-sub { margin-top: 2px; font-size: 13px; color: var(--muted); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+  .h-badge { flex: none; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--cs); color: var(--ci); }
+  .center-note { margin: 24px 0 0; text-align: center; font-size: 14px; line-height: 1.45; color: var(--muted); }
+
   .app-footer {
     padding: 0 16px max(16px, env(safe-area-inset-bottom)); text-align: center;
     font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
@@ -417,6 +445,7 @@
     <nav class="tabs" data-i18n-attr="aria-label:nav.sections" aria-label="Sections">
       <a href="#start" data-tab="start" aria-current="page" data-i18n="nav.start">Start</a>
       <a href="#status" data-tab="status" data-i18n="nav.status">Status</a>
+      <a href="#history" data-tab="history" data-i18n="nav.history">History</a>
     </nav>
   </div>
 
@@ -642,6 +671,14 @@
     </section>
   </main>
 
+  <!-- History: the last shots from GET /api/history -->
+  <main class="panel" id="tab-history" style="gap:14px" hidden>
+    <div role="group" data-i18n-attr="aria-label:history.filter" aria-label="Filter by status" class="chips" id="h-chips"></div>
+    <div class="stack-14" id="h-groups"></div>
+    <p class="center-note" id="h-empty" hidden></p>
+    <p class="foot" id="h-foot" style="margin-top:4px" hidden></p>
+  </main>
+
   <footer class="app-footer" id="app-footer">gbs-anywhere</footer>
 </div>
 
@@ -714,6 +751,7 @@
       "nav.sections": "Sections",
       "nav.start": "Start",
       "nav.status": "Status",
+      "nav.history": "History",
 
       "common.cancel": "Cancel",
       "common.back": "Back",
@@ -946,6 +984,29 @@
       "settings.saved": "The settings for time to pull the shot and the grinder IP address are saved on the computer (gbs-anywhere host) and kept after a restart. Appearance applies to this device only.",
       "settings.notPersistent": "The settings for time to pull the shot and the grinder IP address apply until the next restart: gbs-anywhere runs without a settings file (--config). Appearance applies to this device only.",
 
+      "history.filter": "Filter by status",
+      "history.kind.success": "Success",
+      "history.kind.aborted": "Aborted",
+      "history.kind.error": "Error",
+      "history.chip": { one: "{label}, {n} shot", other: "{label}, {n} shots" },
+      "history.today": "Today",
+      "history.yesterday": "Yesterday",
+      "history.unknownDay": "Unknown day",
+      "history.timeout": "Timeout: no shot in {time}",
+      "history.abortedUser": "Aborted in the app",
+      "history.replaced": "Replaced by a newer grind",
+      "history.stoppedWaiting": "The grinder stopped waiting",
+      "history.refused": "The grinder refused the shot",
+      "history.address": "Ended: grinder address changed",
+      "history.target": "Target {targets}",
+      "history.ignored": "ignored by the grinder",
+      "history.unsupported": "This gbs-anywhere server keeps no shot history. Update gbs-anywhere to see your shots here.",
+      "history.failed": "Could not load the history: {error} Trying again…",
+      "history.loading": "Loading…",
+      "history.empty": "No shots yet. Each shot shows up here once it is done.",
+      "history.noMatch": "No shots match the filter. Tap a status above to show it again.",
+      "history.kept": { one: "The last shot is kept on this computer.", other: "The last {n} shots are kept on this computer." },
+      "history.keptMemory": { one: "The last shot is kept in memory only, until gbs-anywhere restarts.", other: "The last {n} shots are kept in memory only, until gbs-anywhere restarts." },
     },
   };
 
@@ -972,14 +1033,18 @@
     try { new Intl.NumberFormat(locale); } catch (_) { locale = lang; }
     const nf = (o) => new Intl.NumberFormat(locale, o);
     const df = (o) => new Intl.DateTimeFormat(locale, o);
-    // 09:47:05 in 24-hour locales, 9:47:05 AM (not 09:47:05 AM) in 12-hour ones.
+    // 09:47 in 24-hour locales, 9:47 AM (not 09:47 AM) in 12-hour ones.
     const h12 = /^h1[12]$/.test(df({ hour: "numeric" }).resolvedOptions().hourCycle || "");
     const hourStyle = h12 ? "numeric" : "2-digit";
     fmt = {
       one: nf({ minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: false }),
       upToOne: nf({ maximumFractionDigits: 1, useGrouping: false }),
       int: nf({ maximumFractionDigits: 0 }),
+      hm: df({ hour: hourStyle, minute: "2-digit" }),
       hms: df({ hour: hourStyle, minute: "2-digit", second: "2-digit" }),
+      day: df({ day: "numeric", month: "short" }),
+      dayYear: df({ day: "numeric", month: "short", year: "numeric" }),
+      weekday: df({ weekday: "long" }),
       plural: new Intl.PluralRules(locale),
       list: Intl.ListFormat ? new Intl.ListFormat(locale, { style: "long", type: "conjunction" }) : null,
     };
@@ -1063,6 +1128,7 @@
     return Math.floor(s / 60) + ":" + pad2(s % 60);
   }
   /** Clock times in the language's format. */
+  const hhmm = (d) => fmt.hm.format(d);
   const hhmmss = (d) => fmt.hms.format(d);
   function ago(ms) {
     const s = Math.max(0, Math.round(ms / 1000));
@@ -1100,8 +1166,10 @@
   let stateAt = 0;               // performance.now() when S arrived
   let online = true;
   let offlineSince = 0;          // Date.now() when gbs-anywhere stopped answering
-  let events = [], lastSeq = 0;
+  let events = [], lastSeq = 0, primed = false;
   const seenAt = new Map();      // event seq -> when it happened, on this device's clock
+  let hist = null;               // GET /api/history, or null
+  let histState = "unknown";     // "unknown" | "ok" | "unsupported"
   let kinds = null, kindsPersistent = false, kindsLoading = false;
   let tab = "start";
   let sseOpen = false;
@@ -1119,6 +1187,7 @@
     brew: null, typeIn: false, missed: false,
   };
 
+  const hasNewApi = () => !!(S && S.settings);
   const wifiOf = () => (S && S.grinder && S.grinder.wifi) || null;
   function linkOn() {
     const age = S && S.grinder ? S.grinder.last_poll_age_ms : null;
@@ -1134,7 +1203,7 @@
     for (let i = events.length - 1; i >= 0; i--) if (kindsWanted.includes(events[i].kind)) return events[i];
     return null;
   }
-  // Ends of a brew that are no failure.
+  // Ends of a brew that are no failure (history kind "aborted").
   const ABORTS = ["aborted by user", "a newer Grind-by-Sync grind replaced it", "the grinder address changed"];
   const isAbort = (r) => ABORTS.includes(r);
   /** An E65/E80 setup: a Generic WiFi link, or an address it is starting with. */
@@ -1174,12 +1243,24 @@
     return { w: w > 0 ? w : null, t: t > 0 ? t : null };
   }
 
+  // The newest history entry, when it is the given machine event.
+  function histFor(ev) {
+    const h = hist && hist.shots && hist.shots[0];
+    if (!h || !ev) return null;
+    if (ev.kind === "shot_reported") {
+      return h.kind === "success" && h.time_s != null && Math.abs(h.time_s * 1000 - ev.result.time_ms) < 60 ? h : null;
+    }
+    return h.kind !== "success" && h.reason === ev.reason ? h : null;
+  }
   /** When the brew ended with this event. */
   function endTime(ev) {
-    return ev && seenAt.has(ev.seq) ? seenAt.get(ev.seq) : null;
+    if (!ev) return null;
+    if (seenAt.has(ev.seq)) return seenAt.get(ev.seq);
+    const h = histFor(ev);
+    return h && h.ended_at ? Date.parse(h.ended_at) : null;
   }
-  /** When the current (or last) brew started: from its event, or counted
-   *  back from the running timer. */
+  /** When the current (or last) brew started: from its event, counted back
+   *  from the running timer, or from the history entry of its outcome. */
   function brewStart(f) {
     const started = f.started;
     if (started && seenAt.has(started.seq)) return seenAt.get(started.seq);
@@ -1188,7 +1269,9 @@
       if (started) seenAt.set(started.seq, t);
       return t;
     }
-    return null;
+    if (!started || !f.outcome || f.outcome.seq < started.seq) return null;
+    const h = histFor(f.outcome);
+    return h && h.at ? Date.parse(h.at) : null;
   }
   const fresh = (ev) => { const t = endTime(ev); return t != null && Date.now() - t < FRESH_MS; };
   /** E64: a grind waits for the knob press only for a while. */
@@ -1227,7 +1310,7 @@
   };
 
   // --- Tabs --------------------------------------------------------------------
-  const TABS = ["start", "status"];
+  const TABS = ["start", "status", "history"];
   function showTab(name) {
     if (!TABS.includes(name)) name = "start";
     const changed = name !== tab;
@@ -1238,6 +1321,7 @@
     }
     if (changed) window.scrollTo(0, 0);
     renderAll();
+    if (name === "history") loadHistory();
   }
   /** Opens a tab and puts it in the address, without a navigation: Safari on
    *  iPhone reloaded the whole page for a plain "#tab" link. */
@@ -1594,7 +1678,7 @@
     $("s2-error").hidden = f.sc !== "error";
     if (f.sc === "error") {
       const timeout = f.reason === "no result reported in time";
-      $("s2-err-title").textContent = errorTitle(f.reason);
+      $("s2-err-title").textContent = errorTitle(f.reason, f.outcome);
       $("s2-err-info-btn").hidden = !timeout;
       $("s2-err-info-btn").setAttribute("aria-expanded", String(ui.errInfo));
       $("s2-err-info").hidden = !(timeout && ui.errInfo);
@@ -1627,9 +1711,12 @@
     "the grinder refused the job": "start.error.refused",
     "the grinder no longer knows this gbs-anywhere": "start.error.unknownApp",
   };
-  function errorTitle(reason) {
+  function errorTitle(reason, outcome) {
     if (reason === "no result reported in time") {
-      // How long it waited: the shot window as it is set now.
+      // How long it waited, from the history; else the current setting.
+      const h = histFor(outcome);
+      const ms = h ? Date.parse(h.ended_at) - Date.parse(h.at) : NaN;
+      if (isFinite(ms) && ms > 0) return t("start.error.timeout", { window: clock(ms) });
       return windowS() > 0 ? t("start.error.timeout", { window: windowLabel() }) : t("start.error.timeoutNoLimit");
     }
     if (ERROR_REASONS[reason]) return t(ERROR_REASONS[reason]);
@@ -2287,6 +2374,128 @@
     renderSettings();
   }
 
+  // --- History tab -----------------------------------------------------------------
+  const HKINDS = ["success", "aborted", "error"];
+  const kindLabel = (k) => (HKINDS.includes(k) ? t("history.kind." + k) : k);
+  let hHidden = {};
+  try { hHidden = JSON.parse(store.get("historyHidden") || "{}") || {}; } catch (_) {}
+  let histLoading = false, histTried = 0, histError = "";
+
+  async function loadHistory() {
+    if (histLoading) return;
+    if (!hasNewApi()) {
+      if (S) { histState = "unsupported"; renderHistory(); }
+      return;
+    }
+    histLoading = true;
+    histTried = Date.now();
+    try {
+      const h = await api("/api/history");
+      if (h && Array.isArray(h.shots)) { hist = h; histState = "ok"; } else histState = "unsupported";
+    } catch (e) {
+      // Not there on an older server; otherwise tried again shortly (see refresh).
+      if (e.status === 404) histState = "unsupported";
+      else { histState = "failed"; histError = e.message; }
+    }
+    histLoading = false;
+    renderHistory();
+    renderStart();
+  }
+
+  /** "Today · 11 Oct", "Yesterday · 10 Oct", "Thursday · 9 Oct". */
+  function dayLabel(d) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const that = new Date(d); that.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - that) / 86400000);
+    const date = (d.getFullYear() !== today.getFullYear() ? fmt.dayYear : fmt.day).format(d);
+    const name = diff === 0 ? t("history.today") : diff === 1 ? t("history.yesterday") : fmt.weekday.format(d);
+    return name + " · " + date;
+  }
+
+  // The machine's reasons for ending a brew, and their short history titles.
+  const HISTORY_REASONS = {
+    "aborted by user": "history.abortedUser",
+    "a newer Grind-by-Sync grind replaced it": "history.replaced",
+    "the grinder stopped waiting before the shot came": "history.stoppedWaiting",
+    "the grinder refused the job": "history.refused",
+    "the grinder address changed": "history.address",
+    "the grinder no longer knows this gbs-anywhere": "start.error.unknownApp",
+  };
+  function shotTitle(s) {
+    if (s.kind === "success") {
+      if (s.time_s == null) return "–";
+      return s.weight_g != null ? t("unit.shot", { time: secs(s.time_s), weight: grams(s.weight_g) }) : t("unit.seconds", { time: secs(s.time_s) });
+    }
+    const r = s.reason || "";
+    if (r === "no result reported in time") {
+      const ms = Date.parse(s.ended_at) - Date.parse(s.at);
+      return t("history.timeout", { time: isFinite(ms) ? clock(ms) : windowLabel() });
+    }
+    if (HISTORY_REASONS[r]) return t(HISTORY_REASONS[r]);
+    // A reason this app does not know: as the server says it.
+    return r ? cap(r) : kindLabel(s.kind);
+  }
+  function shotSub(s) {
+    const parts = [];
+    const tgt = [s.target_time_s != null ? t("unit.seconds", { time: secs(s.target_time_s) }) : null,
+      s.target_weight_g != null ? t("unit.grams", { weight: gramsShort(s.target_weight_g) }) : null].filter(Boolean);
+    if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
+    if (s.kind === "success" && s.time_s != null && (s.time_s * 1000 <= MIN_MS || s.time_s * 1000 > MAX_MS)) parts.push(t("history.ignored"));
+    return parts.join(" · ");
+  }
+
+  function renderHistory() {
+    if (tab !== "history") return;
+    const supported = histState !== "unsupported";
+    const shots = (hist && hist.shots) || [];
+    const chips = $("h-chips"), groups = $("h-groups"), empty = $("h-empty"), foot = $("h-foot");
+    chips.hidden = !supported || !hist;
+    if (!supported) {
+      groups.replaceChildren();
+      empty.hidden = false;
+      empty.textContent = t("history.unsupported");
+      foot.hidden = true;
+      return;
+    }
+    if (!hist) {
+      groups.replaceChildren(); empty.hidden = false; foot.hidden = true;
+      empty.textContent = histState === "failed" ? t("history.failed", { error: histError }) : t("history.loading");
+      return;
+    }
+    chips.replaceChildren(...HKINDS.map((k) => {
+      const on = !hHidden[k];
+      const n = shots.filter((s) => s.kind === k).length;
+      return el("button", {
+        type: "button", class: "chip-hit k-" + k, "aria-pressed": String(on),
+        "aria-label": t("history.chip", { label: kindLabel(k), n }),
+        onclick: () => { hHidden[k] = on; store.set("historyHidden", JSON.stringify(hHidden)); renderHistory(); },
+      }, el("span", { class: "chip" }, kindLabel(k), el("span", { class: "chip-count", text: fmt.int.format(n) })));
+    }));
+    const visible = shots.filter((s) => !hHidden[s.kind]);
+    const byDay = new Map();
+    for (const s of visible) {
+      const d = new Date(s.at);
+      const label = isNaN(d) ? t("history.unknownDay") : dayLabel(d);
+      if (!byDay.has(label)) byDay.set(label, { label, items: [] });
+      byDay.get(label).items.push(s);
+    }
+    const days = [...byDay.values()];
+    groups.replaceChildren(...days.map((g) => el("section", { class: "day" },
+      el("h2", { text: g.label }),
+      el("ul", null, g.items.map((s) => {
+        const d = new Date(s.at);
+        const sub = shotSub(s);
+        return el("li", { class: "k-" + s.kind },
+          el("p", { class: "h-time", text: isNaN(d) ? "–" : hhmm(d) }),
+          el("div", { class: "h-main" }, el("p", { class: "h-title", text: shotTitle(s) }), sub ? el("p", { class: "h-sub", text: sub }) : null),
+          el("span", { class: "h-badge", text: kindLabel(s.kind) }));
+      })))));
+    empty.hidden = visible.length > 0;
+    empty.textContent = t(shots.length === 0 ? "history.empty" : "history.noMatch");
+    foot.hidden = false;
+    foot.textContent = t(hist.persistent === false ? "history.keptMemory" : "history.kept", { n: hist.capacity || 200 });
+  }
+
   // --- Bottom sheet ------------------------------------------------------------------
   // While open, the page behind is inert, so focus stays in the sheet.
   // `returnTo` (an element or a function) gets the focus back on close.
@@ -2338,6 +2547,7 @@
     $("app-footer").title = String(S.version || "");
     renderStart();
     renderStatus();
+    renderHistory();
   }
 
   async function refresh() {
@@ -2348,14 +2558,21 @@
     // The server restarted: a new boot_id, or (without one) event numbers that went back.
     const restarted = !!S && ((st.boot_id && S.boot_id && st.boot_id !== S.boot_id)
       || (typeof st.last_seq === "number" && st.last_seq < lastSeq));
+    const hadNewApi = hasNewApi();
     S = st; stateAt = performance.now();
     if (restarted) {
       events = []; lastSeq = 0; seenAt.clear();
       ui.mine.clear(); ui.mineRange = null; ui.dismissed = 0; ui.planKey = null;
       kinds = null;
     }
+    // Upgraded in place: the history may be there now.
+    if (primed && (restarted || (!hadNewApi && hasNewApi()))) {
+      if (histState !== "ok" || restarted) { histState = "unknown"; if (hasNewApi()) loadHistory(); }
+    }
     if (!kinds) loadKinds();
-    if (st.last_seq !== lastSeq) {
+    let shotDone = false;
+    let caughtUp = st.last_seq === lastSeq;
+    if (!caughtUp) {
       try {
         const fresh = await api("/api/events?after=" + lastSeq);
         if (Array.isArray(fresh)) {
@@ -2365,6 +2582,7 @@
             // The server says how long ago, so an event caught up after a gap
             // (phone asleep, server restarted) keeps its real time.
             if (typeof e.age_ms === "number") seenAt.set(e.seq, Date.now() - e.age_ms);
+            if (e.kind === "shot_reported" || e.kind === "shot_aborted") shotDone = true;
             lastSeq = e.seq;
           }
           markMine();
@@ -2375,9 +2593,17 @@
             for (const k of ui.mine) if (k < min) ui.mine.delete(k);
           }
           lastSeq = Math.max(lastSeq, st.last_seq);
+          caughtUp = true;
         }
       } catch (_) {}
     }
+    // The first catch-up after the page opened loads the history; a finished
+    // shot loads it again.
+    if (!primed && caughtUp) {
+      primed = true;
+      if (hasNewApi()) await loadHistory(); else histState = "unsupported";
+    } else if (shotDone && hasNewApi()) loadHistory();
+    else if (histState === "failed" && Date.now() - histTried > 5000) loadHistory();
     renderAll();
   }
 
