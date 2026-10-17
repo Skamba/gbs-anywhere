@@ -78,6 +78,14 @@
     --warn-solid: #8C5A0A;
     --outcome-bg: #EFEAE3;
     --outcome-fg: #3F3830;
+    --pressed-bg: #1F1B16;
+    --pressed-fg: #FFFFFF;
+    --log-bg: #17140F;
+    --log-ink: #E8E2D8;
+    --log-dim: #9C9285;
+    --log-info: #7FC79A;
+    --log-warn: #E8B860;
+    --log-error: #F08A7E;
     --scrim: rgba(31, 27, 22, .45);
     --shadow-tab: 0 1px 2px rgba(31, 27, 22, .10);
     --shadow-menu: 0 8px 24px rgba(31, 27, 22, .16);
@@ -95,7 +103,8 @@
     --ok-bg: #173526; --ok-fg: #92D7AD; --ok: #4FB97B; --ok-solid: #2F8053;
     --bad-bg: #431F19; --bad-fg: #F4A298; --bad: #E0695A; --bad-solid: #B5473A; --bad-box: #2D1814; --bad-line: #5A2B24; --bad-field: #7B3C33;
     --warn-bg: #3F2F12; --warn-fg: #F1C676; --warn-soft: #382A12; --warn-solid: #9A6814;
-    --outcome-bg: #2F2822; --outcome-fg: #E5DCD1;
+    --outcome-bg: #2F2822; --outcome-fg: #E5DCD1; --pressed-bg: #F3EDE5; --pressed-fg: #1F1B16;
+    --log-bg: #0C0A08; --log-ink: #E8E2D8; --log-dim: #9C9285; --log-info: #7FC79A; --log-warn: #E8B860; --log-error: #F08A7E;
     --scrim: rgba(0, 0, 0, .6); --shadow-tab: 0 1px 2px rgba(0, 0, 0, .5); --shadow-menu: 0 8px 24px rgba(0, 0, 0, .55);
   }
 
@@ -132,7 +141,7 @@
   .pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--td); flex: none; }
   nav.tabs {
-    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px;
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px;
     margin: 0 16px 16px; padding: 4px; background: var(--nav); border-radius: 12px;
   }
   nav.tabs a {
@@ -413,6 +422,42 @@
     font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
   }
 
+  /* Log */
+  body.on-log .app { height: 100vh; height: 100dvh; min-height: 0; }
+  body.on-log .app-footer { display: none; }
+  #tab-log { gap: 10px; padding-bottom: max(20px, env(safe-area-inset-bottom)); min-height: 0; }
+  .log-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .tool-end { display: flex; gap: 8px; margin-left: auto; }
+  .tool {
+    display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px; border-radius: 10px;
+    border: 1px solid var(--field); background: var(--surface); color: var(--strong); font-size: 14px; font-weight: 600;
+  }
+  .tool[aria-pressed="true"] { background: var(--pressed-bg); color: var(--pressed-fg); }
+  .tool-icon {
+    width: 44px; height: 44px; border-radius: 10px; border: 1px solid var(--field); background: var(--surface);
+    color: var(--strong); display: grid; place-items: center;
+  }
+  .tool-icon.done { background: var(--ok-bg); color: var(--ok-fg); border-color: var(--ok-solid); }
+  .tool-icon .i-done, .tool-icon.done .i-idle { display: none; }
+  .tool-icon.done .i-done { display: block; }
+  .log-box {
+    flex: 1; min-height: 200px; overflow: auto; background: var(--log-bg); color: var(--log-ink); border-radius: 14px; padding: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; overscroll-behavior: contain;
+  }
+  .ll { display: flex; gap: 8px; padding: 1px 0; }
+  .ll .t { flex: none; color: var(--log-dim); }
+  .ll .v { flex: none; width: 5ch; font-weight: 700; }
+  .ll .x { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .l-INFO .v { color: var(--log-info); }
+  .l-WARN .v { color: var(--log-warn); }
+  .l-ERROR .v { color: var(--log-error); }
+  .warn-only .l-INFO { display: none; }
+  .log-live { display: flex; align-items: center; gap: 8px; padding-top: 6px; color: var(--log-dim); }
+  .live-block { width: 7px; height: 14px; background: var(--log-dim); }
+  .live-block.on { background: var(--log-info); }
+  .log-note { font-size: 12px; line-height: 1.45; color: var(--muted); }
+  .log-note.done { color: var(--ok-fg); font-weight: 600; }
+
   /* Bottom sheet */
   .scrim { position: fixed; inset: 0; z-index: 50; background: var(--scrim); display: flex; flex-direction: column; justify-content: flex-end; }
   .sheet {
@@ -427,11 +472,16 @@
     letter-spacing: 0.04em; color: var(--ink); background: var(--surface); outline: none;
   }
   .sheet-label input:focus { border-color: var(--accent); }
+  .sheet textarea {
+    width: 100%; min-height: 220px; border: 1px solid var(--field); border-radius: 10px; padding: 10px; background: var(--sunk);
+    color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5;
+  }
   .sheet-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 4px; }
   .sheet-actions.one { grid-template-columns: minmax(0, 1fr); }
   .sheet-actions button { min-height: 48px; border-radius: 12px; font-size: 16px; font-weight: 600; }
   .s-plain { border: 1px solid var(--field); background: var(--surface); color: var(--ink); }
   .s-danger { border: 0; background: var(--bad-solid); color: var(--on-solid); }
+  .s-primary { border: 0; background: var(--accent); color: var(--on-accent); }
   .sheet-actions button:disabled { opacity: .45; }
 </style>
 </head>
@@ -446,6 +496,7 @@
       <a href="#start" data-tab="start" aria-current="page" data-i18n="nav.start">Start</a>
       <a href="#status" data-tab="status" data-i18n="nav.status">Status</a>
       <a href="#history" data-tab="history" data-i18n="nav.history">History</a>
+      <a href="#log" data-tab="log" data-i18n="nav.log">Log</a>
     </nav>
   </div>
 
@@ -679,10 +730,28 @@
     <p class="foot" id="h-foot" style="margin-top:4px" hidden></p>
   </main>
 
+  <!-- Log: the server's recent log lines, live -->
+  <main class="panel" id="tab-log" hidden>
+    <div class="log-tools" id="log-tools">
+      <button type="button" class="tool" id="log-follow" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg><span data-i18n="log.follow">Follow</span></button>
+      <button type="button" class="tool" id="log-warn" aria-pressed="false" data-i18n="log.warnOnly">Warnings only</button>
+      <span class="tool-end">
+      <button type="button" class="tool-icon" id="log-copy" data-i18n-attr="aria-label:log.copy;title:log.copy" aria-label="Copy the last 60 minutes" title="Copy the last 60 minutes"><svg class="i-done" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg><svg class="i-idle" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button>
+      <button type="button" class="tool-icon" id="log-dl" data-i18n-attr="aria-label:log.download;title:log.download" aria-label="Download the complete log" title="Download the complete log"><svg class="i-done" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg><svg class="i-idle" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 19h14"/></svg></button>
+      </span>
+    </div>
+    <div role="log" data-i18n-attr="aria-label:log.box" aria-label="gbs-anywhere log" aria-live="off" class="log-box" id="log-box" tabindex="0">
+      <div id="log-lines"></div>
+      <div class="log-live"><span class="live-block on" id="log-live-block"></span><span id="log-live-text">live · following new lines</span></div>
+    </div>
+    <p role="status" class="log-note" id="log-note"></p>
+    <p class="center-note" id="log-unsupported" data-i18n="log.unsupported" hidden>This gbs-anywhere server has no log view. Update gbs-anywhere to read its log here.</p>
+  </main>
+
   <footer class="app-footer" id="app-footer">gbs-anywhere</footer>
 </div>
 
-<!-- Bottom sheet for confirmations (delete) -->
+<!-- Bottom sheet for confirmations (delete) and the copy fallback -->
 <div class="scrim" id="sheet" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
     <p class="sheet-title" id="sheet-title"></p>
@@ -745,13 +814,14 @@
   // plural, picked by the number `n`. Keys ending in .e64 / .wifi are the
   // wording for an E64 WS or an E65/E80 GbS (Generic WiFi), picked by tv().
   // Texts from the server (integration names, summaries, forms and status
-  // lines, errors) are shown as they come.
+  // lines, errors, log lines) are shown as they come.
   const STRINGS = {
     en: {
       "nav.sections": "Sections",
       "nav.start": "Start",
       "nav.status": "Status",
       "nav.history": "History",
+      "nav.log": "Log",
 
       "common.cancel": "Cancel",
       "common.back": "Back",
@@ -759,6 +829,7 @@
       "common.save": "Save",
       "common.change": "Change",
       "common.delete": "Delete",
+      "common.done": "Done",
       "common.optional": " (optional)",
       "common.notSaved": "Not saved: {error}",
       "common.requestFailed": "The request failed ({status}).",
@@ -1007,6 +1078,26 @@
       "history.noMatch": "No shots match the filter. Tap a status above to show it again.",
       "history.kept": { one: "The last shot is kept on this computer.", other: "The last {n} shots are kept on this computer." },
       "history.keptMemory": { one: "The last shot is kept in memory only, until gbs-anywhere restarts.", other: "The last {n} shots are kept in memory only, until gbs-anywhere restarts." },
+
+      "log.follow": "Follow",
+      "log.warnOnly": "Warnings only",
+      "log.copy": "Copy the last 60 minutes",
+      "log.download": "Download the complete log",
+      "log.box": "gbs-anywhere log",
+      "log.live": "live · following new lines",
+      "log.paused": "paused · new lines arrive below",
+      "log.reconnecting": "reconnecting…",
+      "log.note": "Read only, keeps the last {n} lines. Copy takes the last 60 min (max 500 lines, follows the filter), Download the whole log. Both replace IP addresses.",
+      "log.nothingLines": "Nothing to copy: no lines in the last 60 min.",
+      "log.nothingWarnings": "Nothing to copy: no warnings in the last 60 min.",
+      "log.copied": { one: "Copied {n} line from the last 60 min. IP addresses replaced.", other: "Copied {n} lines from the last 60 min. IP addresses replaced." },
+      "log.copiedWarn": { one: "Copied {n} line from the last 60 min (warnings only). IP addresses replaced.", other: "Copied {n} lines from the last 60 min (warnings only). IP addresses replaced." },
+      "log.downloaded": { one: "Downloaded {file} ({n} line, all levels). IP addresses replaced.", other: "Downloaded {file} ({n} lines, all levels). IP addresses replaced." },
+      "log.copySheet.title": "Copy the log",
+      "log.copySheet.text": "This browser blocks copying here. Select the text below and copy it.",
+      "log.copySheet.selectAll": "Select all",
+      "log.copySheet.label": "Log text",
+      "log.unsupported": "This gbs-anywhere server has no log view. Update gbs-anywhere to read its log here.",
     },
   };
 
@@ -1310,7 +1401,7 @@
   };
 
   // --- Tabs --------------------------------------------------------------------
-  const TABS = ["start", "status", "history"];
+  const TABS = ["start", "status", "history", "log"];
   function showTab(name) {
     if (!TABS.includes(name)) name = "start";
     const changed = name !== tab;
@@ -1319,8 +1410,10 @@
     for (const a of document.querySelectorAll("nav.tabs a")) {
       if (a.dataset.tab === name) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     }
+    document.body.classList.toggle("on-log", name === "log");
     if (changed) window.scrollTo(0, 0);
     renderAll();
+    if (name === "log") openLog();
     if (name === "history") loadHistory();
   }
   /** Opens a tab and puts it in the address, without a navigation: Safari on
@@ -2496,6 +2589,265 @@
     foot.textContent = t(hist.persistent === false ? "history.keptMemory" : "history.kept", { n: hist.capacity || 200 });
   }
 
+  // --- Log tab ---------------------------------------------------------------------
+  const log = { lines: [], last: 0, state: "idle", es: null, poll: null, retry: null, connected: false, follow: true, warnOnly: false, capacity: 1000, done: null, doneTimer: null };
+  const LOG_NOTE = () => t("log.note", { n: log.capacity });
+
+  /** The server restarted (a new boot_id, or its line numbers went back): start over from its first line. */
+  function restartLog() {
+    stopLogFeed();
+    log.lines = []; log.last = 0;
+    $("log-lines").replaceChildren();
+    if (log.state === "live") { log.state = "idle"; if (tab === "log") openLog(); }
+  }
+
+  /** One log line on the page: time in the language's format, level, text as the server wrote it. */
+  function lineEl(l) {
+    const d = new Date(l.ts);
+    const level = String(l.level || "INFO").toUpperCase();
+    return el("div", { class: "ll l-" + (level === "WARNING" ? "WARN" : level) },
+      el("span", { class: "t", text: isNaN(d) ? "--:--:--" : hhmmss(d) }),
+      el("span", { class: "v", text: level }),
+      el("span", { class: "x", text: String(l.text || "") }));
+  }
+  function addLines(lines) {
+    const box = $("log-lines");
+    const frag = document.createDocumentFragment();
+    for (const l of lines) {
+      if (!l || typeof l.seq !== "number" || l.seq <= log.last) continue;
+      log.last = l.seq;
+      log.lines.push(l);
+      frag.append(lineEl(l));
+    }
+    box.append(frag);
+    const over = log.lines.length - log.capacity;
+    if (over > 0) {
+      log.lines.splice(0, over);
+      for (let i = 0; i < over && box.firstChild; i++) box.firstChild.remove();
+    }
+    if (log.follow) scrollLogEnd();
+  }
+
+  async function fetchLog() {
+    try {
+      const r = await api("/api/log?after=" + log.last);
+      if (!r || !Array.isArray(r.lines)) throw Object.assign(new Error("no log"), { status: 404 });
+      if (typeof r.capacity === "number") log.capacity = r.capacity;
+      if (typeof r.last_seq === "number" && r.last_seq < log.last) { restartLog(); return false; }
+      addLines(r.lines);
+      return true;
+    } catch (e) {
+      if (e.status === 404) { log.state = "unsupported"; stopLogFeed(); renderLog(); }
+      return false;
+    }
+  }
+
+  function stopLogFeed() {
+    if (log.es) { log.es.close(); log.es = null; }
+    if (log.poll) { clearInterval(log.poll); log.poll = null; }
+    clearTimeout(log.retry);
+  }
+
+  async function openLog() {
+    renderLog();
+    if (log.state !== "idle") { if (log.follow) scrollLogEnd(); return; }
+    if (!S) return;
+    if (!hasNewApi()) { log.state = "unsupported"; renderLog(); return; }
+    log.state = "live";
+    $("log-note").textContent = LOG_NOTE();
+    const ok = await fetchLog();
+    if (!ok || log.state !== "live") return;
+    renderLog();
+    if (window.EventSource) connectLog(); else startLogPolling();
+  }
+
+  // The stream first replays the kept lines after `after`, so none fall
+  // between the fetch and the stream. It is reopened by hand after an error,
+  // with the newest `after` and after a fetch that notices a server restart.
+  function connectLog() {
+    if (log.state !== "live" || log.es) return;
+    const es = new EventSource("/api/log/stream?after=" + log.last);
+    log.es = es;
+    es.addEventListener("open", () => { log.connected = true; renderLog(); });
+    es.addEventListener("log", (m) => { try { addLines([JSON.parse(m.data)]); } catch (_) {} });
+    es.addEventListener("error", () => {
+      es.close();
+      if (log.es === es) log.es = null;
+      log.connected = false;
+      renderLog();
+      clearTimeout(log.retry);
+      log.retry = setTimeout(reconnectLog, 3000);
+    });
+  }
+  async function reconnectLog() {
+    if (log.state !== "live" || log.es) return;
+    const ok = await fetchLog();
+    if (log.state !== "live" || log.es) return;   // a restart: openLog took over
+    if (ok) connectLog(); else log.retry = setTimeout(reconnectLog, 3000);
+  }
+  function startLogPolling() {
+    if (log.poll) return;
+    log.poll = setInterval(() => { if (!document.hidden && tab === "log") fetchLog(); }, 2000);
+  }
+
+  function renderLog() {
+    if (tab !== "log") return;
+    const unsupported = log.state === "unsupported";
+    $("log-unsupported").hidden = !unsupported;
+    for (const id of ["log-tools", "log-box", "log-note"]) $(id).hidden = unsupported;
+    if (unsupported) return;
+    $("log-follow").setAttribute("aria-pressed", String(log.follow));
+    $("log-warn").setAttribute("aria-pressed", String(log.warnOnly));
+    $("log-lines").classList.toggle("warn-only", log.warnOnly);
+    const live = window.EventSource ? log.connected : log.state === "live" && online;
+    $("log-live-block").classList.toggle("on", log.follow && live);
+    $("log-live-text").textContent = t(!live ? "log.reconnecting" : log.follow ? "log.live" : "log.paused");
+    // A status region announces every change, so only real ones.
+    if (!log.done && $("log-note").textContent !== LOG_NOTE()) $("log-note").textContent = LOG_NOTE();
+    if (!log.done) $("log-note").classList.remove("done");
+    $("log-copy").classList.toggle("done", log.done === "copy");
+    $("log-dl").classList.toggle("done", log.done === "dl");
+  }
+
+  let logScrolling = false;
+  function scrollLogEnd() {
+    const box = $("log-box");
+    logScrolling = true;
+    box.scrollTop = box.scrollHeight;
+    requestAnimationFrame(() => { logScrolling = false; });
+  }
+  $("log-box").addEventListener("scroll", () => {
+    if (logScrolling) return;
+    const box = $("log-box");
+    const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 8;
+    if (!atEnd && log.follow) { log.follow = false; renderLog(); }
+  }, { passive: true });
+  // The box changes height with the note below it and the screen: keep the end in view.
+  if (window.ResizeObserver) new ResizeObserver(() => { if (log.follow && tab === "log") scrollLogEnd(); }).observe($("log-box"));
+  $("log-follow").addEventListener("click", () => {
+    log.follow = !log.follow;
+    if (log.follow) scrollLogEnd();
+    renderLog();
+  });
+  $("log-warn").addEventListener("click", () => {
+    log.warnOnly = !log.warnOnly;
+    renderLog();
+    if (log.follow) scrollLogEnd();
+  });
+
+  // Copy and Download share the export: IP addresses replaced the same way
+  // throughout, and a header line saying what it holds.
+  function scrubber() {
+    const seen = new Map();
+    const name = (ip) => {
+      const key = ip.toLowerCase();
+      if (!seen.has(key)) seen.set(key, "<ip-" + (seen.size + 1) + ">");
+      return seen.get(key);
+    };
+    // The IPv4 tail goes first, so ::ffff:192.168.1.30 is one address.
+    const V6 = /(^|[^0-9A-Za-z_:.])((?:[0-9A-Fa-f]{0,4}:){2,7}(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f]{1,4})?)(?=$|[^0-9A-Za-z_:])/g;
+    const V4 = /(^|[^0-9.])((?:25[0-5]|2[0-4]\d|[01]?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)){3})(?![0-9]|\.\d)/g;
+    return (text) => text
+      .replace(/\/\/[^\s\/@]+@/g, "//<login>@")   // user:password@ in a URL
+      .replace(V6, (all, pre, ip) => {
+        const colons = (ip.match(/:/g) || []).length;
+        const valid = /[0-9A-Fa-f]/.test(ip) && (ip.includes("::") ? !/:::/.test(ip) && ip.split("::").length === 2 : colons === 7 || (colons === 6 && /\d\.\d/.test(ip)));
+        return valid ? pre + name(ip) : all;
+      })
+      .replace(V4, (all, pre, ip) => pre + name(ip));
+  }
+  // The export is meant for bug reports: always English, ISO-like times.
+  function stamp(d) {
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate())
+      + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+  function utcOffset(d) {
+    const m = -d.getTimezoneOffset();
+    return "UTC" + (m >= 0 ? "+" : "-") + pad2(Math.floor(Math.abs(m) / 60)) + ":" + pad2(Math.abs(m) % 60);
+  }
+  function exportText(lines, filter) {
+    const scrub = scrubber();
+    const body = lines.map((l) => {
+      const d = new Date(l.ts);
+      return (isNaN(d) ? String(l.ts) : stamp(d) + "." + String(d.getMilliseconds()).padStart(3, "0")) + " "
+        + String(l.level).padEnd(5) + " " + scrub(String(l.text || ""));
+    });
+    const first = lines.length ? new Date(lines[0].ts) : new Date();
+    const last = lines.length ? new Date(lines[lines.length - 1].ts) : new Date();
+    const head = "# gbs-anywhere " + ((S && S.version) || "") + " log · " + stamp(first) + " to " + stamp(last)
+      + " (" + utcOffset(last) + ") · " + lines.length + (lines.length === 1 ? " line" : " lines") + " · " + filter + " · IP addresses replaced";
+    return head + "\n" + body.join("\n") + "\n";
+  }
+  /** Shows `note` under the log for a moment; `kind` "copy" or "dl" also ticks that button. */
+  function logDone(kind, note) {
+    log.done = kind;
+    $("log-note").textContent = note;
+    $("log-note").classList.toggle("done", kind === "copy" || kind === "dl");
+    clearTimeout(log.doneTimer);
+    log.doneTimer = setTimeout(() => { log.done = null; renderLog(); }, 3500);
+    renderLog();
+  }
+
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
+    }
+    // Plain HTTP on a LAN address: no clipboard API, so a hidden textarea.
+    const ta = el("textarea", { readonly: true, "aria-hidden": "true" });
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;";
+    document.body.append(ta);
+    const active = document.activeElement;
+    ta.focus(); ta.select();
+    try { ta.setSelectionRange(0, text.length); } catch (_) {}
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) {}
+    ta.remove();
+    if (active && active.focus) active.focus();
+    return ok;
+  }
+
+  $("log-copy").addEventListener("click", async () => {
+    const since = Date.now() - 60 * 60000;
+    let lines = log.lines.filter((l) => Date.parse(l.ts) >= since && (!log.warnOnly || l.level !== "INFO"));
+    if (lines.length > 500) lines = lines.slice(-500);
+    if (!lines.length) {
+      logDone("note", t(log.warnOnly ? "log.nothingWarnings" : "log.nothingLines"));
+      return;
+    }
+    const filter = log.warnOnly ? "warnings only" : "all levels";
+    const text = exportText(lines, filter);
+    const note = t(log.warnOnly ? "log.copiedWarn" : "log.copied", { n: lines.length });
+    if (await copyText(text)) { logDone("copy", note); return; }
+    // Copying is blocked: show the text to copy by hand.
+    const ta = el("textarea", { readonly: true, "aria-label": t("log.copySheet.label") });
+    ta.value = text;
+    openSheet({
+      title: t("log.copySheet.title"),
+      body: [el("p", { class: "body-text", text: t("log.copySheet.text") }), ta],
+      actions: [
+        { label: t("log.copySheet.selectAll"), cls: "s-plain", run: () => { ta.focus(); ta.select(); try { ta.setSelectionRange(0, ta.value.length); } catch (_) {} } },
+        { label: t("common.done"), cls: "s-primary", run: closeSheet },
+      ],
+      focus: ta,
+    });
+    requestAnimationFrame(() => { ta.select(); try { ta.setSelectionRange(0, ta.value.length); } catch (_) {} });
+  });
+
+  $("log-dl").addEventListener("click", () => {
+    const lines = log.lines.slice();
+    const now = new Date();
+    const name = "gbs-anywhere-log-" + now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate())
+      + "-" + pad2(now.getHours()) + pad2(now.getMinutes()) + ".txt";
+    const url = URL.createObjectURL(new Blob([exportText(lines, "all levels")], { type: "text/plain;charset=utf-8" }));
+    const a = el("a", { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    logDone("dl", t("log.downloaded", { file: name, n: lines.length }));
+  });
+
   // --- Bottom sheet ------------------------------------------------------------------
   // While open, the page behind is inert, so focus stays in the sheet.
   // `returnTo` (an element or a function) gets the focus back on close.
@@ -2541,13 +2893,14 @@
   // --- Live updates --------------------------------------------------------------------
   function renderAll() {
     if (!S) { renderHeader({ sc: "ready" }); return; }
-    // Name and version at the bottom of every tab.
+    // Name and version at the bottom of every tab but the log.
     const [release, build] = String(S.version || "").split("+");
     $("app-footer").textContent = "gbs-anywhere" + (release ? " " + release + (build ? " · " + build : "") : "");
     $("app-footer").title = String(S.version || "");
     renderStart();
     renderStatus();
     renderHistory();
+    renderLog();
   }
 
   async function refresh() {
@@ -2564,9 +2917,11 @@
       events = []; lastSeq = 0; seenAt.clear();
       ui.mine.clear(); ui.mineRange = null; ui.dismissed = 0; ui.planKey = null;
       kinds = null;
+      restartLog();
     }
-    // Upgraded in place: the history may be there now.
+    // Upgraded in place: the history and the log may be there now.
     if (primed && (restarted || (!hadNewApi && hasNewApi()))) {
+      if (log.state === "unsupported") { log.state = "idle"; if (tab === "log") openLog(); }
       if (histState !== "ok" || restarted) { histState = "unknown"; if (hasNewApi()) loadHistory(); }
     }
     if (!kinds) loadKinds();
@@ -2602,6 +2957,7 @@
     if (!primed && caughtUp) {
       primed = true;
       if (hasNewApi()) await loadHistory(); else histState = "unsupported";
+      if (tab === "log") openLog();
     } else if (shotDone && hasNewApi()) loadHistory();
     else if (histState === "failed" && Date.now() - histTried > 5000) loadHistory();
     renderAll();

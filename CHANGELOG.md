@@ -36,6 +36,10 @@ a minor release may change behaviour.
 - Shot history: the last 200 shots the grinder asked for, with time, weight,
   target and how they ended, kept in `history.json` next to the settings
   file (`GET /api/history`).
+- The app can show gbs-anywhere's log: the last 1,000 lines it printed
+  (INFO and up), and new ones as they come (`GET /api/log`,
+  `GET /api/log/stream`). Copying or downloading it replaces IP addresses
+  with placeholders, so it can go into a bug report.
 - `grinder.wifi.pairing_id` in `GET /api/state`: the E65/E80 pairing in use;
   `grinder.wifi.unknown_pairing_id`: one typed in that the grinder did not
   take, while the app asks for the ID.
@@ -43,16 +47,16 @@ a minor release may change behaviour.
   does not answer at all (off, in standby or gone from the network), as
   opposed to answering with an error.
 - `boot_id` in `GET /api/state`: new on every start, so an app can tell that
-  event numbers started over.
+  event and log numbers started over.
 - `age_ms` on each event in `GET /api/events` and the event stream: how long
   ago it happened, so an app that catches up after a gap shows the right
   times.
-- A redesigned app with three tabs: Start (the three steps of a shot, with
+- A redesigned app with four tabs: Start (the three steps of a shot, with
   the step that is running or failed opened), Status (grinder, integrations,
-  settings) and History. Appearance (System, Light, Dark) can be set under
-  Status → Settings; it is kept on each device. When no shot can start (no
-  grinder connected, or the grinder blocked), System status opens by itself
-  and says why in plain words, and step 1 shows "Blocked" instead of
+  settings), History and Log. Appearance (System, Light, Dark) can be set
+  under Status → Settings; it is kept on each device. When no shot can start
+  (no grinder connected, or the grinder blocked), System status opens by
+  itself and says why in plain words, and step 1 shows "Blocked" instead of
   "Grind". While an integration reports the shot, the fields to type it in
   are hidden; they come back, with a note, when every integration has failed
   or none has reported the shot a minute after it should have ended. The
@@ -60,6 +64,9 @@ a minor release may change behaviour.
 
 ### Changed
 
+- What the machine does (grind received, brew started, shot shown to the
+  grinder) is now logged with a time and level like every other line, so it
+  also shows in the app's log.
 - `--grinder` refuses an address that cannot be one (for example with a
   space in it) at startup, instead of failing on every request.
 - A fractional `--brew-timeout-s` is rounded to whole seconds.
@@ -72,8 +79,8 @@ a minor release may change behaviour.
 
 - Requests on port 80 outside the grinder's `/api/v2/` paths, such as other
   devices on the network probing the port, no longer count as grinder
-  traffic and are logged at debug level only. The `--log` transcript still
-  records them.
+  traffic and are logged at debug level only, so they no longer fill the
+  app's log. The `--log` transcript still records them.
 
 ## [0.2.1] - 2026-10-10
 

@@ -139,8 +139,12 @@ async fn connect(cfg: &Config) -> anyhow::Result<(CloudClient, Machine)> {
     let coffees = client.last_coffees(&serial, 7).await?;
     let last = coffees.first().map(Idle::from);
     let subject = format!("{serial} · {}", machine.model_name);
+    // The log may end up in a bug report: the serial's last digits are
+    // enough to tell machines apart.
+    let tail = serial.get(serial.len().saturating_sub(4)..).unwrap_or("");
     tracing::info!(
-        "{TITLE}: connected to {subject}, {}",
+        "{TITLE}: connected to {} (serial ending {tail}), {}",
+        machine.model_name,
         idle_line(last.as_ref())
     );
     Ok((
