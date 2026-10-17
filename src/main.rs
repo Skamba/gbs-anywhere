@@ -1,7 +1,7 @@
-//! `gbs-anywhere` — lets a Mahlkönig E64 WS grinder use Grind-by-Sync with any
-//! espresso machine. It serves what the grinder polls on port 80, plus a phone
-//! app where you enter the shot time and weight; the grinder then adjusts its
-//! grind setting.
+//! `gbs-anywhere` — lets a Mahlkönig E64 WS or E65/E80 GbS grinder use
+//! Grind-by-Sync with any espresso machine. It serves what the E64 WS polls on
+//! port 80 (or polls an E65/E80 GbS, see below), plus a phone app where you
+//! enter the shot time and weight; the grinder then adjusts its grind setting.
 //!
 //! Flow: grind with a GbS recipe -> press the grinder knob when it says
 //! "Press grinder rotary knob to start brewing." -> start the shot -> enter
@@ -10,12 +10,17 @@
 //! Integrations ([`gbs_anywhere::integration`]) can report the shot instead:
 //! add them in the app (saved in `--config`) or with their flags, e.g.
 //! `--lm-username` for the La Marzocco cloud.
+//!
+//! An E65/E80 GbS grinder is paired with `--grinder <its address>` instead:
+//! gbs-anywhere then asks it for each grind's brew job and answers with the
+//! shot.
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use anyhow::Context;
 use clap::Parser;
 use gbs_anywhere::integration;
 use gbs_anywhere::protocol::machine::EventRecord;
@@ -28,7 +33,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 #[command(
     name = "gbs-anywhere",
     version = gbs_anywhere::version(),
-    about = "Grind-by-Sync for the Mahlkönig E64 WS with any espresso machine"
+    about = "Grind-by-Sync for the Mahlkönig E64 WS and E65/E80 GbS with any espresso machine"
 )]
 struct Args {
     /// Grinder-facing ports. The grinder talks to port 80.
@@ -76,6 +81,27 @@ struct Args {
     /// holds their passwords). Without it they last until the next restart.
     #[arg(long, env = "CONFIG_FILE", value_name = "FILE")]
     config: Option<PathBuf>,
+
+    /// An E65/E80 GbS grinder to pair with over its "Generic WiFi" option:
+    /// its address, e.g. 192.168.1.30. The E64 WS connects to gbs-anywhere
+    /// instead and needs nothing here.
+    #[arg(long, env = "GRINDER_HOST", value_name = "HOST")]
+    grinder: Option<String>,
+
+    /// Keeps the pairing with `--grinder` across restarts [default:
+    /// grinder-pairing.json next to `--config`].
+    #[arg(long, env = "GRINDER_PAIRING_FILE", value_name = "FILE")]
+    grinder_pairing_file: Option<PathBuf>,
+
+    /// The pairing ID the grinder shows for gbs-anywhere: used when the pairing
+    /// file has none, or when the grinder refuses the file's.
+    #[arg(
+        long,
+        env = "GRINDER_PAIRING_ID",
+        value_name = "ID",
+        value_parser = clap::value_parser!(u32).range(1..=65535)
+    )]
+    grinder_pairing_id: Option<u32>,
 
     #[command(flatten)]
     integrations: integration::CliArgs,
@@ -135,6 +161,23 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tokio::spawn(print_events(x.clone()));
+    if let Some(host) = &args.grinder {
+        let mut wifi = server::WifiConfig::from_host(host).context("--grinder")?;
+        wifi.pairing_file = args.grinder_pairing_file.clone().or_else(|| {
+            args.config
+                .as_deref()
+                .map(|c| c.with_file_name("grinder-pairing.json"))
+        });
+        wifi.pairing_id = args.grinder_pairing_id;
+        if wifi.pairing_file.is_none() {
+            tracing::warn!(
+                "no --config or --grinder-pairing-file: the pairing lasts until restart"
+            );
+        }
+        tracing::info!("grinder: pairing over Generic WiFi with {}", wifi.base_url);
+        let link = server::WifiGrinder::new(wifi).context("--grinder")?;
+        tokio::spawn(link.run(x.clone()));
+    }
     for (kind, settings) in args.integrations.configured() {
         x.integrations().start_cli(&x, kind, &settings)?;
     }
@@ -189,6 +232,17 @@ fn describe(rec: &EventRecord) -> String {
                 .beverage_weight_g
                 .map_or("?".into(), |w| format!("{w}")),
             result.filter.as_deref().unwrap_or("?"),
+        ),
+        MachineEvent::BrewJob {
+            result,
+            target_time_ms,
+        } => format!(
+            "[{}] grinder finished a Grind-by-Sync grind: target {}{}",
+            rec.seq,
+            target_time_ms.map_or("?".into(), |ms| format!("{} s", f64::from(ms) / 1000.0)),
+            result
+                .beverage_weight_g
+                .map_or(String::new(), |w| format!(", {w} g")),
         ),
         MachineEvent::StartRequested { script_id } => {
             format!(

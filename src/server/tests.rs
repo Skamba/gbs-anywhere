@@ -166,10 +166,17 @@ async fn control_api_rejects_what_it_cannot_do() {
     }
 
     let add = json!({ "kind": "nope", "settings": {} });
-    let (code, _) = call(post, format!("{base}/api/integrations"), Some(add)).await;
+    let (code, _) = call(post.clone(), format!("{base}/api/integrations"), Some(add)).await;
     assert_eq!(code, 400);
 
     let url = format!("{base}/api/integrations/nope");
     let (code, _) = call(reqwest::Method::DELETE, url, None).await;
     assert_eq!(code, 404);
+
+    let pairing = |id: u32| Some(json!({ "pairing_id": id }));
+    let url = format!("{base}/api/grinder/pairing");
+    let (code, _) = call(post.clone(), url.clone(), pairing(0)).await;
+    assert_eq!(code, 400, "out of range");
+    let (code, _) = call(post, url, pairing(1234)).await;
+    assert_eq!(code, 409, "no --grinder");
 }

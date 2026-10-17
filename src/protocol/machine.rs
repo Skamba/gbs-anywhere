@@ -132,6 +132,12 @@ pub enum MachineEvent {
     StartRequested {
         script_id: Option<i64>,
     },
+    /// An E65/E80 grinder finished a Grind-by-Sync grind and waits for its
+    /// shot: the grind result and the start request in one.
+    BrewJob {
+        result: GrindResult,
+        target_time_ms: Option<u32>,
+    },
     /// We entered `ACTIVE SERVING`. `human_action` is what to tell the person.
     BrewStarted {
         requested_by_grinder: bool,
@@ -271,6 +277,30 @@ impl Machine {
         }
     }
 
+    /// A brew job from an E65/E80 grinder: like a grind result followed by a
+    /// knob press. Only taken while `Ready`; returns whether the brew started.
+    pub fn on_brew_job(
+        &mut self,
+        now: Instant,
+        result: GrindResult,
+        target_time_ms: Option<u32>,
+    ) -> bool {
+        self.tick(now);
+        if !matches!(self.phase, Phase::Ready) {
+            return false;
+        }
+        self.last_grind = Some(result.clone());
+        self.push(
+            now,
+            MachineEvent::BrewJob {
+                result,
+                target_time_ms,
+            },
+        );
+        self.begin(now, true);
+        true
+    }
+
     /// Start a brew without a grinder request (the grinder will treat it as a
     /// flush; useful to test exactly that).
     pub fn start_brew(&mut self, now: Instant) -> Result<(), MachineError> {
@@ -323,6 +353,17 @@ impl Machine {
             return Err(MachineError::NotBrewing);
         };
         self.abort_brew(now, since, "aborted by user");
+        Ok(())
+    }
+
+    /// Ends the brew because the grinder stopped waiting for it, like
+    /// [`Machine::abort`] but with `reason` in the event.
+    pub fn give_up(&mut self, now: Instant, reason: &'static str) -> Result<(), MachineError> {
+        self.tick(now);
+        let Phase::Brewing { since, .. } = self.phase else {
+            return Err(MachineError::NotBrewing);
+        };
+        self.abort_brew(now, since, reason);
         Ok(())
     }
 
@@ -563,6 +604,30 @@ mod tests {
             m.events_after(0)
                 .any(|e| matches!(e.event, MachineEvent::ShotAborted { .. }))
         );
+    }
+
+    #[test]
+    fn a_brew_job_starts_a_grinder_brew_only_when_ready() {
+        let t0 = Instant::now();
+        let mut m = Machine::new(MachineConfig::default());
+        let job = GrindResult::parse(br#"{"SYNC_BEVERAGE_WEIGHT":40}"#).unwrap();
+        assert!(m.on_brew_job(t0, job.clone(), Some(28_000)));
+        assert!(matches!(
+            m.phase(t0),
+            Phase::Brewing {
+                requested_by_grinder: true,
+                ..
+            }
+        ));
+        assert_eq!(m.recipe_weight_g(), Some(40.0));
+        assert!(!m.on_brew_job(t0, job, None), "one brew at a time");
+        m.give_up(t0, "the grinder stopped waiting").unwrap();
+        assert!(m.events_after(0).any(|e| matches!(
+            e.event,
+            MachineEvent::ShotAborted {
+                reason: "the grinder stopped waiting"
+            }
+        )));
     }
 
     #[test]

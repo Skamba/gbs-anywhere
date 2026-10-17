@@ -15,6 +15,7 @@
 //! | POST | `/api/shot/abort` | ends the brew as a user abort (grinder skips it) |
 //! | POST | `/api/shot/start` | starts a brew without a grinder request (grinder sees a flush) |
 //! | POST | `/api/machine` | patch the `ON`-state mako fields, e.g. `{"TANK_LEVEL":0}` |
+//! | POST | `/api/grinder/pairing` | `{"pairing_id":1234}` — the pairing ID an E65/E80 grinder shows, only while the link asks for it |
 //! | PUT/DELETE | `/api/overrides` | raw keys forced into every mako reply |
 
 use std::convert::Infallible;
@@ -52,6 +53,7 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
         .route("/api/integrations/kinds", get(integration_kinds))
         .route("/api/integrations/{id}", delete(remove_integration))
         .route("/api/machine", post(patch_machine))
+        .route("/api/grinder/pairing", post(grinder_pairing))
         .route("/api/overrides", put(put_overrides).delete(clear_overrides))
         .with_state(state)
 }
@@ -77,6 +79,7 @@ pub fn state_json(x: &Server) -> Value {
                 "polls": link.polls,
                 "requests": link.requests,
                 "last_poll_age_ms": link.last_poll.map(|t| now.saturating_duration_since(t).as_millis() as u64),
+                "wifi": link.wifi,
             },
             "integrations": integrations,
             "last_seq": m.last_seq(),
@@ -205,6 +208,30 @@ async fn remove_integration(State(x): State<Arc<Server>>, Path(id): Path<String>
     match x.integrations().remove(&id) {
         Ok(()) => Json(json!({ "removed": id })).into_response(),
         Err(e) => change_error(&e),
+    }
+}
+
+#[derive(Deserialize)]
+struct PairingInput {
+    pairing_id: u32,
+}
+
+/// The pairing ID an E65/E80 grinder shows for gbs-anywhere (a number up to
+/// 65535, as `--grinder-pairing-id` takes).
+async fn grinder_pairing(
+    State(x): State<Arc<Server>>,
+    Json(input): Json<PairingInput>,
+) -> Response {
+    let id = input.pairing_id;
+    if !(1..=u32::from(u16::MAX)).contains(&id) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "the pairing ID is a number from 1 to 65535",
+        );
+    }
+    match x.use_grinder_pairing_id(id) {
+        Ok(()) => Json(json!({ "pairing_id": id })).into_response(),
+        Err(e) => error(StatusCode::CONFLICT, &e.to_string()),
     }
 }
 

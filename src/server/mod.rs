@@ -1,4 +1,4 @@
-//! The HTTP server: the machine the E64 WS grinder syncs with.
+//! The HTTP server: the machine the grinder syncs with.
 //!
 //! Two HTTP faces over one shared [`crate::protocol::Machine`]:
 //!
@@ -9,6 +9,9 @@
 //!   support app: see the state, get "start the shot now" prompts as a
 //!   server-sent-event stream, report the measured time and weight.
 //!
+//! An E65/E80 GbS grinder works the other way round: [`wifi_grinder`] asks it
+//! for brew jobs and drives the same machine from them.
+//!
 //! The `gbs-anywhere` binary is a thin wrapper: build a [`Server`], then
 //! [`serve`] it or mount the routers in another app.
 
@@ -16,6 +19,7 @@ mod control_api;
 mod grinder_api;
 #[cfg(test)]
 mod tests;
+pub mod wifi_grinder;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -31,6 +35,7 @@ use tokio::sync::broadcast;
 
 pub use control_api::{ShotInput, control_router, patch_ready, state_json};
 pub use grinder_api::grinder_router;
+pub use wifi_grinder::{PairingIdRefusal, WifiConfig, WifiGrinder, WifiLink, WifiState};
 
 /// Shared state behind both routers.
 pub struct Server {
@@ -39,6 +44,8 @@ pub struct Server {
     transcript: Option<tokio::sync::Mutex<tokio::fs::File>>,
     integrations: Integrations,
     icons_dir: OnceLock<PathBuf>,
+    /// Pairing IDs for the E65/E80 link, when one runs.
+    wifi_ids: OnceLock<tokio::sync::mpsc::Sender<u32>>,
 }
 
 struct Inner {
@@ -47,7 +54,8 @@ struct Inner {
     grinder: GrinderLink,
 }
 
-/// What we know about the grinder from its requests.
+/// What we know about the grinder from its requests (or, for an E65/E80
+/// grinder, from our requests to it).
 #[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct GrinderLink {
     pub peer: Option<SocketAddr>,
@@ -55,6 +63,8 @@ pub struct GrinderLink {
     pub requests: u64,
     #[serde(skip)]
     pub last_poll: Option<Instant>,
+    /// Set when gbs-anywhere pairs with an E65/E80 grinder (`--grinder`).
+    pub wifi: Option<WifiLink>,
 }
 
 impl Server {
@@ -69,6 +79,7 @@ impl Server {
             transcript: None,
             integrations: Integrations::new(),
             icons_dir: OnceLock::new(),
+            wifi_ids: OnceLock::new(),
         })
     }
 
@@ -123,15 +134,39 @@ impl Server {
         &self.integrations
     }
 
-    fn note_request(&self, peer: SocketAddr, poll: bool) {
+    /// A grinder request (E64 WS), or a successful request to an E65/E80
+    /// grinder; a poll makes the app show the grinder as connected.
+    fn note_request(&self, peer: Option<SocketAddr>, poll: bool) {
         let mut inner = self.lock();
         let g = &mut inner.grinder;
-        g.peer = Some(peer);
+        if peer.is_some() {
+            g.peer = peer;
+        }
         g.requests += 1;
         if poll {
             g.polls += 1;
             g.last_poll = Some(Instant::now());
         }
+    }
+
+    fn set_wifi(&self, link: WifiLink) {
+        self.lock().grinder.wifi = Some(link);
+    }
+
+    fn set_wifi_ids(&self, tx: tokio::sync::mpsc::Sender<u32>) {
+        let _ = self.wifi_ids.set(tx);
+    }
+
+    /// Hands the pairing ID an E65/E80 grinder shows to its link, for when
+    /// gbs-anywhere lost it. Taken only while the link asks for one; the link
+    /// checks it with the grinder before keeping it.
+    pub fn use_grinder_pairing_id(&self, id: u32) -> Result<(), PairingIdRefusal> {
+        let tx = self.wifi_ids.get().ok_or(PairingIdRefusal::NoLink)?;
+        let asks = self.grinder_link().wifi.is_some_and(|w| w.needs_pairing_id);
+        if !asks {
+            return Err(PairingIdRefusal::NotNeeded);
+        }
+        tx.try_send(id).map_err(|_| PairingIdRefusal::Busy)
     }
 
     async fn write_transcript(&self, line: &str) {

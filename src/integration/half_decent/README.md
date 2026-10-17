@@ -52,6 +52,9 @@ the grinder a few seconds later.
   coffee from zero. Put the cup on before pressing the knob. Avoid taring
   during the shot.
 - **Only after a knob press.** Weighing at other times is never reported.
+- **On an E65/E80 GbS** the end of the Grind-by-Sync grind counts as the
+  knob press, so the scale is tared then: put the cup on before the grind
+  ends. Not tested with these grinders yet.
 - **The phone still works.** You can still enter or correct a shot on your
   phone; whichever comes first wins.
 - **The scale still switches itself off.** A connected app keeps the scale

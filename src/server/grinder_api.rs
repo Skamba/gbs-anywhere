@@ -29,7 +29,7 @@ async fn handle(
 ) -> impl IntoResponse {
     let req = GrinderRequest::classify(method.as_str(), uri.path(), &body);
     let poll = matches!(req, GrinderRequest::PollMako);
-    x.note_request(peer, poll);
+    x.note_request(Some(peer), poll);
 
     let reply: Value = match &req {
         GrinderRequest::Identity => x.with(|m, _| json!(m.identity())),

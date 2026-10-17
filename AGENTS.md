@@ -1,18 +1,22 @@
 # AGENTS.md
 
-gbs-anywhere stands in for the espresso machine a Mahlkönig E64 WS grinder
-syncs with (Grind-by-Sync). The grinder polls it over HTTP on port 80; a
-person on their phone, or an optional integration, reports each shot's time
-and weight; the grinder then adjusts its grind setting. One Rust crate, one
-HTML page, one Docker image. README.md is for users; this file is for agents
-changing the code.
+gbs-anywhere stands in for the espresso machine a Mahlkönig grinder syncs
+with (Grind-by-Sync). The E64 WS polls it over HTTP on port 80; an E65/E80
+GbS is polled by it instead, over the grinder's "Generic WiFi" HTTPS API
+(`--grinder`). A person on their phone, or an optional integration, reports
+each shot's time and weight; the grinder then adjusts its grind setting. One
+Rust crate, one HTML page, one Docker image. README.md is for users; this
+file is for agents changing the code.
 
 ## Layout
 
 - `src/protocol/`: the grinder link as plain types, no I/O. `machine.rs` holds
-  the state machine and shot rules, `wire.rs` the JSON field names.
-- `src/server/`: axum. `grinder_api.rs` is what the grinder calls
-  (`/api/v2/*`); `control_api.rs` is the JSON API and page for people.
+  the state machine and shot rules, `wire.rs` the JSON field names, `wifi.rs`
+  the E65/E80 "Generic WiFi" messages.
+- `src/server/`: axum. `grinder_api.rs` is what the E64 WS calls
+  (`/api/v2/*`); `wifi_grinder.rs` pairs with an E65/E80 GbS and turns its
+  brew jobs into brews of the same machine; `control_api.rs` is the JSON API
+  and page for people.
 - `src/integration/`: optional integrations that report shots by themselves,
   one folder each (see [Integrations](#integrations)).
 - `web/index.html`: the whole phone app (HTML, CSS, JS), no build step.
@@ -57,7 +61,9 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json
 - Keep `src/protocol/` free of I/O and clocks (callers pass `Instant`s), so
   the grinder's behaviour stays testable without a grinder.
 - The grinder-facing API (`/api/v2/*`, names in `wire.rs`) is exactly what
-  the grinder expects. Don't rename, drop or retype fields there.
+  the grinder expects. Don't rename, drop or retype fields there. The same
+  goes for the E65/E80 messages in `wifi.rs`, which also must keep their
+  header spelling (`http1_title_case_headers`).
 - Few dependencies, all pure Rust. TLS is rustls with the `ring` provider (no
   OpenSSL, no cmake), which keeps the distroless image working. Give the
   reason when adding a dependency.

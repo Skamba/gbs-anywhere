@@ -1,6 +1,6 @@
 [package]
 name = "gbs-anywhere"
-description = "Grind-by-Sync for the Mahlkönig E64 WS with any espresso machine"
+description = "Grind-by-Sync for the Mahlkönig E64 WS and E65/E80 GbS with any espresso machine"
 version = "0.2.1"
 edition = "2024"
 rust-version = "1.88"

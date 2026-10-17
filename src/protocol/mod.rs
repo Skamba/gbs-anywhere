@@ -11,9 +11,12 @@
 //!   grinder believes.
 //! * [`machine`] — a time-driven machine that produces the mako replies for a
 //!   shot a person runs and measures. No I/O; the caller supplies `Instant`s.
+//! * [`wifi`] — the other direction, for the E65/E80 GbS family: the machine
+//!   pairs with the grinder and fetches its brew jobs ("Generic WiFi").
 
 pub mod grinder;
 pub mod machine;
+pub mod wifi;
 pub mod wire;
 
 pub use grinder::{BrewState, GrinderEvent, GrinderModel};

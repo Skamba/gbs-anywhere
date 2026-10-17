@@ -84,6 +84,7 @@
 
   .timer { font-variant-numeric: tabular-nums; font-size: 44px; font-weight: 650; letter-spacing: -.02em; margin: 12px 0 2px; }
   .fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; margin: 18px 0 14px; }
+  .fields.one { grid-template-columns: minmax(0, 1fr); }
   label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
   .input { display: flex; align-items: baseline; border: 1px solid var(--line); border-radius: 12px; padding: 0 12px; background: var(--bg); }
   .input:focus-within { border-color: var(--accent); }
@@ -193,6 +194,21 @@
 
   <div id="banner" class="banner" hidden></div>
 
+  <!-- E65/E80 GbS: the pairing ID, when gbs-anywhere lost it -->
+  <form id="pairing-form" class="card" autocomplete="off" hidden>
+    <p class="step">Grinder pairing</p>
+    <p class="title">Enter the pairing ID</p>
+    <p class="sub" id="pairing-sub">The grinder has gbs-anywhere paired, but the pairing ID is missing here. On the grinder, open its gbs-anywhere entry (Configuration) and type the Pairing ID it shows.</p>
+    <div class="fields one">
+      <div>
+        <label for="f-pairing">Pairing ID</label>
+        <div class="input"><input id="f-pairing" size="1" inputmode="numeric" enterkeyhint="send" placeholder=""></div>
+      </div>
+    </div>
+    <p class="hint warn" id="pairing-error"></p>
+    <button class="primary" id="pairing-submit" type="submit">Use this pairing ID</button>
+  </form>
+
   <!-- Add integration: pick a kind, then fill in its form -->
   <section id="add-panel" class="card" hidden>
     <div id="add-pick">
@@ -234,7 +250,7 @@
 
   <!-- Step 3: brewing -->
   <section id="s-brew" class="card" hidden>
-    <p class="step">Step 3 · shot running</p>
+    <p class="step" id="brew-step">Step 3 · shot running</p>
     <p class="title" id="brew-title">Pull the shot and enter what you measured</p>
     <div class="timer" id="brew-timer">0:00</div>
     <p class="sub" id="brew-left">since the knob press</p>
@@ -260,7 +276,7 @@
 
   <!-- Step 4: sent -->
   <section id="s-sent" class="card" hidden>
-    <p class="step">Step 4</p>
+    <p class="step" id="sent-step">Step 4</p>
     <p class="title" id="sent-title">Sent</p>
     <p class="sub">The grinder is processing the shot. Check its screen for the new grind setting.</p>
   </section>
@@ -494,22 +510,57 @@
     } finally { busy = false; $("add-submit").disabled = false; }
   });
 
+  $("pairing-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const id = Number($("f-pairing").value.trim());
+    $("pairing-error").textContent = "";
+    if (!Number.isInteger(id) || id < 1 || id > 65535) {
+      $("pairing-error").textContent = "The pairing ID is a number from 1 to 65535.";
+      return;
+    }
+    $("pairing-submit").disabled = true;
+    try {
+      await api("/api/grinder/pairing", { method: "POST", body: JSON.stringify({ pairing_id: id }) });
+      $("f-pairing").value = "";
+      await tick();
+    } catch (err) {
+      $("pairing-error").textContent = err.message;
+    } finally { $("pairing-submit").disabled = false; }
+  });
+
   function render() {
     if (!state) return;
-    const link = state.grinder, age = link.last_poll_age_ms;
+    const link = state.grinder, age = link.last_poll_age_ms, wifi = link.wifi;
     const on = age != null && age < 6000;
     $("link").className = "pill " + (on ? "ok" : "bad");
     $("link-text").textContent = on ? "grinder connected" : "no grinder";
     $("version").textContent = state.version ? "gbs-anywhere " + state.version : "";
+    // An E65/E80 grinder (Generic WiFi) has no knob press: the grind starts it.
+    $("steps").querySelector('[data-s="knob"]').hidden = !!wifi;
+    $("pairing-form").hidden = !(wifi && wifi.needs_pairing_id);
+    $("brew-step").textContent = (wifi ? "Step 2" : "Step 3") + " · shot running";
+    $("sent-step").textContent = wifi ? "Step 3" : "Step 4";
+    if (wifi && wifi.needs_pairing_id) {
+      $("pairing-sub").textContent = wifi.detail.charAt(0).toUpperCase() + wifi.detail.slice(1) + ".";
+    }
 
     const b = $("banner");
     const busyPhase = state.phase.phase !== "ready";
     if (state.grind_blocked && !(busyPhase && state.grind_blocked.reason === "brewing")) {
       b.hidden = false; b.className = "banner warn";
       b.textContent = "Grinder blocked: " + state.grind_blocked.grinder_message;
+    } else if (wifi && wifi.needs_pairing_id) {
+      b.hidden = true; // the pairing form says it
     } else if (!on) {
       b.hidden = false; b.className = "banner bad";
-      b.textContent = "The grinder is not polling. Is it on and paired with this ‘Xenia’?";
+      // A paired link's last line ("sent …") is stale once the grinder is gone.
+      b.textContent = !wifi
+        ? "The grinder is not polling. Is it on and paired with this ‘Xenia’?"
+        : wifi.state === "paired" ? "Grinder: not answering. Is it on and on the network?"
+        : "Grinder: " + wifi.detail;
+    } else if (wifi && wifi.problem) {
+      b.hidden = false; b.className = "banner warn";
+      b.textContent = "Grinder: " + wifi.problem;
     } else b.hidden = true;
 
     const integs = state.integrations || [];
@@ -539,7 +590,7 @@
       const ms = state.mako.REAL_EXTRACTION_TIME_MS || 0;
       $("brew-timer").textContent = fmtClock(ms);
       const limit = state.config.brew_timeout ? state.config.brew_timeout.secs * 1000 : null;
-      $("brew-left").textContent = "since the knob press" + (limit ? " · " + fmtClock(limit - ms) + " left to enter it" : "");
+      $("brew-left").textContent = (wifi ? "since the grind" : "since the knob press") + (limit ? " · " + fmtClock(limit - ms) + " left to enter it" : "");
       if (!weightTouched && target && !$("f-weight").value) $("f-weight").value = target;
       const ah = $("auto-hint");
       ah.hidden = !auto;
@@ -562,7 +613,7 @@
     const shots = [];
     let targetW = null;
     for (const e of events) {
-      if (e.kind === "grind_result") targetW = e.result.beverage_weight_g;
+      if (e.kind === "grind_result" || e.kind === "brew_job") targetW = e.result.beverage_weight_g;
       if (e.kind === "shot_reported") shots.push({ ...e.result, target: targetW, ok: e.result.time_ms > MIN_MS && e.in_grinder_range });
       if (e.kind === "shot_aborted") shots.push({ aborted: true, reason: e.reason });
     }
