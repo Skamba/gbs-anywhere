@@ -538,3 +538,76 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
     assert_eq!(saved["shots"].as_array().unwrap().len(), 2);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn integrations_are_edited_and_moved_into_the_app() {
+    let (base, x) = start_server().await;
+    let dir = temp_dir("integrations");
+    let file = SettingsFile::open(&dir.join("settings.json")).unwrap();
+    let scale = |host: &str| crate::integration::Settings::new().with("host", Some(host));
+    // A Half Decent Scale from the command line, at a local address nobody
+    // answers on.
+    let kind = &crate::integration::half_decent::KIND;
+    x.integrations()
+        .start_cli(&x, kind, &scale("127.0.0.1:9"))
+        .unwrap();
+    let url = |path: &str| format!("{base}/api/integrations/half_decent{path}");
+
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    let entry = &state["integrations"][0];
+    assert_eq!(
+        (&entry["source"], &entry["adoptable"]),
+        (&json!("command_line"), &json!(false))
+    );
+    // The status line (connecting, or not reached at startup).
+    assert!(entry["detail"].as_str().is_some_and(|d| !d.is_empty()));
+    let (code, _) = call(reqwest::Method::POST, url("/adopt"), None).await;
+    assert_eq!(code, 409, "no settings file");
+
+    x.integrations()
+        .load(&x, file, crate::integration::KINDS)
+        .unwrap();
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["integrations"][0]["adoptable"], true);
+    let (code, _) = call(reqwest::Method::GET, url("/settings"), None).await;
+    assert_eq!(code, 409, "command line");
+    let edit = json!({ "settings": { "host": "127.0.0.1:10" } });
+    let (code, _) = call(reqwest::Method::PUT, url(""), Some(edit.clone())).await;
+    assert_eq!(code, 409, "command line");
+
+    let (code, view) = call(reqwest::Method::POST, url("/adopt"), None).await;
+    assert_eq!(code, 200);
+    assert_eq!(
+        (&view["id"], &view["source"], &view["adoptable"]),
+        (&json!("half_decent"), &json!("app"), &json!(false))
+    );
+    let (code, _) = call(reqwest::Method::POST, url("/adopt"), None).await;
+    assert_eq!(code, 409, "already in the app");
+
+    let (code, form) = call(reqwest::Method::GET, url("/settings"), None).await;
+    assert_eq!(code, 200);
+    assert_eq!(
+        form,
+        json!({ "kind": "half_decent", "settings": { "host": "127.0.0.1:9" }, "secrets_set": [] })
+    );
+    let (code, body) = call(reqwest::Method::PUT, url(""), Some(edit)).await;
+    assert_eq!((code, &body["id"]), (200, &json!("half_decent")));
+    let (_, form) = call(reqwest::Method::GET, url("/settings"), None).await;
+    assert_eq!(form["settings"]["host"], "127.0.0.1:10");
+    let bad = json!({ "settings": { "host": "not an address" } });
+    let (code, _) = call(reqwest::Method::PUT, url(""), Some(bad)).await;
+    assert_eq!(code, 400);
+    let unknown = format!("{base}/api/integrations/nope");
+    let (code, _) = call(reqwest::Method::PUT, unknown.clone(), Some(json!({}))).await;
+    assert_eq!(code, 404);
+    let (code, _) = call(reqwest::Method::GET, format!("{unknown}/settings"), None).await;
+    assert_eq!(code, 404);
+    let (code, _) = call(reqwest::Method::POST, format!("{unknown}/adopt"), None).await;
+    assert_eq!(code, 404);
+
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(saved["adopted"], json!(["half_decent"]));
+    assert_eq!(saved["integrations"][0]["settings"]["host"], "127.0.0.1:10");
+    let _ = std::fs::remove_dir_all(dir);
+}
