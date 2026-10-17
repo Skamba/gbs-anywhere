@@ -105,6 +105,18 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   integration whose settings hold one can't be moved into the app.
 - Vendor logos are trademarks: draw a generic glyph for `icon.svg`. People
   can supply their own icons with `--icons`.
+- Texts stay English in Rust. Give each status line a key with
+  `Detail::keyed` (`<id>.<state>`) and its numbers with `Detail::var`
+  (unit in the name: `ago_ms`, `time_s`, `weight_g`); the API shows them as
+  `detail_key` and `detail_vars` next to `detail`. The German wording goes
+  into the app's catalog, `integ.detail.<key>` for status lines and
+  `kind.<id>.summary` / `kind.<id>.field.<key>.label|help|placeholder` for
+  the form. The placeholder leaves the unit out (`time_s` is `{time}`);
+  `ago_ms`, `time_s` and `weight_g` get their own format, other numbers up
+  to one decimal. Another unit or format needs a case in `integDetail()`.
+  `cargo test` checks that the form and every keyed status line of each
+  integration have their German; at run time a missing entry shows the
+  server's English. Errors and log lines stay English.
 - Test against a local fake of the vendor's service. Don't send test traffic
   or made-up credentials to a vendor's real service.
 
@@ -114,8 +126,13 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   network that may have no internet access.
 - Colours are CSS variables on `:root`, redefined for dark mode. Use them
   instead of literal colours.
-- Every text the app writes is in the `STRINGS` catalog and goes through
-  `t()`.
+- Every text the app writes is in the `STRINGS` catalog, in `en` and `de`
+  with the same keys, and goes through `t()`. Integration texts that come
+  from the server in English (`kind.*`, `integ.detail.*`) are the
+  exception: they are only in `de`, and English shows the server's text.
+  The tests in `control_api.rs` check this: the same keys and placeholders
+  in `en` and `de`, both `.e64` and `.wifi` wordings, and every key the page
+  passes literally to `t()`/`tv()` or names in `data-i18n` is in the catalog.
 - Phone first: content at most 480 px wide, 16 px side padding, no
   horizontal scrolling.
 - Typing the time and weight by hand is the default flow and must work with no
