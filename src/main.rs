@@ -164,6 +164,12 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tokio::spawn(print_events(x.clone()));
+    x.record_history(
+        args.config
+            .as_deref()
+            .map(|c| c.with_file_name("history.json"))
+            .as_deref(),
+    )?;
     let startup = Startup {
         shot_window_s: args.brew_timeout_s,
         grinder_host: args.grinder.clone(),

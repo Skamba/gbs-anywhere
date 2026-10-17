@@ -33,7 +33,7 @@ use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
 use crate::integration::Backoff;
-use crate::protocol::machine::EventRecord;
+use crate::protocol::machine::{EventRecord, REPLACED_BY_NEWER_GRIND};
 use crate::protocol::wifi::{
     self, API_VERSION, BrewAccept, BrewDone, BrewJob, BrewJobsRes, BrewResult, Paired,
     PairingApplication, PairingApplicationRes, PairingStatusRes,
@@ -760,9 +760,7 @@ impl WifiGrinder {
                 // If someone reported or aborted it a moment ago, that event
                 // answers it instead; only a brew already over leaves it.
                 let over = server.with(|m, now| {
-                    m.give_up(now, "a newer Grind-by-Sync grind replaced it")
-                        .is_err()
-                        && m.phase(now) == Phase::Ready
+                    m.give_up(now, REPLACED_BY_NEWER_GRIND).is_err() && m.phase(now) == Phase::Ready
                 });
                 if over {
                     self.current = None;

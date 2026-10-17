@@ -10,6 +10,7 @@
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
+//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first; `capacity` (200); `persistent`: whether they survive a restart |
 //! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers; without a weight, the recipe's |
@@ -36,7 +37,7 @@ use serde_json::{Map, Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::integration::{self, ChangeError, Settings};
-use crate::server::{Server, SettingsChange};
+use crate::server::{Server, SettingsChange, history};
 
 pub fn control_router(state: Arc<Server>) -> axum::Router {
     axum::Router::new()
@@ -47,6 +48,7 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
         .route("/apple-touch-icon-precomposed.png", get(no_icon))
         .route("/api/state", get(get_state))
         .route("/api/settings", put(put_settings))
+        .route("/api/history", get(get_history))
         .route("/api/events", get(get_events))
         .route("/api/events/stream", get(stream_events))
         .route("/api/shot/result", post(shot_result))
@@ -207,6 +209,14 @@ async fn put_settings(State(x): State<Arc<Server>>, Json(body): Json<Value>) -> 
         // The file could not be written, or the pairing file read.
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
+}
+
+async fn get_history(State(x): State<Arc<Server>>) -> Json<Value> {
+    Json(json!({
+        "shots": x.history().list(),
+        "capacity": history::CAPACITY,
+        "persistent": x.history().persistent(),
+    }))
 }
 
 async fn integration_kinds(State(x): State<Arc<Server>>) -> Json<Value> {

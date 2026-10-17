@@ -33,6 +33,9 @@ a minor release may change behaviour.
   `--grinder` from then on (`PUT /api/settings`, `settings` in
   `GET /api/state`). Going back to an earlier version forgets the settings
   changed in the app.
+- Shot history: the last 200 shots the grinder asked for, with time, weight,
+  target and how they ended, kept in `history.json` next to the settings
+  file (`GET /api/history`).
 - `grinder.wifi.pairing_id` in `GET /api/state`: the E65/E80 pairing in use;
   `grinder.wifi.unknown_pairing_id`: one typed in that the grinder did not
   take, while the app asks for the ID.
@@ -44,16 +47,16 @@ a minor release may change behaviour.
 - `age_ms` on each event in `GET /api/events` and the event stream: how long
   ago it happened, so an app that catches up after a gap shows the right
   times.
-- A redesigned app with two tabs: Start (the three steps of a shot, with the
-  step that is running or failed opened) and Status (grinder, integrations,
-  settings). Appearance (System, Light, Dark) can be set under Status →
-  Settings; it is kept on each device. When no shot can start (no grinder
-  connected, or the grinder blocked), System status opens by itself and says
-  why in plain words, and step 1 shows "Blocked" instead of "Grind". While
-  an integration reports the shot, the fields to type it in are hidden; they
-  come back, with a note, when every integration has failed or none has
-  reported the shot a minute after it should have ended. The list of this
-  session's shots is gone for now; a shot history will replace it.
+- A redesigned app with three tabs: Start (the three steps of a shot, with
+  the step that is running or failed opened), Status (grinder, integrations,
+  settings) and History. Appearance (System, Light, Dark) can be set under
+  Status → Settings; it is kept on each device. When no shot can start (no
+  grinder connected, or the grinder blocked), System status opens by itself
+  and says why in plain words, and step 1 shows "Blocked" instead of
+  "Grind". While an integration reports the shot, the fields to type it in
+  are hidden; they come back, with a note, when every integration has failed
+  or none has reported the shot a minute after it should have ended. The
+  History tab replaces the list of this session's shots.
 
 ### Changed
 
