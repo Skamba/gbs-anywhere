@@ -20,6 +20,10 @@ const PAIRING_ID: u32 = 42;
 /// [`WifiConfig::restart_quiet`] here.
 const RESTART_QUIET_IN_TESTS: Duration = Duration::from_millis(500);
 
+/// [`WifiConfig::refused_for`] here: 30 polls, so a few refusals stay well
+/// under it.
+const REFUSED_FOR_IN_TESTS: Duration = Duration::from_millis(600);
+
 /// What the fake grinder knows and what it was sent.
 #[derive(Default)]
 struct Fake {
@@ -57,6 +61,9 @@ struct Fake {
     refuse_jobs: u32,
     /// `(path, body)` of every `brewAccept` and `brewDone`.
     calls: Vec<(String, Value)>,
+    /// `brewAccept` requests to take (the job moves to `ongoing`) but answer
+    /// with HTTP 503, as if the reply got lost.
+    drop_accept_reply: u32,
 }
 
 impl Fake {
@@ -156,6 +163,10 @@ async fn handle(State(fake): State<Shared>, uri: Uri, Json(body): Json<Value>) -
             };
             f.jobs.remove(i);
             f.ongoing.push(uuid);
+            if f.drop_accept_reply > 0 {
+                f.drop_accept_reply -= 1;
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
             ok(json!({}))
         }
         wifi::PATH_BREW_DONE => {
@@ -195,6 +206,24 @@ async fn start_with(
     pairing_file: Option<PathBuf>,
     pairing_id: Option<u32>,
 ) -> (Arc<Server>, Shared) {
+    start_polling(
+        fake,
+        machine,
+        pairing_file,
+        pairing_id,
+        Duration::from_millis(20),
+    )
+    .await
+}
+
+/// Like [`start_with`], polling every `poll`.
+async fn start_polling(
+    fake: Fake,
+    machine: MachineConfig,
+    pairing_file: Option<PathBuf>,
+    pairing_id: Option<u32>,
+    poll: Duration,
+) -> (Arc<Server>, Shared) {
     let fake = Arc::new(Mutex::new(fake));
     let app = axum::Router::new()
         .fallback(axum::routing::post(handle))
@@ -208,8 +237,9 @@ async fn start_with(
         ..machine
     });
     let mut cfg = WifiConfig::from_host(&format!("http://{addr}")).unwrap();
-    cfg.poll = Duration::from_millis(20);
+    cfg.poll = poll;
     cfg.restart_quiet = RESTART_QUIET_IN_TESTS;
+    cfg.refused_for = REFUSED_FOR_IN_TESTS;
     cfg.pairing_file = pairing_file;
     cfg.pairing_id = pairing_id;
     let link = WifiGrinder::new(cfg).unwrap();
@@ -643,7 +673,7 @@ async fn a_newer_grind_cancels_one_still_waiting() {
 }
 
 #[tokio::test]
-async fn one_refusal_keeps_the_pairing_three_pair_again() {
+async fn a_short_refusal_keeps_the_pairing_a_long_one_pairs_again() {
     let file = temp_file("refusal");
     let saved = json!({ "brew_device_id": "dev-1", "pairing_id": PAIRING_ID });
     std::fs::write(&file, saved.to_string()).unwrap();
@@ -661,13 +691,18 @@ async fn one_refusal_keeps_the_pairing_three_pair_again() {
     );
     assert_eq!(fake.lock().unwrap().applications(), 0);
 
-    // Cleared on the grinder: it refuses from now on, then pairs anew.
+    // Cleared on the grinder: it refuses from now on, so after a while
+    // gbs-anywhere pairs anew.
     fake.lock().unwrap().paired = None;
     wait_for("the new pairing", || fake.lock().unwrap().paired.is_some()).await;
     wait_for("paired again", || paired(&server)).await;
     assert_eq!(fake.lock().unwrap().applications(), 1);
     let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
     assert_eq!(saved["brew_device_id"], "dev-1", "same device as before");
+    assert!(
+        saved.get("refused_pairing_id").is_none(),
+        "the refused ID went with the new pairing"
+    );
     let _ = std::fs::remove_file(file);
 }
 
@@ -683,6 +718,14 @@ async fn the_given_pairing_id_is_tried_when_the_saved_one_is_refused() {
     let (server, fake) = start(fake, Some(file.clone()), Some(PAIRING_ID)).await;
     wait_for("saved", || saved_id(&file) == PAIRING_ID).await;
     wait_for("paired", || paired(&server)).await;
+    let refused_kept = || {
+        let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        saved.get("refused_pairing_id").is_some()
+    };
+    wait_for("the stale ID let go once the given one works", || {
+        !refused_kept()
+    })
+    .await;
     assert_eq!(
         fake.lock().unwrap().applications(),
         0,
@@ -800,4 +843,114 @@ async fn a_lost_pairing_id_is_asked_for_and_checked() {
         "a working pairing cannot be replaced from the app"
     );
     let _ = std::fs::remove_file(file);
+}
+
+#[tokio::test]
+async fn a_few_refusals_while_starting_up_keep_a_valid_pairing() {
+    let file = temp_file("refusals-kept");
+    let saved = json!({ "brew_device_id": "dev-1", "pairing_id": PAIRING_ID });
+    std::fs::write(&file, saved.to_string()).unwrap();
+    // Still paired, but refusing three polls in a row while it starts up.
+    let fake = Fake {
+        paired: Some(PAIRING_ID),
+        refuse_jobs: 3,
+        ..Fake::default()
+    };
+    let (server, fake) = start(fake, Some(file.clone()), None).await;
+    let asks = |s: &Server| s.grinder_link().wifi.is_some_and(|w| w.needs_pairing_id);
+    wait_for("paired, or asking to pair again", || {
+        paired(&server) || asks(&server) || fake.lock().unwrap().applications() > 0
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let kept = saved_id(&file);
+    let _ = std::fs::remove_file(&file);
+    assert_eq!(kept, PAIRING_ID, "the saved pairing ID is kept");
+    assert_eq!(fake.lock().unwrap().applications(), 0, "no new pairing");
+    assert!(!asks(&server), "the app does not ask for the pairing ID");
+}
+
+#[tokio::test]
+async fn a_refused_pairing_id_is_tried_again_before_the_app_asks() {
+    // Refused for a while, but the grinder still has gbs-anywhere paired.
+    let file = temp_file("refused-again");
+    let saved =
+        json!({ "brew_device_id": "dev-1", "pairing_id": null, "refused_pairing_id": PAIRING_ID });
+    std::fs::write(&file, saved.to_string()).unwrap();
+    let fake = Fake {
+        paired: Some(PAIRING_ID),
+        ..Fake::default()
+    };
+    let (server, fake) = start(fake, Some(file.clone()), None).await;
+    wait_for("paired", || paired(&server)).await;
+    let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    let _ = std::fs::remove_file(&file);
+    assert_eq!(saved["pairing_id"], PAIRING_ID, "taken again");
+    assert!(saved.get("refused_pairing_id").is_none(), "no longer kept");
+    assert_eq!(
+        fake.lock().unwrap().applications(),
+        1,
+        "asked once, already paired"
+    );
+    assert!(!wifi(&server).needs_pairing_id, "nothing to type in");
+}
+
+#[tokio::test]
+async fn a_refused_pairing_id_the_grinder_still_refuses_is_dropped() {
+    let file = temp_file("refused-dropped");
+    let saved = json!({ "brew_device_id": "dev-1", "pairing_id": null, "refused_pairing_id": 7 });
+    std::fs::write(&file, saved.to_string()).unwrap();
+    let fake = Fake {
+        paired: Some(PAIRING_ID),
+        ..Fake::default()
+    };
+    let (server, _fake) = start(fake, Some(file.clone()), None).await;
+    wait_for("the question", || {
+        server
+            .grinder_link()
+            .wifi
+            .is_some_and(|w| w.needs_pairing_id)
+    })
+    .await;
+    let saved: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    let _ = std::fs::remove_file(&file);
+    assert!(
+        saved.get("refused_pairing_id").is_none(),
+        "tried once, then dropped"
+    );
+    assert!(
+        wifi(&server)
+            .detail
+            .contains("no longer knows pairing ID 7"),
+        "{}",
+        wifi(&server).detail
+    );
+}
+
+#[tokio::test]
+async fn a_result_after_a_lost_accept_reply_is_retried() {
+    // The grinder takes the job but its reply is lost, and the first brewDone
+    // fails. A slower poll lets the shot come in before the next poll.
+    let fake = Fake {
+        drop_accept_reply: 1,
+        fail_done: 1,
+        ..Fake::default()
+    };
+    let poll = Duration::from_millis(600);
+    let (server, fake) = start_polling(fake, MachineConfig::default(), None, None, poll).await;
+    wait_for("pairing", || paired(&server)).await;
+    fake.lock().unwrap().jobs.push(job("g-1", 40_000));
+    wait_for("the job taken", || taken(&fake) == 1).await;
+    assert_eq!(fake.lock().unwrap().ongoing, ["g-1"], "the grinder has it");
+    report(&server, 27.0, 40.0);
+    wait_for("the shot sent or given up", || {
+        let w = wifi(&server);
+        w.detail == "sent 27.0 s, 40.0 g" || w.problem.is_some_and(|p| p.contains("did not reach"))
+    })
+    .await;
+    assert_eq!(wifi(&server).problem, None, "the retry delivered the shot");
+    assert!(
+        fake.lock().unwrap().ongoing.is_empty(),
+        "the grinder got it"
+    );
 }

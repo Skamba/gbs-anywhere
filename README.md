@@ -151,7 +151,9 @@ those 3 minutes, open **Generic WiFi → Configuration** on the grinder:
   step 2. Then start pairing and accept once more.
 
 If the pairing is cleared on the grinder (**Clear Pairing**), gbs-anywhere
-asks to pair again by itself once Generic WiFi is switched on again.
+asks to pair again by itself once Generic WiFi is switched on again and the
+grinder has refused the old pairing for a minute. (It also refuses it for a
+few seconds while it starts up; that does not count.)
 
 **Make a recipe use Grind-by-Sync** as on the E64 WS: turn on **Enable GbS**
 and set **Brew Time**, **Brew Weight** and **GbS start DD**.

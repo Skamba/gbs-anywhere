@@ -54,9 +54,10 @@ const MAX_BACKOFF: Duration = Duration::from_secs(60);
 const RESTART_QUIET: Duration = Duration::from_secs(180);
 /// Replies are a few hundred bytes; anything this big is not the grinder.
 const MAX_REPLY_BYTES: usize = 64 * 1024;
-/// Refusals in a row before the pairing counts as cleared on the grinder (one
-/// can be a grinder that is still starting up).
-const REFUSALS_TO_FORGET: u32 = 3;
+/// How long the grinder must refuse every job request before the pairing
+/// counts as cleared there. It also refuses for a few seconds while it starts
+/// up (after a power cut or standby), with the pairing still valid.
+const REFUSED_FOR: Duration = Duration::from_secs(60);
 /// How long a measured shot is retried before it is given up.
 const ANSWER_LIMIT: Duration = Duration::from_secs(120);
 /// How long a cancelled shot is retried. The grinder times the job out by
@@ -81,6 +82,9 @@ pub struct WifiConfig {
     /// How long nothing is sent after a pairing check got no answer (see
     /// [`RESTART_QUIET`]).
     pub restart_quiet: Duration,
+    /// How long refused job requests take to count as a cleared pairing (see
+    /// [`REFUSED_FOR`]).
+    pub refused_for: Duration,
 }
 
 impl WifiConfig {
@@ -97,6 +101,7 @@ impl WifiConfig {
             pairing_id: None,
             poll: POLL,
             restart_quiet: RESTART_QUIET,
+            refused_for: REFUSED_FOR,
         })
     }
 }
@@ -180,6 +185,11 @@ struct Pairing {
     brew_device_id: String,
     /// Set once the grinder accepted the pairing.
     pairing_id: Option<u32>,
+    /// The pairing ID the grinder refused for a while, kept to be tried again
+    /// before the app asks for one: the grinder may have refused it only
+    /// while it was starting up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    refused_pairing_id: Option<u32>,
 }
 
 impl Pairing {
@@ -187,6 +197,7 @@ impl Pairing {
         let fresh = || Self {
             brew_device_id: uuid::Uuid::new_v4().to_string(),
             pairing_id: None,
+            refused_pairing_id: None,
         };
         let Some(path) = path else {
             return Ok(fresh());
@@ -282,7 +293,6 @@ pub struct WifiGrinder {
     /// Each job's grind id with the poll it first showed up in.
     first_seen: VecDeque<(String, u64)>,
     polls: u64,
-    refusals: u32,
     /// What went wrong with the last shot (shown in the app).
     problem: Option<String>,
     /// The grinder could not be reached last time (it is off or in standby):
@@ -328,7 +338,6 @@ impl WifiGrinder {
             handled: VecDeque::new(),
             first_seen: VecDeque::new(),
             polls: 0,
-            refusals: 0,
             problem: None,
             unreachable: false,
         })
@@ -386,6 +395,10 @@ impl WifiGrinder {
         let application_id = res
             .application_id
             .context("the grinder sent no application ID")?;
+        if self.pairing.refused_pairing_id.take().is_some() {
+            // It no longer has this gbs-anywhere paired: that ID is gone.
+            self.pairing.save(self.cfg.pairing_file.as_deref())?;
+        }
         let code = res.pairing_code;
         let detail = format!(
             "on the grinder, open Generic WiFi, Configuration, start pairing and accept \
@@ -463,9 +476,10 @@ impl WifiGrinder {
 
     /// The grinder has gbs-anywhere paired, but its pairing ID is not known
     /// here (the grinder restarted before saying it, or the file is lost).
-    /// Tries the command line's ID, then waits for one typed in the app and
-    /// checks it with the grinder. `Ok` once one works, or after a while, to
-    /// apply again in case the pairing was cleared on the grinder meanwhile.
+    /// Tries the ID the grinder refused before, then waits for one typed in
+    /// the app and checks it with the grinder. `Ok` once one works, or after a
+    /// while, to apply again in case the pairing was cleared on the grinder
+    /// meanwhile.
     async fn wait_for_pairing_id(
         &mut self,
         server: &Server,
@@ -474,6 +488,26 @@ impl WifiGrinder {
         let mut detail = "paired on the grinder, but the pairing ID is missing here: enter the \
                           Pairing ID the grinder shows in its gbs-anywhere entry (Configuration)"
             .to_owned();
+        // The ID it refused for a while, in case it refused it only then.
+        if let Some(id) = self.pairing.refused_pairing_id {
+            let reply = self.post(wifi::PATH_BREW_JOBS, &Paired::new(id)).await?;
+            self.reached();
+            if reply.http == StatusCode::FORBIDDEN || refused(&reply) {
+                self.pairing.refused_pairing_id = None;
+                self.pairing.save(self.cfg.pairing_file.as_deref())?;
+                detail = format!(
+                    "the grinder no longer knows pairing ID {id}: enter the Pairing ID it shows \
+                     in its gbs-anywhere entry (Configuration)"
+                );
+            } else {
+                reply
+                    .ok()
+                    .context("checking the pairing ID the grinder refused before")?;
+                self.use_pairing_id(id)?;
+                tracing::info!("grinder: it takes the pairing ID it refused before");
+                return Ok(());
+            }
+        }
         let deadline = tokio::time::Instant::now() + MAX_BACKOFF;
         // An ID typed while the link was not asking is stale by now.
         while ids.try_recv().is_ok() {}
@@ -509,7 +543,7 @@ impl WifiGrinder {
 
     fn use_pairing_id(&mut self, id: u32) -> anyhow::Result<()> {
         self.pairing.pairing_id = Some(id);
-        self.refusals = 0;
+        self.pairing.refused_pairing_id = None;
         self.pairing.save(self.cfg.pairing_file.as_deref())
     }
 
@@ -523,6 +557,10 @@ impl WifiGrinder {
     ) -> anyhow::Result<()> {
         let mut tick = tokio::time::interval(self.cfg.poll);
         tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        // Since when every job request was refused (see [`REFUSED_FOR`]). Only
+        // refusals in a row count: a failed request in between ends `serve`,
+        // and the next one starts over.
+        let mut refused_since: Option<Instant> = None;
         loop {
             tokio::select! {
                 // A shot reported while a request was failing is taken before
@@ -543,8 +581,8 @@ impl WifiGrinder {
                         .await?;
                     self.reached();
                     if reply.http == StatusCode::FORBIDDEN {
-                        self.refusals += 1;
-                        if self.refusals >= REFUSALS_TO_FORGET {
+                        let since = *refused_since.get_or_insert_with(Instant::now);
+                        if since.elapsed() >= self.cfg.refused_for {
                             return self.forget_pairing(server);
                         }
                         let detail = "the grinder refused the pairing, checking again";
@@ -552,7 +590,11 @@ impl WifiGrinder {
                         continue;
                     }
                     reply.ok().context("asking for brew jobs")?;
-                    self.refusals = 0;
+                    refused_since = None;
+                    if self.pairing.refused_pairing_id.take().is_some() {
+                        // The pairing in use works: no fallback needed.
+                        self.pairing.save(self.cfg.pairing_file.as_deref())?;
+                    }
                     server.note_request(reply.peer, true);
                     if server.grinder_link().wifi.is_none_or(|w| w.state != WifiState::Paired) {
                         let idle = "paired, waiting for a Grind-by-Sync grind";
@@ -566,17 +608,22 @@ impl WifiGrinder {
     }
 
     /// The grinder refuses the pairing (cleared there): try the command
-    /// line's ID if it is another one, else pair again.
+    /// line's ID if it is another one, else pair again, keeping the refused ID
+    /// to try once more if the grinder still has gbs-anywhere paired.
     fn forget_pairing(&mut self, server: &Server) -> anyhow::Result<()> {
         self.drop_job(server, "the grinder no longer knows this gbs-anywhere");
         self.answer = None;
+        // The first refused ID stays: when the command-line ID is refused too,
+        // the one saved before is the better guess.
+        if let Some(id) = self.pairing.pairing_id.take() {
+            self.pairing.refused_pairing_id.get_or_insert(id);
+        }
         if let Some(id) = self.spare_id.take() {
             tracing::warn!("grinder: it refuses the saved pairing ID, trying the given one");
-            return self.use_pairing_id(id);
+            self.pairing.pairing_id = Some(id);
+        } else {
+            tracing::warn!("grinder: it no longer knows this gbs-anywhere, pairing again");
         }
-        tracing::warn!("grinder: it no longer knows this gbs-anywhere, pairing again");
-        self.pairing.pairing_id = None;
-        self.refusals = 0;
         self.pairing.save(self.cfg.pairing_file.as_deref())
     }
 
@@ -792,9 +839,10 @@ impl WifiGrinder {
             let accept = BrewAccept::new(answer.done.pairing_id, &answer.job);
             match self.post(wifi::PATH_BREW_ACCEPT, &accept).await {
                 Ok(reply) if reply.status() == wifi::STATUS_OK => answer.accepted = true,
-                // Not listed: taken already (its reply got lost) or gone. The
-                // result tells which; a job that is gone ends on the next poll.
-                Ok(reply) if reply.status() == wifi::STATUS_JOB_UNKNOWN => {}
+                // Not listed: taken already (its reply got lost) or gone. Taken
+                // counts until the result says it is gone
+                // (`STATUS_ONGOING_JOB_UNKNOWN`); the next poll then ends it.
+                Ok(reply) if reply.status() == wifi::STATUS_JOB_UNKNOWN => answer.accepted = true,
                 Ok(reply) if refused(&reply) => {
                     let why = format!("the grinder refused the shot: {:?}", reply.status());
                     self.report_problem(server, &why);
