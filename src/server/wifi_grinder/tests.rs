@@ -329,6 +329,11 @@ async fn pairs_takes_the_job_at_once_then_sends_the_shot() {
 
     wait_for("pairing", || paired(&server)).await;
     assert_eq!(saved_id(&file), PAIRING_ID, "kept for the next start");
+    assert_eq!(
+        wifi(&server).pairing_id,
+        Some(PAIRING_ID),
+        "shown in the app"
+    );
     assert!(
         server.grinder_link().last_poll.is_some(),
         "shown as connected"
@@ -527,6 +532,40 @@ async fn a_closed_port_is_unreachable() {
         .unwrap_err();
     let e = anyhow::Error::new(refused).context("asking for brew jobs");
     assert!(unreachable(&e));
+}
+
+#[tokio::test]
+async fn the_app_sees_a_grinder_that_does_not_answer_until_it_does() {
+    // A port nobody listens on, like a grinder switched off for the night.
+    let addr = TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let server = Server::new(MachineConfig::default());
+    let mut cfg = WifiConfig::from_host(&format!("http://{addr}")).unwrap();
+    cfg.poll = Duration::from_millis(20);
+    tokio::spawn(WifiGrinder::new(cfg).unwrap().run(server.clone()));
+    wait_for("the error", || {
+        server
+            .grinder_link()
+            .wifi
+            .is_some_and(|w| w.state == WifiState::Error)
+    })
+    .await;
+    assert!(wifi(&server).unreachable);
+
+    // Switched on: it answers on the next try and pairs.
+    let fake: Shared = Arc::default();
+    let app = axum::Router::new()
+        .fallback(axum::routing::post(handle))
+        .with_state(fake);
+    let listener = TcpListener::bind(addr)
+        .await
+        .expect("the port is free again");
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    wait_for("paired", || paired(&server)).await;
+    assert!(!wifi(&server).unreachable);
 }
 
 #[tokio::test]
@@ -824,6 +863,7 @@ async fn a_lost_pairing_id_is_asked_for_and_checked() {
             .is_some_and(|w| w.needs_pairing_id)
     })
     .await;
+    assert_eq!(wifi(&server).pairing_id, None, "none in use yet");
 
     // A wrong one is checked with the grinder, not kept.
     server.use_grinder_pairing_id(PAIRING_ID + 1).unwrap();
@@ -832,6 +872,11 @@ async fn a_lost_pairing_id_is_asked_for_and_checked() {
     })
     .await;
     assert!(wifi(&server).needs_pairing_id, "still asking");
+    assert_eq!(
+        wifi(&server).unknown_pairing_id,
+        Some(PAIRING_ID + 1),
+        "the app says so"
+    );
     assert_eq!(saved_id(&file), Value::Null, "not saved");
 
     server.use_grinder_pairing_id(PAIRING_ID).unwrap();
@@ -925,6 +970,7 @@ async fn a_refused_pairing_id_the_grinder_still_refuses_is_dropped() {
         "{}",
         wifi(&server).detail
     );
+    assert_eq!(wifi(&server).unknown_pairing_id, Some(7));
 }
 
 #[tokio::test]

@@ -10,9 +10,10 @@ the machine measured rather than a target.
 
 ## Set it up
 
-In the app: the green **+** at the top right → **La Marzocco cloud**, then
-enter your La Marzocco Home e-mail address and password. Add the machine's
-serial number (e.g. `MI000000`) if the account has more than one machine.
+In the app: Status → Machine integrations → green **+** → **La Marzocco
+cloud**, then enter your La Marzocco Home e-mail address and password. Add the
+machine's serial number (e.g. `MI000000`) if the account has more than one
+machine.
 
 Or on the command line / in Docker:
 

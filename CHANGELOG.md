@@ -17,12 +17,32 @@ a minor release may change behaviour.
   V01.36 does), gbs-anywhere sends it nothing for 3 minutes while it starts
   up, so that it keeps the pairing; the app then asks for the ID the grinder
   shows (also `--grinder-pairing-id`). The app shows the pairing code while
-  pairing and "grinder connected" once paired. The grinder waits for the
+  pairing and the grinder as ready once paired. The grinder waits for the
   shot for up to `--brew-timeout-s` (3 minutes unless set); grinding again
   before pulling cancels the shot it was waiting for. A shot that cannot
   reach the grinder right away (say, the WiFi drops) is retried for two
   minutes. While the grinder is off or in standby, the log says so once
   rather than every minute. Tested with the E65W GbS.
+- `grinder.wifi.pairing_id` in `GET /api/state`: the E65/E80 pairing in use;
+  `grinder.wifi.unknown_pairing_id`: one typed in that the grinder did not
+  take, while the app asks for the ID.
+- `grinder.wifi.unreachable` in `GET /api/state`: true while an E65/E80 GbS
+  does not answer at all (off, in standby or gone from the network), as
+  opposed to answering with an error.
+- `boot_id` in `GET /api/state`: new on every start, so an app can tell that
+  event numbers started over.
+- `age_ms` on each event in `GET /api/events` and the event stream: how long
+  ago it happened, so an app that catches up after a gap shows the right
+  times.
+- A redesigned app with two tabs: Start (the three steps of a shot, with
+  the step that is running or failed opened) and Status (grinder,
+  integrations). When no shot can start (no grinder connected, or the
+  grinder blocked), System status opens by itself and says why in plain
+  words, and step 1 shows "Blocked" instead of "Grind". While an
+  integration reports the shot, the fields to type it in are hidden; they
+  come back, with a note, when every integration has failed or none has
+  reported the shot a minute after it should have ended. The list of this
+  session's shots is gone for now; a shot history will replace it.
 
 ### Changed
 
@@ -30,6 +50,13 @@ a minor release may change behaviour.
   tag, and only on nights when something changed. The `main` and `sha-*`
   tags are no longer updated; switch from `:main` to `:nightly`. `latest`
   and the version tags still come only from releases.
+
+### Fixed
+
+- Requests on port 80 outside the grinder's `/api/v2/` paths, such as other
+  devices on the network probing the port, no longer count as grinder
+  traffic and are logged at debug level only. The `--log` transcript still
+  records them.
 
 ## [0.2.1] - 2026-10-10
 

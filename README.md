@@ -61,8 +61,9 @@ The grinder treats gbs-anywhere as a Xenia, so the menus below say "Xenia".
 4. Open **Configuration**. The scan will not find gbs-anywhere, so enter the
    hostname by hand: the computer's IP address, e.g. `192.168.1.20`. An IP is
    more reliable than a `.local` name.
-5. Within a few seconds the app shows **grinder connected**. The grinder polls
-   every 2 seconds from then on.
+5. Within a few seconds the status at the top right of the app turns
+   **Ready** (tap it: **Grinder connected**). The grinder polls every 2
+   seconds from then on.
 
 **Make a recipe use Grind-by-Sync**
 
@@ -78,13 +79,14 @@ A blue chain icon on the recipe means GbS is active.
 **Pull a shot**
 
 1. Open `http://<computer's IP>/` on your phone, e.g.
-   `http://192.168.1.20/`. The header shows "grinder connected" while the
-   grinder is polling.
+   `http://192.168.1.20/`. While the grinder is polling, the status at the
+   top right says **Ready** and **System status** on the Start tab lists
+   **Grinder connected**.
 2. Grind with a GbS recipe.
 3. When the grinder says "Press grinder rotary knob to start brewing.", press
    the knob and start the shot on your machine right away.
 4. Time the shot from pump start (always use the same timer), weigh the cup,
-   and enter both in the app. Tap **Send to grinder**.
+   and enter both in the app. Tap **Send**.
 5. The grinder shows its new grind setting.
 
 Shots of 10 s or less and over 80 s are ignored by the grinder, as is an
@@ -116,7 +118,7 @@ grinder on port 30001 over HTTPS.
    grinder's pairing times out first, tap **Start Pairing** again (the code
    may change: the app always shows the current one).
 5. The Generic WiFi entry is now called **gbs-anywhere**, and the app shows
-   **grinder connected**. A restart needs no new pairing.
+   the grinder as **Ready** under Status. A restart needs no new pairing.
 
 <details>
 <summary><b>If pairing doesn't work</b></summary>
@@ -124,10 +126,10 @@ grinder on port 30001 over HTTPS.
 The grinder may restart right after you accept (the E65W with firmware
 V01.36 does): the screen freezes and the light pulses red, then white. Leave
 gbs-anywhere running: it sends the grinder nothing for 3 minutes (the app
-says so), because a request while it starts up can make it lose the new
-pairing. The same pause follows if the grinder goes to standby while the
-pairing code shows. Then open **Generic WiFi → Configuration** on the
-grinder:
+shows that the grinder does not answer, and why), because a request while it
+starts up can make it lose the new pairing. The same pause follows if the
+grinder goes to standby while the pairing code shows. Then open **Generic
+WiFi → Configuration** on the grinder:
 
 - **A Pairing ID next to gbs-anywhere:** the pairing is made, but
   gbs-anywhere missed its ID. Type it into the app and tap **Use this pairing
@@ -168,18 +170,20 @@ Entering the numbers on your phone is the default and needs no setup.
 Optionally, let an *integration* report the shot instead: a vendor cloud, a
 connected scale, a home-automation hub. After the knob press (on an E65/E80
 GbS: after the grind) it waits for the shot, then sends its time and weight
-to the grinder by itself. You can still enter or correct a shot on your
-phone; whichever comes first wins, also when several integrations run at
-once.
+to the grinder by itself. If it has not reported the shot a minute after it
+should have ended (the recipe's brew time, else 30 s; sooner with a short
+shot window), or it is not working, the app says so and shows the fields to
+enter the shot on your phone; whichever comes first wins, also when several
+integrations run at once.
 
-Tap the green **+** at the top right of the app, pick one and fill in its
-form. Each integration gets a card showing whether it is ready and what it
-last sent; **Remove** stops it. Integrations added in the app are saved, with
-their passwords, in `/data` (from source: the `--config` file); without one
-they last until the next restart.
+Under **Status → Machine integrations**, tap the green **+**, pick one and
+fill in its form. Each integration gets a card showing whether it is ready
+and what it last sent; its ⋮ menu has **Delete**. Integrations added in the
+app are saved, with their passwords, in `/data` (from source: the `--config`
+file); without one they last until the next restart.
 
 Integrations can also be set with flags or environment variables. Those show
-"Set on the command line" and can only be turned off by removing the flags.
+"From the start settings" and can only be turned off by removing the flags.
 
 | integration | reads | setup |
 |---|---|---|
