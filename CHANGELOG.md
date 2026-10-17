@@ -6,6 +6,13 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Changed
+
+- Unreleased builds are now published once a night as the `nightly` image
+  tag, and only on nights when something changed. The `main` and `sha-*`
+  tags are no longer updated; switch from `:main` to `:nightly`. `latest`
+  and the version tags still come only from releases.
+
 ## [0.2.1] - 2026-10-10
 
 ### Changed

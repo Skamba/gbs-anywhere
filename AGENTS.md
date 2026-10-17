@@ -119,8 +119,9 @@ messages and pull requests:
 
 - Work on a branch. `main` is what users run.
 - `main` is protected: changes go in through a pull request, and the `test`
-  job of `ci.yml` must pass. A push to `main` publishes the `main` image tag;
-  a `vX.Y.Z` tag publishes `latest` and creates the GitHub release. Ask
+  job of `ci.yml` must pass. Each night `image.yml` publishes `main` as the
+  `nightly` image tag, unless `main` has not changed since the last one; a
+  `vX.Y.Z` tag publishes `latest` and creates the GitHub release. Ask
   before pushing, force-pushing, tagging or changing `.github/workflows/`.
 - User-visible changes get a line under `## [Unreleased]` in CHANGELOG.md.
 - To release: in a pull request, set `version` in Cargo.toml and rename
