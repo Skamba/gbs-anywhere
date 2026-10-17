@@ -10,9 +10,9 @@ the machine measured rather than a target.
 
 ## Set it up
 
-In the app: the green **+** at the top right → **La Marzocco cloud**, then enter your La Marzocco
-Home e-mail address and password. Add the machine's serial number (e.g.
-`MI000000`) if the account has more than one machine.
+In the app: the green **+** at the top right → **La Marzocco cloud**, then
+enter your La Marzocco Home e-mail address and password. Add the machine's
+serial number (e.g. `MI000000`) if the account has more than one machine.
 
 Or on the command line / in Docker:
 
@@ -33,7 +33,7 @@ docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
 ## How it works
 
 After the knob press (on an E65/E80 GbS: after the Grind-by-Sync grind)
-gbs-anywhere asks the cloud for new coffees every 3 s.
+gbs-anywhere asks the cloud for new coffees every 3 s (`--lm-poll-s`).
 The first coffee logged after the knob press is the shot: its extraction time
 and its weight go to the grinder. Without a scale reading it uses the recipe
 weight the grinder sent. The log says which.
@@ -47,8 +47,6 @@ weight the grinder sent. The log says which.
 - **Same account as the app.** gbs-anywhere registers itself as one more
   installation of the La Marzocco Home app (derived from your credentials,
   nothing else is stored). The app keeps working alongside it.
-- **The phone still works.** You can still enter or correct a shot on your
-  phone; whichever comes first wins.
 - The cloud login retries by itself with backoff.
 
 ## Official logo

@@ -80,10 +80,10 @@ pub struct WifiConfig {
     /// Between job requests and pairing checks.
     pub poll: Duration,
     /// How long nothing is sent after a pairing check got no answer (see
-    /// [`RESTART_QUIET`]).
+    /// `RESTART_QUIET`).
     pub restart_quiet: Duration,
     /// How long refused job requests take to count as a cleared pairing (see
-    /// [`REFUSED_FOR`]).
+    /// `REFUSED_FOR`).
     pub refused_for: Duration,
 }
 

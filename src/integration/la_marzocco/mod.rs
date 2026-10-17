@@ -4,8 +4,8 @@
 //! cloud with the extraction time and, with a Connected Scale, the weight in
 //! the cup: the same numbers the machine shows after a shot. This integration
 //! logs in like the La Marzocco Home app and, while the grinder is waiting
-//! for a shot after a knob press, polls that list until a new coffee appears,
-//! then reports it.
+//! for a shot after a knob press (on an E65/E80 GbS: after the grind), polls
+//! that list until a new coffee appears, then reports it.
 //!
 //! This works on machines whose live brewing state never reaches the cloud
 //! (the Linea Mini R, for one: Home Assistant's `brewing_active` sensor stays

@@ -47,9 +47,10 @@
 //!   args in [`CliArgs`] and [`CliArgs::configured`].
 //!
 //! [`Link::report`] applies the rules every integration must follow: a shot
-//! only counts while the grinder is waiting after a knob press, and a missing
-//! weight falls back to the recipe weight the grinder sent. Keep vendor code
-//! free of those so all integrations behave the same.
+//! only counts while the grinder is waiting after a knob press (on an E65/E80
+//! GbS: after a Grind-by-Sync grind), and a missing weight falls back to the
+//! recipe weight the grinder sent. Keep vendor code free of those so all
+//! integrations behave the same.
 
 mod kind;
 mod manager;
@@ -123,7 +124,8 @@ pub struct Link {
 pub enum ReportOutcome {
     /// Shown to the grinder with this weight (grams) and where it came from.
     Reported { grams: f64, source: String },
-    /// The grinder was not waiting: no knob press, or already answered.
+    /// The grinder was not waiting: no knob press (or E65/E80 grind), or
+    /// already answered.
     NotWaiting,
     /// The machine refused it (e.g. someone typed a result a moment earlier).
     Refused(MachineError),
@@ -143,7 +145,8 @@ impl Link {
         })
     }
 
-    /// The moments the grinder asks for a brew (knob presses), from now on.
+    /// The moments the grinder asks for a brew (knob presses, or E65/E80
+    /// Grind-by-Sync grinds), from now on.
     pub fn grinder_brews(&self) -> GrinderBrews {
         GrinderBrews(self.server.subscribe())
     }
@@ -189,7 +192,7 @@ impl Link {
             }
             ReportOutcome::NotWaiting => tracing::info!(
                 "{title}: {secs:.1} s shot seen but grinder not waiting (press the knob after \
-                 grinding)"
+                 grinding; an E65/E80 waits after a Grind-by-Sync grind)"
             ),
             ReportOutcome::Refused(e) => {
                 tracing::warn!("{title}: {secs:.1} s shot not reported: {e}");
@@ -199,7 +202,7 @@ impl Link {
     }
 }
 
-/// Knob presses as they happen. See [`Link::grinder_brews`].
+/// The grinder's brew requests as they happen. See [`Link::grinder_brews`].
 pub struct GrinderBrews(broadcast::Receiver<EventRecord>);
 
 impl GrinderBrews {

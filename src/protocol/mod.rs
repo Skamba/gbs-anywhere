@@ -1,12 +1,14 @@
-//! The Grind-by-Sync ("mako") link between an E64 WS grinder and the espresso
-//! machine it syncs with, as plain types.
+//! The Grind-by-Sync link between a grinder and the espresso machine it syncs
+//! with, as plain types.
 //!
-//! The grinder is the HTTP **client** and the actor: it polls the machine, runs
-//! its dial-in algorithm and moves its discs. The machine only reports numbers,
-//! so anything that serves these types on port 80 can be the machine.
+//! For the E64 WS ("mako") the grinder is the HTTP **client** and the actor:
+//! it polls the machine, runs its dial-in algorithm and moves its discs. The
+//! machine only reports numbers, so anything that serves these types on port
+//! 80 can be the machine. The E65/E80 GbS works the other way round, see
+//! [`wifi`].
 //!
 //! * [`wire`] — the JSON bodies, with the exact keys the grinder reads/writes.
-//! * [`grinder`] — a model of how the grinder interprets a sequence of mako
+//! * [`grinder`] — a model of how the E64 WS interprets a sequence of mako
 //!   replies (its brew state machine). Handy in tests, or to show what the
 //!   grinder believes.
 //! * [`machine`] — a time-driven machine that produces the mako replies for a
