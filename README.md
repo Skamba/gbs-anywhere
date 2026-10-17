@@ -25,9 +25,9 @@ The `/data` volume keeps the integrations you add in the app (see
 [Integrations](#integrations)).
 
 `latest` is the newest release. Pin a version with `:0.1` (newest 0.1.x) or
-`:0.1.0`, or follow `main` for the newest commit, which may not be released
-yet. The app shows the version at the bottom of the page; what changed is in
-[CHANGELOG.md](CHANGELOG.md).
+`:0.1.0`, or follow `:nightly`, built each night from the newest commit, which
+may not be released yet. The app shows the version at the bottom of the page;
+what changed is in [CHANGELOG.md](CHANGELOG.md).
 
 You'll need that computer's IP address on your network (e.g. `192.168.1.20`)
 for the grinder and your phone. It must stay the same, so give it a fixed IP
