@@ -288,6 +288,8 @@ async fn settings_change_in_the_app_and_are_saved() {
         json!({ "shot_window_s": "default", "grinder_host": "default" })
     );
     assert_eq!(settings["persistent"], true);
+    assert_eq!(state["update"]["enabled"], false);
+    assert_eq!(state["update"]["latest"], Value::Null);
 
     let (code, settings) = put(json!({ "shot_window_s": 120 })).await;
     assert_eq!(code, 200);

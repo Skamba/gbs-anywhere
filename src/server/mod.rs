@@ -13,7 +13,8 @@
 //! for brew jobs and drives the same machine from them.
 //!
 //! Around them: [`settings`] (what people change in the app, and the settings
-//! file), [`logbook`] (the server's log for the app) and the shot history.
+//! file), [`logbook`] (the server's log for the app), the shot history and
+//! [`update_check`].
 //!
 //! The `gbs-anywhere` binary is a thin wrapper: build a [`Server`], then
 //! [`serve`] it or mount the routers in another app.
@@ -25,6 +26,7 @@ pub mod logbook;
 pub mod settings;
 #[cfg(test)]
 mod tests;
+pub mod update_check;
 mod utc;
 pub mod wifi_grinder;
 
@@ -45,6 +47,7 @@ pub use grinder_api::grinder_router;
 pub use history::{History, Shot, ShotKind};
 pub use logbook::{LogBook, LogLayer, LogLine};
 pub use settings::{SettingsChange, SettingsError, SettingsFile, Startup};
+pub use update_check::UpdateConfig;
 pub use wifi_grinder::{
     PairingIdRefusal, WifiConfig, WifiGrinder, WifiLink, WifiState, grinder_address,
 };
@@ -59,6 +62,7 @@ pub struct Server {
     /// The shot window and grinder address, and the E65/E80 link.
     settings: Mutex<settings::Live>,
     history: History,
+    update: Mutex<update_check::UpdateState>,
     log: Arc<LogBook>,
     /// New on every start: event and log numbers start over with it.
     boot_id: String,
@@ -117,6 +121,7 @@ impl Server {
             icons_dir: OnceLock::new(),
             settings: Mutex::default(),
             history: History::default(),
+            update: Mutex::default(),
             log: LogBook::global(),
             boot_id: uuid::Uuid::new_v4().simple().to_string(),
         })

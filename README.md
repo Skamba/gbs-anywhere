@@ -231,6 +231,12 @@ file). The **Log** tab shows the last 1,000 lines of gbs-anywhere's log (INFO
 and up, as `docker logs` prints them by default), ready to copy into a bug
 report.
 
+**Update check.** One minute after it starts, and then once a day,
+gbs-anywhere asks GitHub for its latest release, so the app can say when a
+newer version is out. That request carries nothing but the running version
+(in the User-Agent). Turn it off with `--update-check off`
+(`UPDATE_CHECK=off` in Docker).
+
 ## Options
 
 Extra flags go after the image name (Docker) or after `--` (cargo):
@@ -245,6 +251,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | `--grinder <host>` | off | pair with this E65/E80 GbS over its "Generic WiFi" option; also `GRINDER_HOST`; an address set in the app wins |
 | `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing across restarts; also `GRINDER_PAIRING_FILE` |
 | `--grinder-pairing-id <id>` | off | the pairing ID the grinder shows, used when none is saved or the grinder refuses the saved one (the app can take it too); also `GRINDER_PAIRING_ID` |
+| `--update-check <on\|off>` | on | look for a newer release once a day (see [Update check](#settings-in-the-app)); also `UPDATE_CHECK` |
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
 | `--hds-*` | off | Half Decent Scale, see [its README](src/integration/half_decent/README.md) |
 
