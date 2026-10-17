@@ -140,10 +140,19 @@ pub struct WifiLink {
     /// here: the app asks for the one the grinder shows
     /// (`POST /api/grinder/pairing`).
     pub needs_pairing_id: bool,
+    /// While asking: the last pairing ID the grinder did not take, so the
+    /// app can say so.
+    pub unknown_pairing_id: Option<u32>,
     /// What is going on, in one sentence.
     pub detail: String,
     /// What went wrong with the last shot, until the next one goes through.
     pub problem: Option<String>,
+    /// The pairing in use; `None` while unpaired.
+    pub pairing_id: Option<u32>,
+    /// The grinder does not answer at all (off, in standby or gone from the
+    /// network), as opposed to answering with an error. Cleared as soon as
+    /// it answers again.
+    pub unreachable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -296,7 +305,8 @@ pub struct WifiGrinder {
     /// What went wrong with the last shot (shown in the app).
     problem: Option<String>,
     /// The grinder could not be reached last time (it is off or in standby):
-    /// further failures are not logged until it answers again.
+    /// further failures are not logged until it answers again, and the app
+    /// says so (`WifiLink::unreachable`).
     unreachable: bool,
 }
 
@@ -386,7 +396,6 @@ impl WifiGrinder {
     async fn pair(&mut self, server: &Server, ids: &mut mpsc::Receiver<u32>) -> anyhow::Result<()> {
         let app = PairingApplication::new(&self.pairing.brew_device_id);
         let reply = self.post(wifi::PATH_PAIRING_APPLICATION, &app).await?;
-        self.reached();
         if reply.status() == wifi::STATUS_ALREADY_PAIRED {
             return self.wait_for_pairing_id(server, ids).await;
         }
@@ -420,7 +429,6 @@ impl WifiGrinder {
                 continue;
             }
             let reply = outcome?;
-            self.reached();
             if reply.status() == wifi::STATUS_APPLICATION_UNKNOWN {
                 if quiet {
                     tracing::info!(
@@ -488,10 +496,10 @@ impl WifiGrinder {
         let mut detail = "paired on the grinder, but the pairing ID is missing here: enter the \
                           Pairing ID the grinder shows in its gbs-anywhere entry (Configuration)"
             .to_owned();
+        let mut unknown = None;
         // The ID it refused for a while, in case it refused it only then.
         if let Some(id) = self.pairing.refused_pairing_id {
             let reply = self.post(wifi::PATH_BREW_JOBS, &Paired::new(id)).await?;
-            self.reached();
             if reply.http == StatusCode::FORBIDDEN || refused(&reply) {
                 self.pairing.refused_pairing_id = None;
                 self.pairing.save(self.cfg.pairing_file.as_deref())?;
@@ -499,6 +507,7 @@ impl WifiGrinder {
                     "the grinder no longer knows pairing ID {id}: enter the Pairing ID it shows \
                      in its gbs-anywhere entry (Configuration)"
                 );
+                unknown = Some(id);
             } else {
                 reply
                     .ok()
@@ -513,18 +522,18 @@ impl WifiGrinder {
         while ids.try_recv().is_ok() {}
         loop {
             tracing::warn!("grinder: {detail} (in the app, or with --grinder-pairing-id)");
-            self.ask_for_pairing_id(server, &detail);
+            self.ask_for_pairing_id(server, &detail, unknown);
             let id = tokio::select! {
                 _ = tokio::time::sleep_until(deadline) => return Ok(()),
                 Some(id) = ids.recv() => id,
             };
             let reply = self.post(wifi::PATH_BREW_JOBS, &Paired::new(id)).await?;
-            self.reached();
             if reply.http == StatusCode::FORBIDDEN {
                 detail = format!(
                     "the grinder does not know pairing ID {id}: enter the Pairing ID it shows \
                      in its gbs-anywhere entry (Configuration)"
                 );
+                unknown = Some(id);
                 continue;
             }
             reply.ok().context("checking the pairing ID")?;
@@ -579,7 +588,6 @@ impl WifiGrinder {
                     let reply = self
                         .post(wifi::PATH_BREW_JOBS, &Paired::new(pairing_id))
                         .await?;
-                    self.reached();
                     if reply.http == StatusCode::FORBIDDEN {
                         let since = *refused_since.get_or_insert_with(Instant::now);
                         if since.elapsed() >= self.cfg.refused_for {
@@ -890,7 +898,8 @@ impl WifiGrinder {
         self.status(server, WifiState::Paired, None, idle);
     }
 
-    async fn post(&self, path: &str, body: &impl Serialize) -> anyhow::Result<Reply> {
+    /// Any answer, even an error, means the grinder can be reached again.
+    async fn post(&mut self, path: &str, body: &impl Serialize) -> anyhow::Result<Reply> {
         let base = &self.cfg.base_url;
         let mut res = self
             .http
@@ -899,6 +908,7 @@ impl WifiGrinder {
             .send()
             .await
             .with_context(|| format!("cannot reach the grinder at {base}"))?;
+        self.reached();
         let http = res.status();
         let peer = res.remote_addr();
         let mut bytes = Vec::new();
@@ -932,14 +942,21 @@ impl WifiGrinder {
         pairing_code: Option<u32>,
         detail: impl Into<String>,
     ) {
-        server.set_wifi(WifiLink {
+        server.set_wifi(self.link(state, pairing_code, detail.into()));
+    }
+
+    fn link(&self, state: WifiState, pairing_code: Option<u32>, detail: String) -> WifiLink {
+        WifiLink {
             grinder: self.cfg.base_url.clone(),
             state,
             pairing_code,
             needs_pairing_id: false,
-            detail: detail.into(),
+            unknown_pairing_id: None,
+            detail,
             problem: self.problem.clone(),
-        });
+            pairing_id: self.pairing.pairing_id,
+            unreachable: self.unreachable,
+        }
     }
 
     /// Shows the current problem without changing the rest of the state.
@@ -950,14 +967,17 @@ impl WifiGrinder {
         }
     }
 
-    fn ask_for_pairing_id(&self, server: &Server, detail: &str) {
+    fn ask_for_pairing_id(&self, server: &Server, detail: &str, unknown: Option<u32>) {
         server.set_wifi(WifiLink {
             grinder: self.cfg.base_url.clone(),
             state: WifiState::Error,
             pairing_code: None,
             needs_pairing_id: true,
+            unknown_pairing_id: unknown,
             detail: detail.to_owned(),
             problem: None,
+            pairing_id: None,
+            unreachable: false,
         });
     }
 }

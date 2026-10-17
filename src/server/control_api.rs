@@ -5,11 +5,11 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations |
+//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations; `boot_id` changes on every start, so an app can tell its event numbers start over |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
-//! | GET | `/api/events?after=N` | events with `seq > N` |
+//! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the brew as a user abort (grinder skips it) |
@@ -20,8 +20,9 @@
 
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use crate::protocol::machine::EventRecord;
 use crate::protocol::{MachineError, MakoState, ShotResult};
 use axum::Json;
 use axum::extract::{Path, Query, State};
@@ -83,6 +84,7 @@ pub fn state_json(x: &Server) -> Value {
             },
             "integrations": integrations,
             "last_seq": m.last_seq(),
+            "boot_id": x.boot_id(),
             "version": crate::version(),
             "config": m.config(),
         })
@@ -145,7 +147,28 @@ struct After {
 }
 
 async fn get_events(State(x): State<Arc<Server>>, Query(q): Query<After>) -> Json<Value> {
-    Json(x.with(|m, _| json!(m.events_after(q.after).collect::<Vec<_>>())))
+    Json(x.with(|m, now| {
+        Value::Array(
+            m.events_after(q.after)
+                .map(|r| event_json(r, now))
+                .collect(),
+        )
+    }))
+}
+
+/// An event as the API sends it, with `age_ms`: how long before `now` it
+/// happened. The age, not a time of day, so the machine stays clock-free and
+/// an app can place the event on its own clock.
+fn event_json(rec: &EventRecord, now: Instant) -> Value {
+    let mut v = serde_json::to_value(rec).unwrap_or(Value::Null);
+    if let Value::Object(o) = &mut v {
+        let age = now.saturating_duration_since(rec.at).as_millis();
+        o.insert(
+            "age_ms".into(),
+            json!(u64::try_from(age).unwrap_or(u64::MAX)),
+        );
+    }
+    v
 }
 
 async fn stream_events(State(x): State<Arc<Server>>) -> impl IntoResponse {
@@ -154,7 +177,7 @@ async fn stream_events(State(x): State<Arc<Server>>) -> impl IntoResponse {
         loop {
             match rx.recv().await {
                 Ok(rec) => {
-                    let data = serde_json::to_value(&rec).unwrap_or(Value::Null);
+                    let data = event_json(&rec, Instant::now());
                     let kind = data["kind"].as_str().unwrap_or("event").to_owned();
                     let ev = Event::default()
                         .event(kind)

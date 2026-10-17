@@ -46,6 +46,8 @@ pub struct Server {
     icons_dir: OnceLock<PathBuf>,
     /// Pairing IDs for the E65/E80 link, when one runs.
     wifi_ids: OnceLock<tokio::sync::mpsc::Sender<u32>>,
+    /// New on every start: event numbers start over with it.
+    boot_id: String,
 }
 
 struct Inner {
@@ -80,7 +82,14 @@ impl Server {
             integrations: Integrations::new(),
             icons_dir: OnceLock::new(),
             wifi_ids: OnceLock::new(),
+            boot_id: uuid::Uuid::new_v4().simple().to_string(),
         })
+    }
+
+    /// Changes on every start, so an app can tell that event numbers
+    /// started over.
+    pub fn boot_id(&self) -> &str {
+        &self.boot_id
     }
 
     /// Like [`Server::new`], also appending every grinder request and our

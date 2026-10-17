@@ -138,6 +138,68 @@ async fn browser_icon_requests_are_not_grinder_traffic() {
 }
 
 #[tokio::test]
+async fn other_devices_looking_for_their_kind_are_not_grinder_traffic() {
+    let base = start().await;
+    // Smart-home discovery on port 80, e.g. for Shelly devices.
+    let res = reqwest::get(format!("{base}/shelly")).await.unwrap();
+    assert_eq!(res.status(), 200, "answered like any unknown request");
+    assert_eq!(res.text().await.unwrap(), "{}");
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["grinder"]["requests"], 0);
+    assert_eq!(state["grinder"]["peer"], Value::Null);
+
+    // The grinder still counts, also with a request this version does not
+    // know (a newer firmware may ask for more).
+    let mut grinder = Grinder::new(&base);
+    grinder.poll().await;
+    for path in ["/api/v2/something-new", "/api/v2/"] {
+        let res = reqwest::get(format!("{base}{path}")).await.unwrap();
+        assert_eq!(res.text().await.unwrap(), "{}");
+    }
+    // Not the grinder's: only starts like its paths.
+    reqwest::get(format!("{base}/api/v2x")).await.unwrap();
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["grinder"]["requests"], 3);
+    assert_eq!(state["grinder"]["polls"], 1, "only the poll is a poll");
+    assert_ne!(state["grinder"]["peer"], Value::Null);
+}
+
+#[tokio::test]
+async fn events_say_how_long_ago_they_happened() {
+    let base = start().await;
+    let post = reqwest::Method::POST;
+    let (code, _) = call(post, format!("{base}/api/shot/start"), None).await;
+    assert_eq!(code, 200);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (_, events) = call(
+        reqwest::Method::GET,
+        format!("{base}/api/events?after=0"),
+        None,
+    )
+    .await;
+    let started = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "brew_started")
+        .expect("a brew_started event");
+    let age = started["age_ms"].as_u64().expect("age_ms");
+    assert!((300..10_000).contains(&age), "age {age} ms");
+}
+
+#[tokio::test]
+async fn each_start_has_its_own_boot_id() {
+    let (a, b) = (start().await, start().await);
+    let boot_id = |state: &Value| state["boot_id"].as_str().unwrap().to_owned();
+    let (_, first) = call(reqwest::Method::GET, format!("{a}/api/state"), None).await;
+    let (_, again) = call(reqwest::Method::GET, format!("{a}/api/state"), None).await;
+    let (_, other) = call(reqwest::Method::GET, format!("{b}/api/state"), None).await;
+    assert_eq!(boot_id(&first).len(), 32);
+    assert_eq!(boot_id(&first), boot_id(&again), "stable while running");
+    assert_ne!(boot_id(&first), boot_id(&other), "new on every start");
+}
+
+#[tokio::test]
 async fn control_api_rejects_what_it_cannot_do() {
     let base = start().await;
     let post = reqwest::Method::POST;
