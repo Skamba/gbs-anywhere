@@ -57,7 +57,7 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
   every push and pull request.
 - For page changes, open the page at phone width (about 390 px) in light and
   dark mode and look at the result. There is no JavaScript test suite.
-- README.md (and an integration's own README) matches any change to
+- README.md, MANUAL.md and an integration's own README match any change to
   user-visible behaviour, flags or the API.
 
 ## Code conventions
