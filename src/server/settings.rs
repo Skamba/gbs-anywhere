@@ -129,8 +129,10 @@ impl SettingsFile {
     }
 }
 
-/// The file holds passwords: readable by the owner only.
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Readable by the owner only: the settings file holds passwords, the pairing
+/// file what lets anyone speak to the grinder as gbs-anywhere, the history
+/// when someone is home.
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
     #[cfg(unix)]

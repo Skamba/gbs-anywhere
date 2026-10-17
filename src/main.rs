@@ -75,6 +75,20 @@ struct Args {
     #[arg(long)]
     no_app: bool,
 
+    /// Also open the app by this host name (comma-separated for several),
+    /// besides IP addresses and home-network names such as `localhost`, a
+    /// name without a dot or one ending in `.local`, `.lan`, `.home.arpa` or
+    /// `.fritz.box`. `*` accepts any name.
+    #[arg(long, env = "ALLOW_HOST", value_delimiter = ',', value_name = "NAME")]
+    allow_host: Vec<String>,
+
+    /// Let requests with browser headers (Origin, Sec-Fetch-Site) reach the
+    /// E64 WS's routes. They are refused so that a web page cannot act as
+    /// the grinder; only needed if the log says your E64 WS was refused (and
+    /// then please report it).
+    #[arg(long)]
+    accept_browser_headers: bool,
+
     /// Directory with your own icons for the app: `<integration>.svg` or
     /// `.png` (e.g. la_marzocco.svg) replaces the built-in glyph.
     #[arg(long, env = "ICONS_DIR", value_name = "DIR")]
@@ -156,6 +170,8 @@ async fn main() -> anyhow::Result<()> {
             .collect(),
         control,
         app_on_grinder_ports: !args.no_app,
+        allowed_hosts: server::AllowedHosts::new(args.allow_host.clone()),
+        accept_browser_headers: args.accept_browser_headers,
     };
     if !args.no_app {
         // Inside a container the detected address is the container's own,

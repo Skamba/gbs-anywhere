@@ -28,7 +28,8 @@ async fn start_server() -> (String, Arc<Server>) {
     };
     // A log book of its own, so tests running side by side don't mix lines.
     let state = Server::with_log(config, Arc::new(LogBook::new(logbook::CAPACITY)));
-    let app = control_router(state.clone()).merge(grinder_router(state.clone()));
+    let app = control_router(state.clone(), AllowedHosts::default())
+        .merge(grinder_router(state.clone(), false));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     spawn_server(listener, app, addr);
@@ -625,4 +626,151 @@ async fn integrations_are_edited_and_moved_into_the_app() {
     assert_eq!(saved["integrations"][0]["from_command_line"], true);
     assert_eq!(saved["integrations"][0]["settings"]["host"], "127.0.0.1:10");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn web_pages_cannot_act_as_the_grinder() {
+    let base = start().await;
+    let http = reqwest::Client::new();
+    // A page on another site, posting a start request as a CORS simple
+    // request (no preflight), and reading a poll reply.
+    let res = http
+        .post(format!("{base}{PATH_SCRIPTS_EXECUTE}"))
+        .header("origin", "https://evil.example")
+        .header("content-type", "text/plain")
+        .body(r#"{"ID":9}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+    assert!(res.headers().get("access-control-allow-origin").is_none());
+    let res = http
+        .get(format!("{base}{PATH_MAKO}"))
+        .header("sec-fetch-site", "cross-site")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_ne!(state["phase"]["phase"], "brewing");
+    assert_eq!(
+        state["grinder"]["requests"], 0,
+        "not counted as the grinder"
+    );
+
+    // The grinder sends neither header; it gets no CORS header either.
+    let res = http.get(format!("{base}{PATH_MAKO}")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert!(res.headers().get("access-control-allow-origin").is_none());
+
+    // A body far bigger than any of the grinder's is refused.
+    let big = format!(
+        r#"{{"SYNC_BEVERAGE_WEIGHT":36,"pad":"{}"}}"#,
+        "x".repeat(8 * 1024)
+    );
+    let res = http
+        .post(format!("{base}{PATH_BREWRATIO}"))
+        .body(big)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 413);
+}
+
+#[tokio::test]
+async fn the_app_answers_home_names_only_and_refuses_other_sites() {
+    let base = start().await;
+    let http = reqwest::Client::new();
+    let get_state = |host: &'static str| {
+        http.get(format!("{base}/api/state"))
+            .header("host", host)
+            .send()
+    };
+    // DNS rebinding: a page on its own, public name.
+    assert_eq!(get_state("attacker.example").await.unwrap().status(), 421);
+    assert_eq!(get_state("gbs.fritz.box").await.unwrap().status(), 200);
+    assert_eq!(get_state("kitchen-pi").await.unwrap().status(), 200);
+    assert_eq!(get_state("").await.unwrap().status(), 421, "an empty Host");
+
+    // Every route of the app, the page and the event stream included.
+    for path in [
+        "/",
+        "/icons/la_marzocco.svg",
+        "/favicon.ico",
+        "/api/state",
+        "/api/history",
+        "/api/events",
+        "/api/events/stream",
+        "/api/log",
+        "/api/log/stream",
+        "/api/integrations/kinds",
+        "/api/integrations/x/settings",
+    ] {
+        let res = http
+            .get(format!("{base}{path}"))
+            .header("host", "attacker.example")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 421, "{path}");
+    }
+    for (method, path) in [
+        (reqwest::Method::PUT, "/api/settings"),
+        (reqwest::Method::POST, "/api/shot/result"),
+        (reqwest::Method::POST, "/api/shot/abort"),
+        (reqwest::Method::POST, "/api/integrations"),
+        (reqwest::Method::PUT, "/api/integrations/x"),
+        (reqwest::Method::DELETE, "/api/integrations/x"),
+        (reqwest::Method::POST, "/api/integrations/x/adopt"),
+        (reqwest::Method::POST, "/api/machine"),
+        (reqwest::Method::POST, "/api/grinder/pairing"),
+        (reqwest::Method::PUT, "/api/overrides"),
+    ] {
+        let res = http
+            .request(method.clone(), format!("{base}{path}"))
+            .header("origin", "https://evil.example")
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 403, "{method} {path}");
+    }
+
+    // CSRF: a body-less POST from another site.
+    let res = http
+        .post(format!("{base}/api/shot/start"))
+        .header("origin", "https://evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_ne!(state["phase"]["phase"], "brewing");
+
+    // The app's own page, same origin, still works.
+    let res = http
+        .post(format!("{base}/api/shot/start"))
+        .header("origin", base.as_str())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+}
+
+#[tokio::test]
+async fn browser_headers_can_be_let_through_to_the_grinder_routes() {
+    // `--accept-browser-headers`, in case a grinder ever sends them.
+    let state = Server::new(MachineConfig::default());
+    let app = grinder_router(state, true);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    spawn_server(listener, app, addr);
+    let res = reqwest::Client::new()
+        .get(format!("http://{addr}{PATH_MAKO}"))
+        .header("origin", "null")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
 }
