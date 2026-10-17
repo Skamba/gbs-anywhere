@@ -776,7 +776,7 @@
   <footer class="app-footer" id="app-footer">gbs-anywhere</footer>
 </div>
 
-<!-- Bottom sheet for confirmations (delete) and the copy fallback -->
+<!-- Bottom sheet for confirmations (delete, move into the app) and the copy fallback -->
 <div class="scrim" id="sheet" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
     <p class="sheet-title" id="sheet-title"></p>
@@ -812,6 +812,7 @@
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
     clock: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9.5 2.5h5"/>',
     alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.5"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
     arrow: '<path d="M9 5l7 7-7 7"/>',
     cloud: '<path d="M7 18a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 9.5a3.5 3.5 0 0 1-.5 7H7z"/>',
@@ -852,7 +853,9 @@
       "common.add": "Add",
       "common.save": "Save",
       "common.change": "Change",
+      "common.edit": "Edit",
       "common.delete": "Delete",
+      "common.ok": "OK",
       "common.done": "Done",
       "common.optional": " (optional)",
       "common.notSaved": "Not saved: {error}",
@@ -1056,11 +1059,23 @@
       "integ.fromStart": "From the start settings",
       "integ.more": "More actions for {title}",
       "integ.menu": "Actions for {title}",
+      "integ.cmdOnly.title": "{title} comes from the start settings",
+      "integ.cmdOnly.text": "This integration comes from the start settings (environment variables or flags), so it can only be changed or removed there.",
+      "integ.cmdOnly.noFile": "Moving it into the app needs a settings file (--config).",
+      "integ.adopt.title": "Move {title} into the app?",
+      "integ.adopt.text": "This integration comes from the start settings (environment variables or flags). Move it into the app to change it here? Its settings are taken over; nothing has to be typed again.",
+      "integ.adopt.textPassword": "This integration comes from the start settings (environment variables or flags). Move it into the app to change it here? Its settings, including the password, are taken over; nothing has to be typed again.",
+      "integ.adopt.after": "From the next start on, its flags or environment variables are ignored for as long as it is in the app. You can remove them.",
+      "integ.adopt.confirm": "Move into the app",
       "integ.delete.title": "Delete {title}?",
       "integ.delete.text": "This stops the integration and removes its saved settings. Shots are then no longer reported by themselves.",
       "integ.delete.textPassword": "This stops the integration and removes its saved settings, including the password. Shots are then no longer reported by themselves.",
+      "integ.delete.moved": "It was moved into the app from the start settings. If its flags or environment variables are still set, they start it again at the next start; remove them to turn it off for good.",
       "integ.delete.type": "Type DELETE to confirm",
       "integ.delete.failed": "Could not delete it: {error}",
+      "integ.edit.kicker": "Edit",
+      "integ.edit.cant": "Can’t edit {title}",
+      "integ.passwordSaved": "Saved. Leave this empty to keep the saved password.",
 
       "settings.title": "Settings",
       "settings.appearance": "Appearance",
@@ -2107,8 +2122,9 @@
     $("g-facts").replaceChildren(...facts.map(([k, v]) => el("div", null, el("dt", { text: t("grinder.fact." + k) }), el("dd", { text: v }))));
   }
 
-  // Integrations list. Rebuilt only when something shown changes.
-  let integSig = "", menuFor = null, integOpen = store.get("integOpen") !== "0";
+  // Integrations list. Rebuilt only when something shown changes, and not
+  // while one of its forms is open.
+  let integSig = "", menuFor = null, editing = null, editForm = null, integOpen = store.get("integOpen") !== "0";
   /** Rebuilds the integrations list on the next render, and renders. */
   function invalidateIntegrations() { integSig = ""; renderStatus(); }
   /** Closes the ⋮ menu; `refocus` puts focus back on its button. */
@@ -2130,11 +2146,22 @@
     $("add-integration").hidden = !(kinds && kinds.length);
     const adding = !$("add-panel").hidden;
     $("integ-empty").hidden = list.length > 0 || adding;
-    const sig = JSON.stringify([list.map((i) => [i.id, i.title, i.subject, i.health, i.detail, i.last_error, i.reports, i.source, i.kind]),
-      !!kinds, menuFor]);
+    // Deleted from another phone while being edited here: the form goes.
+    if (editing && !list.some((i) => i.id === editing)) { editing = null; editForm = null; }
+    const sig = JSON.stringify([list.map((i) => [i.id, i.title, i.subject, i.health, i.detail, i.last_error, i.reports, i.source, i.adoptable, i.kind]),
+      !!kinds, menuFor, hasNewApi(), editing]);
     if (sig === integSig) return;
     integSig = sig;
-    $("integ-list").replaceChildren(...list.map(integItem));
+    const box = $("integ-list");
+    const nodes = list.map((i) => (i.id === editing && editForm) || integItem(i));
+    if (editForm && editForm.parentNode === box) {
+      // The other cards change around the open form, which keeps its focus
+      // and what was typed.
+      const at = nodes.indexOf(editForm);
+      for (const c of [...box.children]) if (c !== editForm) c.remove();
+      editForm.before(...nodes.slice(0, at));
+      editForm.after(...nodes.slice(at + 1));
+    } else box.replaceChildren(...nodes);
   }
 
   function integItem(i) {
@@ -2178,9 +2205,12 @@
     return item;
   }
 
-  /** The ⋮ menu: only integrations added in the app can be deleted there. */
+  /** The ⋮ menu: only integrations in the app can be deleted there. */
   function integActions(i) {
-    return i.source === "app" ? [[t("common.delete"), "trash", "danger", () => confirmDelete(i)]] : [];
+    const acts = [];
+    if (hasNewApi() && kindOf(i.kind)) acts.push([t("common.edit"), "edit", "", () => (i.source === "command_line" ? moveToEdit(i) : startEdit(i))]);
+    if (i.source === "app") acts.push([t("common.delete"), "trash", "danger", () => confirmDelete(i)]);
+    return acts;
   }
   function focusMenu() {
     requestAnimationFrame(() => { const b = document.querySelector(".menu button"); if (b) b.focus(); });
@@ -2198,6 +2228,40 @@
     integOpen = !integOpen; store.set("integOpen", integOpen ? "1" : "0"); menuFor = null; invalidateIntegrations();
   });
 
+  /** Edit one from the start settings: it is moved into the app first. */
+  function moveToEdit(i) {
+    const k = kindOf(i.kind);
+    if (!i.adoptable) {
+      const noFile = S.settings && S.settings.persistent === false;
+      return openSheet({
+        returnTo: () => focusKebab(i.id),
+        title: t("integ.cmdOnly.title", { title: i.title }),
+        body: [el("p", { class: "body-text", text: t("integ.cmdOnly.text") + (noFile ? " " + t("integ.cmdOnly.noFile") : "") })],
+        actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }],
+      });
+    }
+    openSheet({
+      returnTo: () => focusKebab(i.id),
+      title: t("integ.adopt.title", { title: i.title }),
+      body: [
+        el("p", { class: "body-text", text: t(hasPassword(k) ? "integ.adopt.textPassword" : "integ.adopt.text") }),
+        el("p", { class: "body-text", text: t("integ.adopt.after") }),
+      ],
+      actions: [
+        { label: t("common.cancel"), cls: "s-plain", run: closeSheet },
+        { label: t("integ.adopt.confirm"), cls: "s-primary", run: async (btn) => {
+          btn.disabled = true;
+          try {
+            const view = await api("/api/integrations/" + encodeURIComponent(i.id) + "/adopt", { method: "POST" });
+            closeSheet();
+            await tick();
+            startEdit(((S && S.integrations) || []).find((x) => x.id === i.id) || Object.assign({}, i, view));
+          } catch (err) { sheetError(err.message); btn.disabled = false; }
+        } },
+      ],
+    });
+  }
+
   /** The word typed to confirm a delete: DELETE, in any case. */
   const DELETE_WORDS = ["DELETE"];
   const deleteTyped = (v) => DELETE_WORDS.includes(v.trim().toUpperCase());
@@ -2211,6 +2275,7 @@
       title: t("integ.delete.title", { title: i.title }),
       body: [
         el("p", { class: "body-text", text: t(hasPassword(k) ? "integ.delete.textPassword" : "integ.delete.text") }),
+        ...(i.from_command_line ? [el("p", { class: "body-text", text: t("integ.delete.moved") })] : []),
         el("label", { class: "sheet-label" }, t("integ.delete.type"), input),
       ],
       actions: [
@@ -2232,16 +2297,19 @@
   }
 
   /** One form field from an integration's setup form. */
-  function formField(f, prefix) {
+  function formField(f, prefix, value, secretSaved) {
     const id = prefix + f.key;
     const input = el("input", {
       id, name: f.key, type: { email: "email", password: "password" }[f.input] || "text",
       inputmode: f.input === "number" ? "decimal" : null, autocapitalize: "off", spellcheck: "false",
-      autocomplete: f.input === "email" ? "username" : f.input === "password" ? "current-password" : "off",
+      autocomplete: f.input === "email" ? "username" : f.input === "password" ? (secretSaved ? "new-password" : "current-password") : "off",
     });
-    if (f.default) input.placeholder = f.default;
-    input.required = !!f.required;
-    const help = f.help ? el("p", { class: "help", text: f.help }) : null;
+    if (f.input === "password" && secretSaved) input.placeholder = "••••••••";
+    else if (f.default) input.placeholder = f.default;
+    if (value != null) input.value = value;
+    input.required = !!f.required && !(f.input === "password" && secretSaved);
+    const help = f.input === "password" && secretSaved ? tEl("p", { class: "help" }, "integ.passwordSaved")
+      : f.help ? el("p", { class: "help", text: f.help }) : null;
     return el("div", { class: "form-field" },
       el("label", { for: id }, el("span", { text: f.label }), f.required ? null : tEl("span", { class: "opt" }, "common.optional")),
       el("span", { class: "field" }, input),
@@ -2255,6 +2323,39 @@
     }
     return settings;
   }
+
+  async function startEdit(i) {
+    const k = kindOf(i.kind);
+    if (!k) return;
+    let saved;
+    try { saved = await api("/api/integrations/" + encodeURIComponent(i.id) + "/settings"); }
+    catch (err) {
+      return openSheet({ title: t("integ.edit.cant", { title: i.title }), body: [el("p", { class: "body-text", text: err.message })], actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }] });
+    }
+    const values = saved.settings || {};
+    const secrets = new Set(saved.secrets_set || []);
+    const fields = el("div", { class: "stack-12" }, k.fields.map((f) => formField(f, "ef-", f.input === "password" ? null : values[f.key], secrets.has(f.key))));
+    const error = el("p", { class: "hint warn", role: "alert", hidden: true });
+    const save = tEl("button", { type: "submit", class: "btn-send ok" }, "common.save");
+    const form = el("form", { class: "integ stack-12", autocomplete: "off", "aria-label": t("integ.edit.kicker") + " " + i.title },
+      el("div", { class: "integ-row" }, iconFor(i.kind), el("div", { class: "integ-name" }, tEl("p", { class: "kicker" }, "integ.edit.kicker"), el("p", { class: "integ-title", text: i.title }))),
+      fields, error,
+      el("div", { class: "actions" }, tEl("button", { type: "button", class: "btn-plain sm", onclick: stopEdit }, "common.cancel"), save));
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      save.disabled = true; error.hidden = true;
+      try {
+        await api("/api/integrations/" + encodeURIComponent(i.id), { method: "PUT", body: JSON.stringify({ settings: formValues(fields) }) });
+        stopEdit();
+        await tick();
+      } catch (err) { error.textContent = err.message; error.hidden = false; save.disabled = false; }
+    });
+    editing = i.id; editForm = form;
+    invalidateIntegrations();
+    const first = form.querySelector("input");
+    if (first) first.focus();
+  }
+  function stopEdit() { const id = editing; editing = null; editForm = null; invalidateIntegrations(); if (id) focusKebab(id); }
 
   // Add integration: pick a kind, then fill in its form.
   let addingKind = null;
@@ -2285,7 +2386,7 @@
     $("add-summary").textContent = k.summary;
     $("add-error").hidden = true;
     $("add-note").hidden = kindsPersistent;
-    $("add-fields").replaceChildren(...k.fields.map((f) => formField(f, "af-")));
+    $("add-fields").replaceChildren(...k.fields.map((f) => formField(f, "af-", null, false)));
     const first = $("add-fields").querySelector("input");
     if (first) first.focus();
   }

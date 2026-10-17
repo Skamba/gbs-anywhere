@@ -181,7 +181,25 @@ async fn main() -> anyhow::Result<()> {
         pairing_id: args.grinder_pairing_id,
     };
     x.start_settings(startup, file.clone())?;
+    let data = file.as_ref().map(|f| f.data()).unwrap_or_default();
     for (kind, settings) in args.integrations.configured() {
+        if let Some(moved) = data.moved(kind.id) {
+            if kind.same_settings(&moved.settings, &settings) {
+                tracing::info!(
+                    "{}: moved into the app; its command-line settings are ignored and can be \
+                     removed",
+                    kind.title
+                );
+            } else {
+                tracing::warn!(
+                    "{}: moved into the app; its command-line settings differ from the app's \
+                     and are ignored (remove them, or delete it in the app and restart to use \
+                     them)",
+                    kind.title
+                );
+            }
+            continue;
+        }
         x.integrations().start_cli(&x, kind, &settings)?;
     }
     if let Some(file) = file {

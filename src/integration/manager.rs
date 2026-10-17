@@ -2,6 +2,7 @@
 //! or added in the app, and how the app's ones are kept in the settings file
 //! across restarts.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use anyhow::Context;
@@ -28,17 +29,36 @@ pub struct View {
     #[serde(flatten)]
     pub status: StatusSnapshot,
     pub source: Source,
+    /// Set on the command line and can be moved into the app (there is a
+    /// settings file to keep it in).
+    pub adoptable: bool,
+    /// Moved into the app from the command line: deleting it lets its flags
+    /// start it again at the next start.
+    pub from_command_line: bool,
 }
 
-/// Why adding or removing failed.
+/// The settings of an integration added in the app, as the app may see them
+/// to edit it: no passwords, only which of them are set.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FormView {
+    pub kind: String,
+    pub settings: BTreeMap<String, String>,
+    pub secrets_set: Vec<String>,
+}
+
+/// Why a change failed. Nothing changed in any case.
 #[derive(Debug, PartialEq)]
 pub enum ChangeError {
     /// The settings do not work for this integration.
     Invalid(String),
     NotFound,
-    /// Set on the command line, so it can't be removed from the app.
+    /// Set on the command line, so the app can't change or remove it.
     CommandLine,
-    /// The settings file could not be written; nothing changed.
+    /// Already added in the app (or moved there).
+    InApp,
+    /// No settings file to keep it in.
+    NotPersistent,
+    /// The settings file could not be written.
     Save(String),
 }
 
@@ -47,9 +67,13 @@ impl std::fmt::Display for ChangeError {
         match self {
             Self::Invalid(e) => f.write_str(e),
             Self::NotFound => f.write_str("no such integration"),
-            Self::CommandLine => {
-                f.write_str("set on the command line: remove its flags to turn it off")
-            }
+            Self::CommandLine => f.write_str(
+                "set on the command line: change or remove its flags, or move it into the app",
+            ),
+            Self::InApp => f.write_str("already managed in the app"),
+            Self::NotPersistent => f.write_str(
+                "there is no settings file to keep it in: start gbs-anywhere with --config",
+            ),
             Self::Save(e) => write!(f, "could not save the settings: {e}"),
         }
     }
@@ -60,8 +84,14 @@ impl std::error::Error for ChangeError {}
 struct Entry {
     status: Status,
     source: Source,
+    /// `None` for an entry in the settings file that this version has no
+    /// kind for.
+    kind: Option<&'static Kind>,
     /// What goes into the settings file (app entries only).
     saved: Option<SavedIntegration>,
+    /// The settings from the flags (command-line entries only), for moving
+    /// it into the app. Never shown.
+    cli: Option<Settings>,
     task: Option<AbortHandle>,
 }
 
@@ -84,13 +114,8 @@ impl Integrations {
     }
 
     pub fn list(&self) -> Vec<View> {
-        self.lock()
-            .iter()
-            .map(|e| View {
-                status: e.status.snapshot(),
-                source: e.source,
-            })
-            .collect()
+        let persistent = self.persistent();
+        self.lock().iter().map(|e| view(e, persistent)).collect()
     }
 
     /// Whether integrations added in the app survive a restart.
@@ -120,7 +145,9 @@ impl Integrations {
         entries.push(Entry {
             status,
             source: Source::CommandLine,
+            kind: Some(kind),
             saved: None,
+            cli: Some(settings.clone()),
             task: Some(task),
         });
         Ok(())
@@ -143,11 +170,14 @@ impl Integrations {
         entries.push(Entry {
             status: status.clone(),
             source: Source::App,
+            kind: Some(kind),
             saved: Some(SavedIntegration {
                 id: id.clone(),
                 kind: kind.id.to_owned(),
                 settings,
+                from_command_line: false,
             }),
+            cli: None,
             task: None,
         });
         if let Err(e) = self.save(&entries) {
@@ -180,6 +210,118 @@ impl Integrations {
         }
         tracing::info!("{}: removed ({id})", entry.status.title());
         Ok(())
+    }
+
+    /// The settings of one added in the app, for editing: passwords left out.
+    pub fn form(&self, id: &str) -> Result<FormView, ChangeError> {
+        let entries = self.lock();
+        let entry = entries
+            .iter()
+            .find(|e| e.id() == id)
+            .ok_or(ChangeError::NotFound)?;
+        let saved = match (&entry.saved, entry.source) {
+            (Some(saved), Source::App) => saved,
+            _ => return Err(ChangeError::CommandLine),
+        };
+        // Without its kind, which fields are passwords is not known: none
+        // are shown.
+        let (settings, secrets_set) = match entry.kind {
+            Some(kind) => kind.shown(&saved.settings),
+            None => Default::default(),
+        };
+        Ok(FormView {
+            kind: saved.kind.clone(),
+            settings,
+            secrets_set,
+        })
+    }
+
+    /// Changes the settings of one added in the app and restarts it. A
+    /// password left out or empty keeps its saved value.
+    pub fn update(
+        &self,
+        server: &Arc<Server>,
+        id: &str,
+        settings: Settings,
+    ) -> Result<(), ChangeError> {
+        let mut entries = self.lock();
+        let i = entries
+            .iter()
+            .position(|e| e.id() == id)
+            .ok_or(ChangeError::NotFound)?;
+        let entry = &entries[i];
+        let Some(saved) = entry.saved.clone().filter(|_| entry.source == Source::App) else {
+            return Err(ChangeError::CommandLine);
+        };
+        let kind = entry.kind.ok_or_else(|| {
+            ChangeError::Invalid(format!(
+                "this version of gbs-anywhere has no `{}` integration",
+                saved.kind
+            ))
+        })?;
+        let settings = kind.keep_secrets(settings, &saved.settings);
+        let integration = kind
+            .create(&settings, true)
+            .map_err(|e| ChangeError::Invalid(format!("{e:#}")))?;
+        entries[i].saved = Some(SavedIntegration {
+            settings,
+            ..saved.clone()
+        });
+        if let Err(e) = self.save(&entries) {
+            entries[i].saved = Some(saved);
+            return Err(ChangeError::Save(format!("{e:#}")));
+        }
+        let entry = &mut entries[i];
+        if let Some(task) = entry.task.take() {
+            task.abort();
+        }
+        entry.status = Status::new(id, kind.id, kind.title);
+        entry.task = Some(spawn(server, integration, entry.status.clone()));
+        tracing::info!("{}: settings changed in the app ({id})", kind.title);
+        Ok(())
+    }
+
+    /// Moves one set on the command line into the app: its settings are
+    /// saved as an app entry with the same id, marked as moved. While that
+    /// entry is in the settings file, the flags are ignored. It keeps
+    /// running as it is.
+    pub fn adopt(&self, id: &str) -> Result<View, ChangeError> {
+        if !self.persistent() {
+            return Err(ChangeError::NotPersistent);
+        }
+        let mut entries = self.lock();
+        let i = entries
+            .iter()
+            .position(|e| e.id() == id)
+            .ok_or(ChangeError::NotFound)?;
+        let entry = &entries[i];
+        let (Source::CommandLine, Some(kind), Some(settings)) =
+            (entry.source, entry.kind, entry.cli.clone())
+        else {
+            return Err(ChangeError::InApp);
+        };
+        // A setting that is not on the form (a test server) would be lost,
+        // and the next start would use the vendor's real service.
+        kind.create(&settings, true)
+            .map_err(|e| ChangeError::Invalid(format!("can't be moved into the app: {e:#}")))?;
+        entries[i].source = Source::App;
+        entries[i].saved = Some(SavedIntegration {
+            id: id.to_owned(),
+            kind: kind.id.to_owned(),
+            settings,
+            from_command_line: true,
+        });
+        if let Err(e) = self.save(&entries) {
+            entries[i].source = Source::CommandLine;
+            entries[i].saved = None;
+            return Err(ChangeError::Save(format!("{e:#}")));
+        }
+        tracing::info!(
+            "{}: moved into the app ({id}); its command-line settings are ignored from the next \
+             start on while it is there",
+            kind.title
+        );
+        Ok(view(&entries[i], true))
     }
 
     /// Uses `file` as the settings file: starts what it holds and saves
@@ -223,7 +365,9 @@ impl Integrations {
             entries.push(Entry {
                 status,
                 source: Source::App,
+                kind,
                 saved: Some(saved),
+                cli: None,
                 task,
             });
         }
@@ -255,6 +399,15 @@ fn free_id(entries: &[Entry], base: &str) -> String {
         .map(|n| format!("{base}-{n}"))
         .find(|id| !taken(id))
         .expect("a free id")
+}
+
+fn view(e: &Entry, persistent: bool) -> View {
+    View {
+        status: e.status.snapshot(),
+        source: e.source,
+        adoptable: persistent && e.source == Source::CommandLine && e.cli.is_some(),
+        from_command_line: e.saved.as_ref().is_some_and(|s| s.from_command_line),
+    }
 }
 
 /// The app's entries, as the settings file keeps them.
@@ -310,8 +463,41 @@ mod tests {
         build: |_| Ok(Box::new(Idle)),
     };
 
+    /// A cloud with a login, like La Marzocco's.
+    static CLOUD: Kind = Kind {
+        id: "cloud",
+        title: "Test cloud",
+        summary: "",
+        icon: "",
+        fields: &[
+            Field {
+                key: "user",
+                label: "User",
+                help: "",
+                input: Input::Email,
+                required: true,
+                default: "",
+            },
+            Field {
+                key: "pass",
+                label: "Password",
+                help: "",
+                input: Input::Password,
+                required: true,
+                default: "",
+            },
+        ],
+        build: |_| Ok(Box::new(Idle)),
+    };
+
     fn host(h: &str) -> Settings {
         Settings::new().with("host", Some(h))
+    }
+
+    fn login(user: &str, pass: &str) -> Settings {
+        Settings::new()
+            .with("user", Some(user))
+            .with("pass", Some(pass))
     }
 
     fn ids(x: &Server) -> Vec<String> {
@@ -345,6 +531,7 @@ mod tests {
         tokio::task::yield_now().await;
         assert_eq!(m.list()[1].status.health, Health::Connected);
         assert_eq!(m.list()[1].source, Source::App);
+        assert!(!m.list()[0].adoptable, "no settings file to move it into");
 
         assert_eq!(
             m.add(&x, &SCALE, Settings::new()),
@@ -356,6 +543,7 @@ mod tests {
         assert_eq!(ids(&x), ["scale", "scale-3"]);
         // A freed id is reused.
         assert_eq!(m.add(&x, &SCALE, host("d")).unwrap(), "scale-2");
+        assert_eq!(m.adopt("scale").err(), Some(ChangeError::NotPersistent));
     }
 
     #[tokio::test]
@@ -404,6 +592,7 @@ mod tests {
         let path = temp_file("fail");
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
+        m.start_cli(&x, &SCALE, &host("cli")).unwrap();
         m.load(&x, open(&path), &[&SCALE]).unwrap();
         // Replace the file with a directory: renaming onto it fails.
         std::fs::remove_file(&path).unwrap();
@@ -412,7 +601,115 @@ mod tests {
             m.add(&x, &SCALE, host("a")),
             Err(ChangeError::Save(_))
         ));
-        assert!(ids(&x).is_empty());
+        assert_eq!(ids(&x), ["scale"]);
+        assert!(matches!(m.adopt("scale"), Err(ChangeError::Save(_))));
+        assert_eq!(m.list()[0].source, Source::CommandLine);
+        // Editing too: the saved settings stay as they were.
+        std::fs::remove_dir(&path).unwrap();
+        let app = m.add(&x, &SCALE, host("app")).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(matches!(
+            m.update(&x, &app, host("b")),
+            Err(ChangeError::Save(_))
+        ));
+        let form = m.form(&app).unwrap();
+        assert_eq!(form.settings.get("host").map(String::as_str), Some("app"));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn edit_keeps_the_saved_password() {
+        let path = temp_file("edit");
+        let x = Server::new(MachineConfig::default());
+        let m = x.integrations();
+        m.load(&x, open(&path), &[&CLOUD]).unwrap();
+        let id = m
+            .add(&x, &CLOUD, login("me@example.com", "secret"))
+            .unwrap();
+        let form = m.form(&id).unwrap();
+        assert_eq!(form.kind, "cloud");
+        assert_eq!(
+            form.settings.get("user").map(String::as_str),
+            Some("me@example.com")
+        );
+        assert!(
+            !form.settings.contains_key("pass"),
+            "passwords never go out"
+        );
+        assert_eq!(form.secrets_set, ["pass"]);
+
+        // A new user name, the password left empty: the saved one stays.
+        let edit = Settings::new()
+            .with("user", Some("you@example.com"))
+            .with("pass", Some(""));
+        m.update(&x, &id, edit).unwrap();
+        let saved = &open(&path).data().integrations[0];
+        assert_eq!(saved.settings.text("user"), Some("you@example.com"));
+        assert_eq!(saved.settings.secret("pass"), Some("secret"));
+        tokio::task::yield_now().await;
+        assert_eq!(m.list()[0].status.health, Health::Connected, "restarted");
+
+        assert_eq!(
+            m.update(&x, &id, Settings::new().with("pass", Some("x"))),
+            Err(ChangeError::Invalid("User is required".into()))
+        );
+        assert_eq!(
+            m.update(&x, "nope", Settings::new()),
+            Err(ChangeError::NotFound)
+        );
+        assert_eq!(m.form("nope"), Err(ChangeError::NotFound));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_command_line_one_moves_into_the_app() {
+        let path = temp_file("adopt");
+        let x = Server::new(MachineConfig::default());
+        let m = x.integrations();
+        let cli = login("me@example.com", "secret");
+        m.start_cli(&x, &CLOUD, &cli).unwrap();
+        // One with a setting that is not on the form (a test server).
+        let test = cli.clone().with("base_url", Some("http://127.0.0.1:9"));
+        m.start_cli(&x, &CLOUD, &test).unwrap();
+        m.load(&x, open(&path), &[&CLOUD]).unwrap();
+        assert!(m.list()[0].adoptable);
+        assert!(matches!(m.adopt("cloud-2"), Err(ChangeError::Invalid(_))));
+        assert_eq!(m.list()[1].source, Source::CommandLine);
+        assert_eq!(m.form("cloud"), Err(ChangeError::CommandLine));
+        assert_eq!(
+            m.update(&x, "cloud", cli.clone()),
+            Err(ChangeError::CommandLine)
+        );
+
+        let view = m.adopt("cloud").unwrap();
+        assert_eq!(
+            (view.status.id.as_str(), view.source),
+            ("cloud", Source::App)
+        );
+        assert!(!view.adoptable);
+        assert!(view.from_command_line);
+        assert_eq!(m.adopt("cloud").err(), Some(ChangeError::InApp));
+        assert_eq!(m.adopt("nope").err(), Some(ChangeError::NotFound));
+        let data = open(&path).data();
+        let saved = data.moved("cloud").expect("marked as moved");
+        assert_eq!(
+            (saved.id.as_str(), saved.settings.secret("pass")),
+            ("cloud", Some("secret"))
+        );
+        assert_eq!(m.form("cloud").unwrap().secrets_set, ["pass"]);
+
+        // Still moved after an edit.
+        let edit = Settings::new().with("user", Some("you@example.com"));
+        m.update(&x, "cloud", edit).unwrap();
+        assert!(open(&path).data().moved("cloud").is_some());
+
+        // Deleted in the app: the mark goes with it, so the flags apply
+        // again at the next start.
+        m.remove("cloud").unwrap();
+        let data = open(&path).data();
+        assert!(data.integrations.is_empty());
+        assert!(data.moved("cloud").is_none());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

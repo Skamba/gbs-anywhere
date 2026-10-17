@@ -9,6 +9,9 @@
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30"}` (any of them) — changes and saves them; they win over flags from then on |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
+//! | GET | `/api/integrations/<id>/settings` | the settings of one added in the app, without passwords (`secrets_set` names the ones that are set) |
+//! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes one added in the app and restarts it; a password left out or empty stays |
+//! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
 //! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first; `capacity` (200); `persistent`: whether they survive a restart |
 //! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (INFO and up) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
@@ -61,7 +64,12 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
         .route("/api/shot/start", post(shot_start))
         .route("/api/integrations", post(add_integration))
         .route("/api/integrations/kinds", get(integration_kinds))
-        .route("/api/integrations/{id}", delete(remove_integration))
+        .route(
+            "/api/integrations/{id}",
+            delete(remove_integration).put(update_integration),
+        )
+        .route("/api/integrations/{id}/settings", get(integration_settings))
+        .route("/api/integrations/{id}/adopt", post(adopt_integration))
         .route("/api/machine", post(patch_machine))
         .route("/api/grinder/pairing", post(grinder_pairing))
         .route("/api/overrides", put(put_overrides).delete(clear_overrides))
@@ -344,6 +352,37 @@ async fn add_integration(
     }
 }
 
+async fn integration_settings(State(x): State<Arc<Server>>, Path(id): Path<String>) -> Response {
+    match x.integrations().form(&id) {
+        Ok(form) => Json(form).into_response(),
+        Err(e) => change_error(&e),
+    }
+}
+
+#[derive(Deserialize)]
+struct UpdateIntegration {
+    #[serde(default)]
+    settings: Settings,
+}
+
+async fn update_integration(
+    State(x): State<Arc<Server>>,
+    Path(id): Path<String>,
+    Json(req): Json<UpdateIntegration>,
+) -> Response {
+    match x.integrations().update(&x, &id, req.settings) {
+        Ok(()) => Json(json!({ "id": id })).into_response(),
+        Err(e) => change_error(&e),
+    }
+}
+
+async fn adopt_integration(State(x): State<Arc<Server>>, Path(id): Path<String>) -> Response {
+    match x.integrations().adopt(&id) {
+        Ok(view) => Json(view).into_response(),
+        Err(e) => change_error(&e),
+    }
+}
+
 async fn remove_integration(State(x): State<Arc<Server>>, Path(id): Path<String>) -> Response {
     match x.integrations().remove(&id) {
         Ok(()) => Json(json!({ "removed": id })).into_response(),
@@ -379,7 +418,9 @@ fn change_error(e: &ChangeError) -> Response {
     let code = match e {
         ChangeError::Invalid(_) => StatusCode::BAD_REQUEST,
         ChangeError::NotFound => StatusCode::NOT_FOUND,
-        ChangeError::CommandLine => StatusCode::CONFLICT,
+        ChangeError::CommandLine | ChangeError::InApp | ChangeError::NotPersistent => {
+            StatusCode::CONFLICT
+        }
         ChangeError::Save(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error(code, &e.to_string())

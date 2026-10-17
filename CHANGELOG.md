@@ -33,6 +33,12 @@ a minor release may change behaviour.
   `--grinder` from then on (`PUT /api/settings`, `settings` in
   `GET /api/state`). Going back to an earlier version forgets the settings
   changed in the app.
+- Integrations added in the app can be changed there; a password left empty
+  keeps the saved one. An integration set with flags can be moved into the
+  app, with all its settings, so nothing has to be typed again; its flags
+  are ignored from the next start on while it is in the app, and can be
+  removed (`GET /api/integrations/<id>/settings`,
+  `PUT /api/integrations/<id>`, `POST /api/integrations/<id>/adopt`).
 - Shot history: the last 200 shots the grinder asked for, with time, weight,
   target and how they ended, kept in `history.json` next to the settings
   file (`GET /api/history`).
@@ -79,6 +85,9 @@ a minor release may change behaviour.
 - `--grinder` refuses an address that cannot be one (for example with a
   space in it) at startup, instead of failing on every request.
 - A fractional `--brew-timeout-s` is rounded to whole seconds.
+- The La Marzocco form calls its poll setting "Check interval (seconds)" and
+  says what it does; the Half Decent Scale form asks for the scale's IP
+  address.
 - Unreleased builds are now published once a night as the `nightly` image
   tag, and only on nights when something changed. The `main` and `sha-*`
   tags are no longer updated; switch from `:main` to `:nightly`. `latest`
