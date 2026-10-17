@@ -90,6 +90,53 @@ impl Kind {
     pub fn field(&self, key: &str) -> Option<&Field> {
         self.fields.iter().find(|f| f.key == key)
     }
+
+    /// Only the keys on the form: what the app may set, and what is kept
+    /// when an integration moves from the command line into the app.
+    pub fn form_only(&self, settings: &Settings) -> Settings {
+        Settings(
+            settings
+                .0
+                .iter()
+                .filter(|(k, _)| self.field(k).is_some())
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        )
+    }
+
+    /// The form's values as the app may see them: everything but passwords,
+    /// and which passwords have a value.
+    pub fn shown(&self, settings: &Settings) -> (BTreeMap<String, String>, Vec<String>) {
+        let mut shown = BTreeMap::new();
+        let mut secrets_set = Vec::new();
+        for f in self.fields {
+            match f.input {
+                Input::Password if settings.secret(f.key).is_some() => {
+                    secrets_set.push(f.key.to_owned());
+                }
+                Input::Password => {}
+                _ => {
+                    if let Some(v) = settings.0.get(f.key) {
+                        shown.insert(f.key.to_owned(), v.clone());
+                    }
+                }
+            }
+        }
+        (shown, secrets_set)
+    }
+
+    /// `new` as the app sent it, with each password that is missing or empty
+    /// there taking its value from `old`.
+    pub fn keep_secrets(&self, mut new: Settings, old: &Settings) -> Settings {
+        for f in self.fields.iter().filter(|f| f.input == Input::Password) {
+            if new.secret(f.key).is_none()
+                && let Some(v) = old.secret(f.key)
+            {
+                new.0.insert(f.key.to_owned(), v.to_owned());
+            }
+        }
+        new
+    }
 }
 
 /// Filled-in form values by field key. Everything is a string, as typed.
@@ -225,5 +272,33 @@ mod tests {
         let hidden = ok.with("base_url", Some("http://x"));
         assert_eq!(err(&hidden, true), "unknown setting `base_url`");
         assert!(KIND.create(&hidden, false).is_ok());
+        assert_eq!(KIND.form_only(&hidden).text("base_url"), None);
+        assert_eq!(KIND.form_only(&hidden).text("user"), Some("me"));
+    }
+
+    #[test]
+    fn passwords_stay_in() {
+        let saved = Settings::new()
+            .with("user", Some("me"))
+            .with("pass", Some("secret"))
+            .with("every", Some("3"));
+        let (shown, secrets_set) = KIND.shown(&saved);
+        assert_eq!(shown.get("user").map(String::as_str), Some("me"));
+        assert_eq!(shown.get("every").map(String::as_str), Some("3"));
+        assert!(!shown.contains_key("pass"), "never sent out");
+        assert_eq!(secrets_set, ["pass"]);
+        assert!(KIND.shown(&Settings::new()).1.is_empty());
+
+        // Left out or empty: the saved one. Typed: the new one.
+        let edited = Settings::new().with("user", Some("you"));
+        let merged = KIND.keep_secrets(edited.clone().with("pass", Some("")), &saved);
+        assert_eq!(merged.secret("pass"), Some("secret"));
+        assert_eq!(merged.text("user"), Some("you"));
+        assert_eq!(
+            KIND.keep_secrets(edited.clone(), &saved).secret("pass"),
+            Some("secret")
+        );
+        let typed = KIND.keep_secrets(edited.with("pass", Some("new")), &saved);
+        assert_eq!(typed.secret("pass"), Some("new"));
     }
 }

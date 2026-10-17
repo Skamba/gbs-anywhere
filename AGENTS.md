@@ -96,9 +96,11 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   integration shares: a shot counts only while the grinder waits after a knob
   press (on an E65/E80 GbS: after a Grind-by-Sync grind), and a missing
   weight falls back to the recipe weight.
-- Secrets are `Input::Password` fields. Settings never go back out through
-  the API or into logs. Keys that are not on the form, such as a test base
-  URL, stay command-line only.
+- Secrets are `Input::Password` fields. Passwords never go back out through
+  the API or into logs. The other form values come back for editing
+  (`GET /api/integrations/<id>/settings`, where `secrets_set` only names the
+  passwords that are set). Keys that are not on the form, such as a test
+  base URL, stay command-line only.
 - Vendor logos are trademarks: draw a generic glyph for `icon.svg`. People
   can supply their own icons with `--icons`.
 - Test against a local fake of the vendor's service. Don't send test traffic

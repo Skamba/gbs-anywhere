@@ -184,12 +184,20 @@ integrations run at once.
 
 Under **Status → Machine integrations**, tap the green **+**, pick one and
 fill in its form. Each integration gets a card showing whether it is ready
-and what it last sent; its ⋮ menu has **Delete**. Integrations added in the
-app are saved, with their passwords, in `/data` (from source: the `--config`
-file); without one they last until the next restart.
+and what it last sent; its ⋮ menu has **Edit** and **Delete**. Integrations
+added in the app are saved, with their passwords, in `/data` (from source:
+the `--config` file); without one they last until the next restart.
+
+An integration added in the app can be changed there too. Its passwords are
+never shown again; leave a password empty to keep the saved one.
 
 Integrations can also be set with flags or environment variables. Those show
-"From the start settings" and can only be turned off by removing the flags.
+"From the start settings" and can only be turned off by removing the flags,
+or by moving them into the app first: with a settings file, the app offers to
+take such an integration over, settings and password included, so there is
+nothing to type again. From the next start on its flags are ignored (the log
+says so once) and can be removed whenever it suits you; from then on it is
+changed and removed in the app like any other.
 
 | integration | reads | setup |
 |---|---|---|
@@ -229,7 +237,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | flag | default | what |
 |---|---|---|
 | `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever); **Time to pull the shot** set in the app wins |
-| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
+| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings, integrations moved from the command line); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
 | `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
 | `-p, --ports <list>` | 80 | ports to serve on |
@@ -251,9 +259,10 @@ e.g. `POST /api/shot/result` with `{"time_s":30,"weight_g":36}`, or follow
 `GET /api/events/stream`. All routes are listed in
 [`src/server/control_api.rs`](src/server/control_api.rs).
 
-The API has no login: anyone on your network who can open the app can add or
-remove integrations, change the settings, including the grinder address, and
-read the log, as they can report shots. Passwords are never sent back.
+The API has no login: anyone on your network who can open the app can add,
+change or remove integrations, change the settings, including the grinder
+address, and read the log, as they can report shots. Passwords are never
+sent back.
 
 ## Build and contribute
 

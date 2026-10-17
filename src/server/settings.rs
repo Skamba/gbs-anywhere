@@ -51,6 +51,10 @@ pub struct FileData {
     /// Settings changed in the app.
     #[serde(default, skip_serializing_if = "AppSettings::is_empty")]
     pub settings: AppSettings,
+    /// Kinds of integration moved from the command line into the app: their
+    /// flags and environment variables are ignored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adopted: Vec<String>,
     /// Keys this version does not know (written by a newer one), kept.
     #[serde(flatten)]
     pub other: Map<String, Value>,
@@ -599,6 +603,7 @@ mod tests {
             json!({ "shot_window_s": 120, "grinder_host": null })
         );
         assert_eq!(text["integrations"][0]["settings"]["host"], "x");
+        assert!(text.get("adopted").is_none(), "left out while empty");
 
         let again = SettingsFile::open(&path).unwrap();
         assert_eq!(
@@ -622,11 +627,8 @@ mod tests {
         let file = SettingsFile::open(&path).unwrap();
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
-        assert!(
-            file.update(|d| d.settings.shot_window_s = Some(120))
-                .is_err()
-        );
-        assert!(file.data().settings.is_empty());
+        assert!(file.update(|d| d.adopted.push("x".into())).is_err());
+        assert!(file.data().adopted.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }
 

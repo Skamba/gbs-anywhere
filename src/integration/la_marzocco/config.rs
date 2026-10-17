@@ -35,8 +35,10 @@ pub const FIELDS: &[Field] = &[
     },
     Field {
         key: "poll_s",
-        label: "Seconds between checks",
-        help: "How often to look for the new coffee while the grinder waits.",
+        label: "Check interval (seconds)",
+        help: "After the grind, how often gbs-anywhere asks the La Marzocco cloud whether \
+               the shot has been logged. Lower reports sooner but sends more requests. \
+               Default: 3 (1 to 60).",
         input: Input::Number,
         required: false,
         default: "3",

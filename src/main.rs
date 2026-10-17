@@ -181,7 +181,15 @@ async fn main() -> anyhow::Result<()> {
         pairing_id: args.grinder_pairing_id,
     };
     x.start_settings(startup, file.clone())?;
+    let adopted = file.as_ref().map(|f| f.data().adopted).unwrap_or_default();
     for (kind, settings) in args.integrations.configured() {
+        if adopted.iter().any(|k| k == kind.id) {
+            tracing::info!(
+                "{}: managed in the app; its command-line settings are ignored and can be removed",
+                kind.title
+            );
+            continue;
+        }
         x.integrations().start_cli(&x, kind, &settings)?;
     }
     if let Some(file) = file {
