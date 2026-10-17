@@ -14,18 +14,20 @@
 //! An E65/E80 GbS grinder is paired with `--grinder <its address>` instead:
 //! gbs-anywhere then asks it for each grind's brew job and answers with the
 //! shot.
+//!
+//! Settings changed in the app (shot window, grinder address) are saved in
+//! `--config` and win over their flags from then on.
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Context;
 use clap::Parser;
 use gbs_anywhere::integration;
 use gbs_anywhere::protocol::machine::EventRecord;
 use gbs_anywhere::protocol::{MachineConfig, MachineEvent, ShotResult};
-use gbs_anywhere::server::{self, ServeConfig, Server};
+use gbs_anywhere::server::{self, ServeConfig, Server, SettingsFile, Startup};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -56,9 +58,10 @@ struct Args {
     #[arg(long, default_value_t = 6.0, value_parser = up_to_an_hour)]
     finishing_hold_s: f64,
 
-    /// Abort a brew after this many seconds without a reported result.
-    #[arg(long, default_value_t = 180.0, value_parser = up_to_an_hour)]
-    brew_timeout_s: f64,
+    /// Abort a brew after this many seconds without a reported result; 0
+    /// waits forever [default: 180]. A shot window set in the app wins.
+    #[arg(long, value_parser = up_to_an_hour, value_name = "S")]
+    brew_timeout_s: Option<f64>,
 
     /// Serial number to report (MA_SN).
     #[arg(long)]
@@ -84,7 +87,7 @@ struct Args {
 
     /// An E65/E80 GbS grinder to pair with over its "Generic WiFi" option:
     /// its address, e.g. 192.168.1.30. The E64 WS connects to gbs-anywhere
-    /// instead and needs nothing here.
+    /// instead and needs nothing here. An address set in the app wins.
     #[arg(long, env = "GRINDER_HOST", value_name = "HOST")]
     grinder: Option<String>,
 
@@ -112,10 +115,10 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     init_tracing();
     tracing::info!("gbs-anywhere {}", gbs_anywhere::version());
+    let file = args.config.as_deref().map(SettingsFile::open).transpose()?;
+    // The brew timeout follows the shot window (`start_settings` below).
     let mut config = MachineConfig {
         finishing_hold: Duration::from_secs_f64(args.finishing_hold_s),
-        brew_timeout: (args.brew_timeout_s > 0.0)
-            .then(|| Duration::from_secs_f64(args.brew_timeout_s)),
         ..MachineConfig::default()
     };
     if let Some(sn) = args.serial {
@@ -161,28 +164,23 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tokio::spawn(print_events(x.clone()));
-    if let Some(host) = &args.grinder {
-        let mut wifi = server::WifiConfig::from_host(host).context("--grinder")?;
-        wifi.pairing_file = args.grinder_pairing_file.clone().or_else(|| {
+    let startup = Startup {
+        shot_window_s: args.brew_timeout_s,
+        grinder_host: args.grinder.clone(),
+        pairing_file: args.grinder_pairing_file.clone().or_else(|| {
             args.config
                 .as_deref()
                 .map(|c| c.with_file_name("grinder-pairing.json"))
-        });
-        wifi.pairing_id = args.grinder_pairing_id;
-        if wifi.pairing_file.is_none() {
-            tracing::warn!(
-                "no --config or --grinder-pairing-file: the pairing lasts until restart"
-            );
-        }
-        tracing::info!("grinder: pairing over Generic WiFi with {}", wifi.base_url);
-        let link = server::WifiGrinder::new(wifi).context("--grinder")?;
-        tokio::spawn(link.run(x.clone()));
-    }
+        }),
+        pairing_id: args.grinder_pairing_id,
+    };
+    x.start_settings(startup, file.clone())?;
     for (kind, settings) in args.integrations.configured() {
         x.integrations().start_cli(&x, kind, &settings)?;
     }
-    if let Some(path) = &args.config {
-        let n = x.integrations().load(&x, path, integration::KINDS)?;
+    if let Some(file) = file {
+        let path = file.path().to_owned();
+        let n = x.integrations().load(&x, file, integration::KINDS)?;
         tracing::info!("settings in {}: {n} added in the app", path.display());
     }
     if !args.no_stdin {
@@ -364,7 +362,12 @@ mod tests {
             parse("--finishing-hold-s", "2.5").unwrap().finishing_hold_s,
             2.5
         );
-        assert_eq!(parse("--brew-timeout-s", "0").unwrap().brew_timeout_s, 0.0);
+        assert_eq!(
+            parse("--brew-timeout-s", "0").unwrap().brew_timeout_s,
+            Some(0.0)
+        );
+        let none = Args::try_parse_from(["gbs-anywhere"]).unwrap();
+        assert_eq!(none.brew_timeout_s, None, "the default is not a flag");
         for bad in ["-1", "3601", "1e20", "NaN", "inf", "soon"] {
             assert!(parse("--finishing-hold-s", bad).is_err(), "{bad}");
             assert!(parse("--brew-timeout-s", bad).is_err(), "{bad}");

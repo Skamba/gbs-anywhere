@@ -1,17 +1,16 @@
 //! The integrations that are running, whether started from the command line
-//! or added in the app, and the settings file that keeps the app's ones
+//! or added in the app, and how the app's ones are kept in the settings file
 //! across restarts.
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::task::AbortHandle;
 
 use super::{Integration, Kind, Link, Settings, Status, StatusSnapshot};
 use crate::server::Server;
+use crate::server::settings::{SavedIntegration, SettingsFile};
 
 /// Where an integration came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -58,26 +57,11 @@ impl std::fmt::Display for ChangeError {
 
 impl std::error::Error for ChangeError {}
 
-/// What the settings file holds.
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct SettingsFile {
-    #[serde(default)]
-    integrations: Vec<Saved>,
-}
-
-/// One integration added in the app.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Saved {
-    id: String,
-    kind: String,
-    settings: Settings,
-}
-
 struct Entry {
     status: Status,
     source: Source,
     /// What goes into the settings file (app entries only).
-    saved: Option<Saved>,
+    saved: Option<SavedIntegration>,
     task: Option<AbortHandle>,
 }
 
@@ -91,7 +75,7 @@ impl Entry {
 #[derive(Default)]
 pub struct Integrations {
     entries: Mutex<Vec<Entry>>,
-    file: OnceLock<PathBuf>,
+    file: OnceLock<Arc<SettingsFile>>,
 }
 
 impl Integrations {
@@ -159,7 +143,7 @@ impl Integrations {
         entries.push(Entry {
             status: status.clone(),
             source: Source::App,
-            saved: Some(Saved {
+            saved: Some(SavedIntegration {
                 id: id.clone(),
                 kind: kind.id.to_owned(),
                 settings,
@@ -198,29 +182,24 @@ impl Integrations {
         Ok(())
     }
 
-    /// Uses `path` as the settings file: starts what it holds and saves
-    /// every later change there. A missing file is created, so a directory
-    /// that is not writable fails here rather than on the first change.
-    /// Entries that cannot start (a kind this version does not have,
-    /// settings it rejects) are shown with the error and kept in the file.
+    /// Uses `file` as the settings file: starts what it holds and saves
+    /// every later change there. Entries that cannot start (a kind this
+    /// version does not have, settings it rejects) are shown with the error
+    /// and kept in the file.
     pub fn load(
         &self,
         server: &Arc<Server>,
-        path: &Path,
+        file: Arc<SettingsFile>,
         catalog: &[&'static Kind],
     ) -> anyhow::Result<usize> {
-        let file: SettingsFile = match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .with_context(|| format!("{}: not a settings file", path.display()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => SettingsFile::default(),
-            Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
-        };
-        if self.file.set(path.to_owned()).is_err() {
+        let saved_entries = file.data().integrations;
+        let path = file.path().to_owned();
+        if self.file.set(file).is_err() {
             anyhow::bail!("settings file already loaded");
         }
         let mut entries = self.lock();
-        let count = file.integrations.len();
-        for mut saved in file.integrations {
+        let count = saved_entries.len();
+        for mut saved in saved_entries {
             let kind = catalog.iter().copied().find(|k| k.id == saved.kind);
             saved.id = free_id(&entries, &saved.id);
             let title = kind.map_or(saved.kind.as_str(), |k| k.title).to_owned();
@@ -248,25 +227,17 @@ impl Integrations {
                 task,
             });
         }
+        // Ids that had to change are kept.
         self.save(&entries)?;
         Ok(count)
     }
 
     fn save(&self, entries: &[Entry]) -> anyhow::Result<()> {
-        let Some(path) = self.file.get() else {
+        let Some(file) = self.file.get() else {
             return Ok(());
         };
-        let file = SettingsFile {
-            integrations: entries.iter().filter_map(|e| e.saved.clone()).collect(),
-        };
-        let json = serde_json::to_vec_pretty(&file)?;
-        // Write next to it and rename, so a crash never leaves half a file.
-        let mut tmp = path.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = PathBuf::from(tmp);
-        write_private(&tmp, &json).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
-        Ok(())
+        let list = saved_list(entries);
+        file.update(|d| d.integrations = list)
     }
 
     fn lock(&self) -> MutexGuard<'_, Vec<Entry>> {
@@ -286,18 +257,9 @@ fn free_id(entries: &[Entry], base: &str) -> String {
         .expect("a free id")
 }
 
-/// The file holds passwords: readable by the owner only.
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(path)?;
-    f.write_all(bytes)?;
-    f.sync_all()
+/// The app's entries, as the settings file keeps them.
+fn saved_list(entries: &[Entry]) -> Vec<SavedIntegration> {
+    entries.iter().filter_map(|e| e.saved.clone()).collect()
 }
 
 fn spawn(server: &Arc<Server>, integration: Box<dyn Integration>, status: Status) -> AbortHandle {
@@ -320,6 +282,7 @@ mod tests {
     use super::*;
     use crate::integration::{BoxFuture, Field, Health, Input};
     use crate::protocol::MachineConfig;
+    use std::path::PathBuf;
 
     struct Idle;
     impl Integration for Idle {
@@ -361,10 +324,13 @@ mod tests {
 
     fn temp_file(name: &str) -> PathBuf {
         let dir =
-            std::env::temp_dir().join(format!("gbs-anywhere-test-{}-{name}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
+            std::env::temp_dir().join(format!("gbs-anywhere-test-{name}-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("settings.json")
+    }
+
+    fn open(path: &std::path::Path) -> Arc<SettingsFile> {
+        SettingsFile::open(path).unwrap()
     }
 
     #[tokio::test]
@@ -398,7 +364,7 @@ mod tests {
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
         m.start_cli(&x, &SCALE, &host("cli")).unwrap();
-        assert_eq!(m.load(&x, &path, &[&SCALE]).unwrap(), 0);
+        assert_eq!(m.load(&x, open(&path), &[&SCALE]).unwrap(), 0);
         assert!(m.persistent());
         assert!(path.exists(), "created at load");
         m.add(&x, &SCALE, host("one")).unwrap();
@@ -420,7 +386,10 @@ mod tests {
         y.integrations()
             .start_cli(&y, &SCALE, &host("cli"))
             .unwrap();
-        assert_eq!(y.integrations().load(&y, &path, &[&SCALE]).unwrap(), 2);
+        assert_eq!(
+            y.integrations().load(&y, open(&path), &[&SCALE]).unwrap(),
+            2
+        );
         assert_eq!(ids(&y), ["scale", "scale-3", "gone"]);
         let gone = &y.integrations().list()[2];
         assert_eq!(gone.status.health, Health::Error);
@@ -435,7 +404,7 @@ mod tests {
         let path = temp_file("fail");
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
-        m.load(&x, &path, &[&SCALE]).unwrap();
+        m.load(&x, open(&path), &[&SCALE]).unwrap();
         // Replace the file with a directory: renaming onto it fails.
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
