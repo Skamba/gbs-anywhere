@@ -17,12 +17,15 @@ file is for agents changing the code.
 - `src/server/`: axum. `grinder_api.rs` is what the E64 WS calls
   (`/api/v2/*`); `wifi_grinder.rs` pairs with an E65/E80 GbS and turns its
   brew jobs into brews of the same machine; `control_api.rs` is the JSON API
-  and page for people. `tests.rs` and `wifi_grinder/tests.rs` hold the
-  end-to-end tests.
+  and page for people. Around them: `settings.rs` holds the settings people
+  change in the app (shot window, grinder address, which restarts the
+  E65/E80 link) and is the only writer of the settings file; `history.rs`
+  records the shots from the machine's events; `utc.rs` formats times.
+  `tests.rs` and `wifi_grinder/tests.rs` hold the end-to-end tests.
 - `src/integration/`: optional integrations that report shots by themselves,
   one folder each (see [Integrations](#integrations)). `mod.rs` has the
   shared rules (`Link`), `kind.rs` the setup forms and `manager.rs` the
-  running integrations and the `--config` settings file.
+  running integrations, saved through `server/settings.rs`.
 - `web/index.html`: the whole phone app (HTML, CSS, JS), no build step.
 - `src/main.rs`: flags and startup only.
 
@@ -105,11 +108,13 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   network that may have no internet access.
 - Colours are CSS variables on `:root`, redefined for dark mode. Use them
   instead of literal colours.
+- Every text the app writes is in the `STRINGS` catalog and goes through
+  `t()`.
 - Phone first: content at most 480 px wide, 16 px side padding, no
   horizontal scrolling.
 - Typing the time and weight by hand is the default flow and must work with no
-  integration set up. Integrations are optional, behind the green + in the
-  header.
+  integration set up. Integrations are optional, behind the green + under
+  Status → Machine integrations.
 
 ## Public repository wording
 

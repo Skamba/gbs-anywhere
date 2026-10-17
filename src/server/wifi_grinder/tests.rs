@@ -13,6 +13,7 @@ use tokio::net::TcpListener;
 
 use super::*;
 use crate::protocol::{MachineConfig, MachineError, Phase, ShotResult};
+use crate::server::wait_for;
 
 /// The pairing ID the fake hands out.
 const PAIRING_ID: u32 = 42;
@@ -247,16 +248,6 @@ async fn start_polling(
     (server, fake)
 }
 
-async fn wait_for(what: &str, cond: impl Fn() -> bool) {
-    for _ in 0..250 {
-        if cond() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("timed out waiting for {what}");
-}
-
 fn wifi(server: &Server) -> WifiLink {
     server
         .grinder_link()
@@ -316,6 +307,43 @@ fn addresses_get_the_api_port() {
     assert_eq!(url("[fe80::1]:4000"), "https://[fe80::1]:4000");
     assert_eq!(url("http://127.0.0.1:9"), "http://127.0.0.1:9");
     assert!(WifiConfig::from_host("  ").is_err());
+    assert!(WifiConfig::from_host("192.168.1.30\n").is_ok(), "trimmed");
+    for bad in ["two words", "192.168.1.30\r\nx", "a\tb", &"a".repeat(3000)] {
+        assert!(WifiConfig::from_host(bad).is_err(), "{bad:?}");
+    }
+}
+
+#[test]
+fn the_app_sets_only_a_host_and_port() {
+    let addr = |s: &str| grinder_address(s).map_err(|e| e.to_string());
+    assert_eq!(addr(" 192.168.1.30 ").unwrap(), "192.168.1.30");
+    assert_eq!(addr("Grinder.Local").unwrap(), "grinder.local");
+    assert_eq!(addr("192.168.1.30:4000").unwrap(), "192.168.1.30:4000");
+    assert_eq!(addr("192.168.1.30:").unwrap(), "192.168.1.30");
+    assert_eq!(addr("fe80::1").unwrap(), "[fe80::1]");
+    assert_eq!(addr("[FE80::1]:4000").unwrap(), "[fe80::1]:4000");
+    assert_eq!(addr("[fe80::1]").unwrap(), "[fe80::1]");
+    for bad in [
+        "",
+        "http://192.168.1.30",
+        "192.168.1.30/x",
+        "me@192.168.1.30",
+        "two words",
+        "192.168.1.30\nx",
+        "192.168.1.30:0",
+        "192.168.1.30:70000",
+        "192.168.1.30:80:80",
+        "[fe80::1",
+        "[nope]:1",
+        "-x",
+        &"a".repeat(256),
+    ] {
+        let e = addr(bad).unwrap_err();
+        assert!(e.contains("e.g. 192.168.1.30"), "{bad:?}: {e}");
+    }
+    // What the app sets always goes to the grinder over HTTPS.
+    let url = WifiConfig::from_host(&addr("[fe80::1]:4000").unwrap()).unwrap();
+    assert_eq!(url.base_url, "https://[fe80::1]:4000");
 }
 
 fn taken(fake: &Shared) -> usize {
@@ -329,6 +357,11 @@ async fn pairs_takes_the_job_at_once_then_sends_the_shot() {
 
     wait_for("pairing", || paired(&server)).await;
     assert_eq!(saved_id(&file), PAIRING_ID, "kept for the next start");
+    assert_eq!(
+        wifi(&server).pairing_id,
+        Some(PAIRING_ID),
+        "shown in the app"
+    );
     assert!(
         server.grinder_link().last_poll.is_some(),
         "shown as connected"
@@ -527,6 +560,40 @@ async fn a_closed_port_is_unreachable() {
         .unwrap_err();
     let e = anyhow::Error::new(refused).context("asking for brew jobs");
     assert!(unreachable(&e));
+}
+
+#[tokio::test]
+async fn the_app_sees_a_grinder_that_does_not_answer_until_it_does() {
+    // A port nobody listens on, like a grinder switched off for the night.
+    let addr = TcpListener::bind("127.0.0.1:0")
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let server = Server::new(MachineConfig::default());
+    let mut cfg = WifiConfig::from_host(&format!("http://{addr}")).unwrap();
+    cfg.poll = Duration::from_millis(20);
+    tokio::spawn(WifiGrinder::new(cfg).unwrap().run(server.clone()));
+    wait_for("the error", || {
+        server
+            .grinder_link()
+            .wifi
+            .is_some_and(|w| w.state == WifiState::Error)
+    })
+    .await;
+    assert!(wifi(&server).unreachable);
+
+    // Switched on: it answers on the next try and pairs.
+    let fake: Shared = Arc::default();
+    let app = axum::Router::new()
+        .fallback(axum::routing::post(handle))
+        .with_state(fake);
+    let listener = TcpListener::bind(addr)
+        .await
+        .expect("the port is free again");
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    wait_for("paired", || paired(&server)).await;
+    assert!(!wifi(&server).unreachable);
 }
 
 #[tokio::test]
@@ -824,6 +891,7 @@ async fn a_lost_pairing_id_is_asked_for_and_checked() {
             .is_some_and(|w| w.needs_pairing_id)
     })
     .await;
+    assert_eq!(wifi(&server).pairing_id, None, "none in use yet");
 
     // A wrong one is checked with the grinder, not kept.
     server.use_grinder_pairing_id(PAIRING_ID + 1).unwrap();
@@ -832,6 +900,11 @@ async fn a_lost_pairing_id_is_asked_for_and_checked() {
     })
     .await;
     assert!(wifi(&server).needs_pairing_id, "still asking");
+    assert_eq!(
+        wifi(&server).unknown_pairing_id,
+        Some(PAIRING_ID + 1),
+        "the app says so"
+    );
     assert_eq!(saved_id(&file), Value::Null, "not saved");
 
     server.use_grinder_pairing_id(PAIRING_ID).unwrap();
@@ -925,6 +998,7 @@ async fn a_refused_pairing_id_the_grinder_still_refuses_is_dropped() {
         "{}",
         wifi(&server).detail
     );
+    assert_eq!(wifi(&server).unknown_pairing_id, Some(7));
 }
 
 #[tokio::test]

@@ -192,6 +192,13 @@ impl std::error::Error for MachineError {}
 
 const EVENT_CAP: usize = 500;
 
+/// [`MachineEvent::ShotAborted`] reason when a person aborts the brew.
+pub const ABORTED_BY_USER: &str = "aborted by user";
+
+/// [`MachineEvent::ShotAborted`] reason when an E65/E80 grinder hands out a
+/// newer brew job before the shot came.
+pub const REPLACED_BY_NEWER_GRIND: &str = "a newer Grind-by-Sync grind replaced it";
+
 /// The machine. See the module docs for the state walk.
 #[derive(Debug, Clone)]
 pub struct Machine {
@@ -203,6 +210,8 @@ pub struct Machine {
     /// cannot express (odd status codes, extra fields). Empty normally.
     pub overrides: Map<String, Value>,
     phase: Phase,
+    /// The brew running (or last run) came from an E65/E80 brew job.
+    brew_job: bool,
     last_shot: Option<ShotResult>,
     last_grind: Option<GrindResult>,
     events: VecDeque<EventRecord>,
@@ -216,6 +225,7 @@ impl Machine {
             ready: MakoState::default(),
             overrides: Map::new(),
             phase: Phase::Ready,
+            brew_job: false,
             last_shot: None,
             last_grind: None,
             events: VecDeque::new(),
@@ -225,6 +235,12 @@ impl Machine {
 
     pub fn config(&self) -> &MachineConfig {
         &self.config
+    }
+
+    /// Changes how long a brew waits for its result. A brew already running
+    /// keeps its start and ends once the new limit has passed.
+    pub fn set_brew_timeout(&mut self, limit: Option<Duration>) {
+        self.config.brew_timeout = limit;
     }
 
     pub fn identity(&self) -> &MachineIdentity {
@@ -299,7 +315,14 @@ impl Machine {
             },
         );
         self.begin(now, true);
+        self.brew_job = true;
         true
+    }
+
+    /// Whether a brew is running for an E65/E80 brew job (not for an E64 WS
+    /// knob press or by hand).
+    pub fn brewing_for_brew_job(&mut self, now: Instant) -> bool {
+        matches!(self.phase(now), Phase::Brewing { .. }) && self.brew_job
     }
 
     /// Start a brew without a grinder request (the grinder will treat it as a
@@ -353,7 +376,7 @@ impl Machine {
         let Phase::Brewing { since, .. } = self.phase else {
             return Err(MachineError::NotBrewing);
         };
-        self.abort_brew(now, since, "aborted by user");
+        self.abort_brew(now, since, ABORTED_BY_USER);
         Ok(())
     }
 
@@ -439,6 +462,7 @@ impl Machine {
             since: now,
             requested_by_grinder,
         };
+        self.brew_job = false;
         let human_action = if requested_by_grinder {
             "Start the shot on the machine now, then report time and weight."
         } else {
@@ -621,14 +645,41 @@ mod tests {
             }
         ));
         assert_eq!(m.recipe_weight_g(), Some(40.0));
+        assert!(m.brewing_for_brew_job(t0));
         assert!(!m.on_brew_job(t0, job, None), "one brew at a time");
         m.give_up(t0, "the grinder stopped waiting").unwrap();
+        assert!(!m.brewing_for_brew_job(t0), "over");
+        let mut knob = Machine::new(MachineConfig::default());
+        knob.on_start_request(t0, Some(9));
+        assert!(!knob.brewing_for_brew_job(t0), "an E64 WS knob press");
         assert!(m.events_after(0).any(|e| matches!(
             e.event,
             MachineEvent::ShotAborted {
                 reason: "the grinder stopped waiting"
             }
         )));
+    }
+
+    #[test]
+    fn a_new_brew_timeout_counts_for_the_running_brew() {
+        let t0 = Instant::now();
+        let mut m = Machine::new(MachineConfig::default());
+        m.on_start_request(t0, Some(9));
+        m.set_brew_timeout(Some(Duration::from_secs(90)));
+        assert!(matches!(
+            m.phase(t0 + Duration::from_secs(89)),
+            Phase::Brewing { .. }
+        ));
+        assert!(matches!(
+            m.phase(t0 + Duration::from_secs(90)),
+            Phase::Finishing { aborted: true, .. }
+        ));
+
+        let mut m = Machine::new(MachineConfig::default());
+        m.set_brew_timeout(None);
+        m.on_start_request(t0, Some(9));
+        let much_later = t0 + Duration::from_secs(4 * 3600);
+        assert!(matches!(m.phase(much_later), Phase::Brewing { .. }));
     }
 
     #[test]

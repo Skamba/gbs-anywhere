@@ -17,19 +17,63 @@ a minor release may change behaviour.
   V01.36 does), gbs-anywhere sends it nothing for 3 minutes while it starts
   up, so that it keeps the pairing; the app then asks for the ID the grinder
   shows (also `--grinder-pairing-id`). The app shows the pairing code while
-  pairing and "grinder connected" once paired. The grinder waits for the
-  shot for up to `--brew-timeout-s` (3 minutes unless set); grinding again
-  before pulling cancels the shot it was waiting for. A shot that cannot
-  reach the grinder right away (say, the WiFi drops) is retried for two
-  minutes. While the grinder is off or in standby, the log says so once
-  rather than every minute. Tested with the E65W GbS.
+  pairing and the grinder as ready once paired. The grinder waits for the
+  shot for up to the shot window (`--brew-timeout-s`, or the time set in the
+  app; 3 minutes unless set); grinding again before pulling cancels the shot
+  it was waiting for. A shot that cannot reach the grinder right away (say,
+  the WiFi drops) is retried for two minutes. While the grinder is off or in
+  standby, the log says so once rather than every minute. Tested with the
+  E65W GbS.
+- Settings in the app: the shot window (how long gbs-anywhere waits for a
+  shot's numbers: 0:30 to 10:00 minutes in the app, with − and + in 15 s
+  steps or typed in) and the E65/E80 grinder's address (an IP
+  address or name, optionally with `:port`). A new address takes
+  effect at once and keeps the pairing. A setting changed in the app is
+  saved in the settings file and wins over `--brew-timeout-s` or
+  `--grinder` from then on (`PUT /api/settings`, `settings` in
+  `GET /api/state`). Going back to an earlier version forgets the settings
+  changed in the app.
+- Shot history: the last 200 shots the grinder asked for, with time, weight,
+  target and how they ended, kept in `history.json` next to the settings
+  file (`GET /api/history`).
+- `grinder.wifi.pairing_id` in `GET /api/state`: the E65/E80 pairing in use;
+  `grinder.wifi.unknown_pairing_id`: one typed in that the grinder did not
+  take, while the app asks for the ID.
+- `grinder.wifi.unreachable` in `GET /api/state`: true while an E65/E80 GbS
+  does not answer at all (off, in standby or gone from the network), as
+  opposed to answering with an error.
+- `boot_id` in `GET /api/state`: new on every start, so an app can tell that
+  event numbers started over.
+- `age_ms` on each event in `GET /api/events` and the event stream: how long
+  ago it happened, so an app that catches up after a gap shows the right
+  times.
+- A redesigned app with three tabs: Start (the three steps of a shot, with
+  the step that is running or failed opened), Status (grinder, integrations,
+  settings) and History. Appearance (System, Light, Dark) can be set under
+  Status → Settings; it is kept on each device. When no shot can start (no
+  grinder connected, or the grinder blocked), System status opens by itself
+  and says why in plain words, and step 1 shows "Blocked" instead of
+  "Grind". While an integration reports the shot, the fields to type it in
+  are hidden; they come back, with a note, when every integration has failed
+  or none has reported the shot a minute after it should have ended. The
+  History tab replaces the list of this session's shots.
 
 ### Changed
 
+- `--grinder` refuses an address that cannot be one (for example with a
+  space in it) at startup, instead of failing on every request.
+- A fractional `--brew-timeout-s` is rounded to whole seconds.
 - Unreleased builds are now published once a night as the `nightly` image
   tag, and only on nights when something changed. The `main` and `sha-*`
   tags are no longer updated; switch from `:main` to `:nightly`. `latest`
   and the version tags still come only from releases.
+
+### Fixed
+
+- Requests on port 80 outside the grinder's `/api/v2/` paths, such as other
+  devices on the network probing the port, no longer count as grinder
+  traffic and are logged at debug level only. The `--log` transcript still
+  records them.
 
 ## [0.2.1] - 2026-10-10
 

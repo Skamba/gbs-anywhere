@@ -16,9 +16,9 @@ cup. Nothing needs to be typed, and the Decent app keeps working alongside.
    home WiFi (2.4 GHz, like the grinder).
 3. Find the scale's IP address in your router and give it a DHCP
    reservation, as for the computer running gbs-anywhere.
-4. In the app: the green **+** at the top right → **Half Decent Scale**,
-   and enter that address, e.g. `192.168.1.40`. Outside Docker the scale's
-   own name `hds.local` usually works too; inside Docker, use the IP.
+4. In the app: Status → Machine integrations → green **+** → **Half Decent
+   Scale**, and enter that address, e.g. `192.168.1.40`. Outside Docker the
+   scale's own name `hds.local` usually works too; inside Docker, use the IP.
 
 Or on the command line / in Docker:
 

@@ -15,8 +15,14 @@ use serde_json::{Value, json};
 
 use crate::server::Server;
 
+/// Where the grinder's requests live (paths come without a trailing `/`).
+const GRINDER_PATHS: &str = "/api/v2";
+
 /// Every path goes through one handler so nothing the grinder sends is
-/// missed; unknown requests are logged and answered with `{}`.
+/// missed; unknown requests are answered with `{}`. An unknown request under
+/// `/api/v2/` is logged and counts as the grinder (a newer firmware may ask
+/// for more); anything else comes from other devices on the network looking
+/// for their own kind, so it is logged at debug level only.
 pub fn grinder_router(state: Arc<Server>) -> axum::Router {
     axum::Router::new().fallback(any(handle)).with_state(state)
 }
@@ -30,7 +36,15 @@ async fn handle(
 ) -> impl IntoResponse {
     let req = GrinderRequest::classify(method.as_str(), uri.path(), &body);
     let poll = matches!(req, GrinderRequest::PollMako);
-    x.note_request(Some(peer), poll);
+    let grinder = match &req {
+        GrinderRequest::Other { path, .. } => path
+            .strip_prefix(GRINDER_PATHS)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/')),
+        _ => true,
+    };
+    if grinder {
+        x.note_request(Some(peer), poll);
+    }
 
     let reply: Value = match &req {
         GrinderRequest::Identity => x.with(|m, _| json!(m.identity())),
@@ -54,13 +68,17 @@ async fn handle(
             json!({})
         }
         GrinderRequest::Other { method, path } => {
-            tracing::info!("unhandled grinder request {method} {path}");
+            if grinder {
+                tracing::info!("unhandled grinder request {method} {path}");
+            } else {
+                tracing::debug!("not a grinder request: {method} {path}");
+            }
             json!({})
         }
     };
 
     let text = reply.to_string();
-    if poll {
+    if poll || !grinder {
         tracing::debug!("{peer} {method} {uri} -> {text}");
     } else {
         tracing::info!("{peer} {method} {uri} -> {text}");
