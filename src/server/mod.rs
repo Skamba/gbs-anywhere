@@ -13,16 +13,18 @@
 //! for brew jobs and drives the same machine from them.
 //!
 //! Around them: [`settings`] (what people change in the app, and the settings
-//! file).
+//! file) and the shot history.
 //!
 //! The `gbs-anywhere` binary is a thin wrapper: build a [`Server`], then
 //! [`serve`] it or mount the routers in another app.
 
 mod control_api;
 mod grinder_api;
+pub mod history;
 pub mod settings;
 #[cfg(test)]
 mod tests;
+mod utc;
 pub mod wifi_grinder;
 
 use std::net::SocketAddr;
@@ -39,6 +41,7 @@ use tokio::sync::{broadcast, mpsc};
 
 pub use control_api::{ShotInput, control_router, patch_ready, state_json};
 pub use grinder_api::grinder_router;
+pub use history::{History, Shot, ShotKind};
 pub use settings::{SettingsChange, SettingsError, SettingsFile, Startup};
 pub use wifi_grinder::{
     PairingIdRefusal, WifiConfig, WifiGrinder, WifiLink, WifiState, grinder_address,
@@ -53,6 +56,7 @@ pub struct Server {
     icons_dir: OnceLock<PathBuf>,
     /// The shot window and grinder address, and the E65/E80 link.
     settings: Mutex<settings::Live>,
+    history: History,
     /// New on every start: event numbers start over with it.
     boot_id: String,
 }
@@ -109,6 +113,7 @@ impl Server {
             integrations: Integrations::new(),
             icons_dir: OnceLock::new(),
             settings: Mutex::default(),
+            history: History::default(),
             boot_id: uuid::Uuid::new_v4().simple().to_string(),
         })
     }

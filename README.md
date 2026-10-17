@@ -38,8 +38,8 @@ later, or add `-e GRINDER_HOST=<the grinder's IP>` before the image name (see
 [Set up an E65/E80 GbS](#set-up-an-e65e80-gbs)).
 
 The `/data` volume keeps what you set up in the app (integrations and
-[settings](#settings-in-the-app)) and the E65/E80 pairing across restarts, so
-keep it. From source, with Rust installed,
+[settings](#settings-in-the-app)), the shot history and the E65/E80 pairing
+across restarts, so keep it. From source, with Rust installed,
 `cargo run --release -- --config gbs-anywhere.json` does the same.
 
 Give the computer, and an E65/E80 grinder, a fixed IP or a DHCP reservation
@@ -216,6 +216,10 @@ settings file (`/data/gbs-anywhere.json` in Docker).
 **Appearance** (System, Light, Dark) sits in the same card but is kept on each
 device: by default the app follows the device's light or dark mode.
 
+The **History** tab shows the last 200 shots the grinder asked for, with
+their time, weight and target (kept in `history.json` next to the settings
+file).
+
 ## Options
 
 Extra flags go after the image name (Docker) or after `--` (cargo):
@@ -223,7 +227,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | flag | default | what |
 |---|---|---|
 | `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever); **Time to pull the shot** set in the app wins |
-| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings); also `CONFIG_FILE` |
+| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
 | `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
 | `-p, --ports <list>` | 80 | ports to serve on |

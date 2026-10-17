@@ -192,6 +192,13 @@ impl std::error::Error for MachineError {}
 
 const EVENT_CAP: usize = 500;
 
+/// [`MachineEvent::ShotAborted`] reason when a person aborts the brew.
+pub const ABORTED_BY_USER: &str = "aborted by user";
+
+/// [`MachineEvent::ShotAborted`] reason when an E65/E80 grinder hands out a
+/// newer brew job before the shot came.
+pub const REPLACED_BY_NEWER_GRIND: &str = "a newer Grind-by-Sync grind replaced it";
+
 /// The machine. See the module docs for the state walk.
 #[derive(Debug, Clone)]
 pub struct Machine {
@@ -369,7 +376,7 @@ impl Machine {
         let Phase::Brewing { since, .. } = self.phase else {
             return Err(MachineError::NotBrewing);
         };
-        self.abort_brew(now, since, "aborted by user");
+        self.abort_brew(now, since, ABORTED_BY_USER);
         Ok(())
     }
 
