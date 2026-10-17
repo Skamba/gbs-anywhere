@@ -221,8 +221,9 @@ A setting changed in the app is saved in the settings file and wins over its
 flag from then on; without a settings file it lasts until the next restart.
 To go back to the flags, stop gbs-anywhere and remove `settings` from the
 settings file (`/data/gbs-anywhere.json` in Docker).
-**Appearance** (System, Light, Dark) sits in the same card but is kept on each
-device: by default the app follows the device's light or dark mode.
+**Appearance** (System, Light, Dark) and **Language** (Auto, English,
+Deutsch) sit in the same card but are kept on each device: by default the app
+follows the device's light or dark mode and its language.
 
 The **History** tab shows the last 200 shots the grinder asked for, with
 their time, weight and target (kept in `history.json` next to the settings

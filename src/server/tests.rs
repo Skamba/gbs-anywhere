@@ -559,8 +559,12 @@ async fn integrations_are_edited_and_moved_into_the_app() {
         (&entry["source"], &entry["adoptable"]),
         (&json!("command_line"), &json!(false))
     );
-    // The status line (connecting, or not reached at startup).
+    // The status line in English, and as a key and values the app can word
+    // in its own language (connecting, or not reached at startup).
     assert!(entry["detail"].as_str().is_some_and(|d| !d.is_empty()));
+    let key = entry["detail_key"].as_str().unwrap();
+    assert!(key.starts_with("half_decent."), "{key}");
+    assert!(entry["detail_vars"].is_object());
     let (code, _) = call(reqwest::Method::POST, url("/adopt"), None).await;
     assert_eq!(code, 409, "no settings file");
 
