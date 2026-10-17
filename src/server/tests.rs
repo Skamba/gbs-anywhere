@@ -285,9 +285,12 @@ async fn settings_change_in_the_app_and_are_saved() {
     assert_eq!(settings["grinder_host"], Value::Null);
     assert_eq!(
         settings["source"],
-        json!({ "shot_window_s": "default", "grinder_host": "default" })
+        json!({ "shot_window_s": "default", "grinder_host": "default", "update_check": "default" })
     );
     assert_eq!(settings["persistent"], true);
+    assert_eq!(settings["update_check"], true, "on unless turned off");
+    assert_eq!(state["update"]["enabled"], true);
+    assert_eq!(state["update"]["latest"], Value::Null);
 
     let (code, settings) = put(json!({ "shot_window_s": 120 })).await;
     assert_eq!(code, 200);
@@ -306,12 +309,20 @@ async fn settings_change_in_the_app_and_are_saved() {
         json!({ "grinder_host": "http://127.0.0.1:9" }),
         json!({ "grinder_host": "127.0.0.1\n:9" }),
         json!({ "grinder_host": "a".repeat(300) }),
+        json!({ "update_check": "off" }),
         json!({ "nope": 1 }),
     ] {
         let (code, body) = put(bad.clone()).await;
         assert_eq!(code, 400, "{bad}");
         assert!(body["error"].is_string());
     }
+
+    // The update check, turned off in the app.
+    let (code, settings) = put(json!({ "update_check": false })).await;
+    assert_eq!(code, 200);
+    assert_eq!(settings["update_check"], false);
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["update"]["enabled"], false);
 
     // An E65/E80 address starts the link (here to a closed local port), and
     // the pairing is kept where it was set up to be.
@@ -326,7 +337,7 @@ async fn settings_change_in_the_app_and_are_saved() {
     let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
         saved["settings"],
-        json!({ "shot_window_s": 120, "grinder_host": "127.0.0.1:9" })
+        json!({ "shot_window_s": 120, "grinder_host": "127.0.0.1:9", "update_check": false })
     );
 
     // No address: the link stops, and a pairing ID has nowhere to go.
