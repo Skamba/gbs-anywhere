@@ -19,8 +19,9 @@ Thanks for helping. A few things make a contribution easy to review and merge.
   or "tests only".
 - `cargo fmt --check`, `cargo clippy --all-targets` (no warnings) and
   `cargo test` must pass. CI runs them on every pull request.
-- Update README.md when behaviour, flags or the API change, and add a line
-  under `## [Unreleased]` in CHANGELOG.md for anything users will notice.
+- Update README.md and MANUAL.md when behaviour, flags or the API change,
+  and add a line under `## [Unreleased]` in CHANGELOG.md for anything users
+  will notice.
 - The repository is public: leave out IP addresses, serial numbers, account
   names and logs from real devices.
 
