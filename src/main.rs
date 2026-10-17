@@ -106,8 +106,25 @@ struct Args {
     )]
     grinder_pairing_id: Option<u32>,
 
+    /// Look for a newer release on GitHub once a day, to show in the app.
+    #[arg(
+        long,
+        env = "UPDATE_CHECK",
+        value_enum,
+        ignore_case = true,
+        default_value = "on",
+        value_name = "ON|OFF"
+    )]
+    update_check: Switch,
+
     #[command(flatten)]
     integrations: integration::CliArgs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum Switch {
+    On,
+    Off,
 }
 
 #[tokio::main]
@@ -196,6 +213,9 @@ async fn main() -> anyhow::Result<()> {
         let path = file.path().to_owned();
         let n = x.integrations().load(&x, file, integration::KINDS)?;
         tracing::info!("settings in {}: {n} added in the app", path.display());
+    }
+    if args.update_check == Switch::On {
+        x.start_update_check(server::UpdateConfig::default());
     }
     if !args.no_stdin {
         println!("{HELP}");
@@ -394,5 +414,20 @@ mod tests {
             assert!(parse("--finishing-hold-s", bad).is_err(), "{bad}");
             assert!(parse("--brew-timeout-s", bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_update_check_can_be_turned_off() {
+        let parse = |args: &[&str]| Args::try_parse_from(args).map(|a| a.update_check);
+        assert_eq!(parse(&["gbs-anywhere"]).unwrap(), Switch::On);
+        assert_eq!(
+            parse(&["gbs-anywhere", "--update-check", "off"]).unwrap(),
+            Switch::Off
+        );
+        assert_eq!(
+            parse(&["gbs-anywhere", "--update-check", "OFF"]).unwrap(),
+            Switch::Off
+        );
+        assert!(parse(&["gbs-anywhere", "--update-check", "maybe"]).is_err());
     }
 }

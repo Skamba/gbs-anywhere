@@ -46,6 +46,10 @@ a minor release may change behaviour.
   (INFO and up), and new ones as they come (`GET /api/log`,
   `GET /api/log/stream`). Copying or downloading it replaces IP addresses
   with placeholders, so it can go into a bug report.
+- Update check: once a day gbs-anywhere asks GitHub for its latest release,
+  so the app can say when a newer one is out (`update` in `GET /api/state`).
+  The request carries nothing but the running version. `--update-check off`
+  (`UPDATE_CHECK=off`) turns it off.
 - `grinder.wifi.pairing_id` in `GET /api/state`: the E65/E80 pairing in use;
   `grinder.wifi.unknown_pairing_id`: one typed in that the grinder did not
   take, while the app asks for the ID.
@@ -63,7 +67,7 @@ a minor release may change behaviour.
   integrations' setup forms, to show both in German.
 - A redesigned app with four tabs: Start (the three steps of a shot, with
   the step that is running or failed opened), Status (grinder, integrations,
-  settings), History and Log. Appearance (System, Light, Dark) and
+  settings, version), History and Log. Appearance (System, Light, Dark) and
   language (English, Deutsch; by default the device's) can be set under
   Status → Settings; both are kept on each device. When no shot can start
   (no grinder connected, or the grinder blocked), System status opens by

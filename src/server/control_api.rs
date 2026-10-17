@@ -5,7 +5,7 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations (each status line also as `detail_key` and `detail_vars`, for wording it in another language), settings; `boot_id` changes on every start, so an app can tell its event and log numbers start over |
+//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations (each status line also as `detail_key` and `detail_vars`, for wording it in another language), settings, update check; `boot_id` changes on every start, so an app can tell its event and log numbers start over |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30"}` (any of them) — changes and saves them; they win over flags from then on |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
@@ -81,6 +81,7 @@ pub fn state_json(x: &Server) -> Value {
     let link = x.grinder_link();
     let integrations = x.integrations().list();
     let settings = x.settings_json();
+    let update = x.update_json();
     x.with(|m, now| {
         let mako = m.mako(now);
         let blocked = mako.grind_blocked().map(|b| {
@@ -106,6 +107,7 @@ pub fn state_json(x: &Server) -> Value {
             "version": crate::version(),
             "config": m.config(),
             "settings": settings,
+            "update": update,
         })
     })
 }
