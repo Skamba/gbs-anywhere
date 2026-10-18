@@ -1805,22 +1805,9 @@
     grinder_unpaired: { onPurpose: false, text: "start.error.unknownApp", title: "start.error.unknownApp" },
     shot_end_missed: { onPurpose: false, title: "history.endMissed" },
   };
-  // A server from before `cause` sends only the words (drop with the other
-  // branches for older servers).
-  const OLD_REASONS = {
-    "aborted by user": "shot_aborted_by_user",
-    "a newer Grind-by-Sync grind replaced it": "grinder_shot_replaced",
-    "the grinder address changed": "grinder_address_changed",
-    "no result reported in time": "shot_timed_out",
-    "the grinder stopped waiting before the shot came": "grinder_shot_dropped",
-    "the grinder refused the job": "grinder_shot_refused",
-    "the grinder no longer knows this gbs-anywhere": "grinder_unpaired",
-    "the next brew started before this one ended": "shot_end_missed",
-  };
-  const own = (o, k) => k != null && Object.prototype.hasOwnProperty.call(o, k);
   /** The cause of a shot_aborted event or a history entry, or null. */
-  const causeOf = (x) => (x && (x.cause || (own(OLD_REASONS, x.reason) ? OLD_REASONS[x.reason] : null))) || null;
-  const causeInfo = (cause) => (own(CAUSES, cause) ? CAUSES[cause] : {});
+  const causeOf = (x) => (x && x.cause) || null;
+  const causeInfo = (cause) => CAUSES[cause] || {};
   const isAbort = (cause) => !!causeInfo(cause).onPurpose;
   /** An E65/E80 setup: a Generic WiFi link, or an address it is starting with. */
   const wifiSetup = () => !!(wifiOf() || (S && S.settings && S.settings.grinder_host));
@@ -1866,7 +1853,7 @@
     if (ev.kind === "shot_reported") {
       return h.kind === "success" && h.time_s != null && Math.abs(h.time_s * 1000 - ev.result.time_ms) < 60 ? h : null;
     }
-    return h.kind !== "success" && (ev.cause ? h.cause === ev.cause : h.reason === ev.reason) ? h : null;
+    return h.kind !== "success" && h.cause === ev.cause ? h : null;
   }
   /** When the brew ended with this event. */
   function endTime(ev) {

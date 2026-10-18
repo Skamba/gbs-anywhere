@@ -68,9 +68,7 @@ a minor release may change behaviour.
   that was not a success: why it ended as a fixed code
   (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, …) for
   apps to match on, next to the English `reason`. Shots saved by earlier
-  builds get theirs from `reason`. The app now matches the code; a shot
-  still open when the next one started also gets its own title in the
-  history.
+  builds get theirs from `reason`.
 - `detail_key` and `detail_vars` on each integration in `GET /api/state`:
   its status line as a key and values (such as `time_s`, `weight_g`), next
   to the English `detail`. The app uses them, and its own catalog for the
@@ -94,6 +92,9 @@ a minor release may change behaviour.
 
 ### Changed
 
+- The app tells a stop made on purpose from an error by `cause`, not by the
+  English words, and a shot still open when the next one started gets its
+  own title in the history.
 - What the machine does (grind received, brew started, shot shown to the
   grinder) is now logged with a time and level like every other line, so it
   also shows in the app's log. The grinder's requests behind a grind and a

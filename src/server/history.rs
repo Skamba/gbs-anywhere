@@ -74,7 +74,11 @@ pub struct Shot {
 }
 
 /// A cause this version does not know (written by a newer one) reads as
-/// none, so the shot is kept with its `reason`.
+/// none, so the shot is kept with its `reason`. `use_file` writes the file
+/// back at once, so after going back to an older version such a code is
+/// saved as `null`, and after the next upgrade it comes back only if
+/// [`cause_of`] still knows the shot's words: `cause_of` and the old words
+/// stay for good.
 fn known_cause<'de, D: Deserializer<'de>>(d: D) -> Result<Option<AbortCause>, D::Error> {
     let code = Option::<serde_json::Value>::deserialize(d)?;
     Ok(code.and_then(|c| serde_json::from_value(c).ok()))

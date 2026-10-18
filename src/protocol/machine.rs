@@ -231,10 +231,16 @@ impl AbortCause {
     /// Whether someone chose to end the brew (aborted), rather than it
     /// failing (an error).
     pub fn on_purpose(self) -> bool {
-        matches!(
-            self,
-            Self::ShotAbortedByUser | Self::GrinderShotReplaced | Self::GrinderAddressChanged
-        )
+        match self {
+            Self::ShotAbortedByUser => true,
+            Self::GrinderShotReplaced => true,
+            Self::GrinderAddressChanged => true,
+            Self::ShotTimedOut => false,
+            Self::GrinderShotDropped => false,
+            Self::GrinderShotRefused => false,
+            Self::GrinderUnpaired => false,
+            Self::ShotEndMissed => false,
+        }
     }
 }
 
@@ -723,15 +729,41 @@ mod tests {
                 "cause": "shot_aborted_by_user",
             })
         );
-        // Each cause has its own code and its own words.
-        let codes: std::collections::BTreeSet<_> = AbortCause::ALL
-            .iter()
-            .map(|c| serde_json::to_string(c).unwrap())
-            .collect();
+        // Each cause has its own words: the history finds the cause of a shot
+        // saved before `cause` by them.
         let texts: std::collections::BTreeSet<_> =
             AbortCause::ALL.iter().map(|c| c.text()).collect();
-        assert_eq!(codes.len(), AbortCause::ALL.len());
         assert_eq!(texts.len(), AbortCause::ALL.len());
+    }
+
+    #[test]
+    fn every_cause_is_in_all() {
+        use AbortCause::*;
+        let every = [
+            ShotAbortedByUser,
+            GrinderShotReplaced,
+            GrinderAddressChanged,
+            ShotTimedOut,
+            GrinderShotDropped,
+            GrinderShotRefused,
+            GrinderUnpaired,
+            ShotEndMissed,
+        ];
+        for cause in every {
+            // No wildcard: a new cause stops this from compiling. Add it here,
+            // to `every` above and to `AbortCause::ALL`.
+            match cause {
+                ShotAbortedByUser
+                | GrinderShotReplaced
+                | GrinderAddressChanged
+                | ShotTimedOut
+                | GrinderShotDropped
+                | GrinderShotRefused
+                | GrinderUnpaired
+                | ShotEndMissed => {}
+            }
+        }
+        assert_eq!(AbortCause::ALL, every);
     }
 
     #[test]

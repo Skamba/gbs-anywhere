@@ -706,25 +706,6 @@ mod tests {
         }
         let stale: Vec<_> = rows.keys().filter(|k| !codes.contains(**k)).collect();
         assert!(stale.is_empty(), "not a cause: {stale:?}");
-
-        // `OLD_REASONS`: the words of servers from before `cause`, one
-        // `    "<words>": "<code>",` line per cause. They are the causes'
-        // words today; if one changes, its old words stay there and here.
-        let start = PAGE
-            .find("\n  const OLD_REASONS = {\n")
-            .expect("OLD_REASONS");
-        let table = &PAGE[start..];
-        let table = &table[..table.find("\n  };").expect("end of OLD_REASONS")];
-        let old: BTreeMap<_, _> = table
-            .lines()
-            .filter_map(|line| line.strip_prefix("    \"")?.split_once("\": "))
-            .collect();
-        assert_eq!(old.len(), AbortCause::ALL.len(), "one line per cause");
-        for cause in AbortCause::ALL {
-            let code = serde_json::to_value(cause).unwrap();
-            let line = old.get(cause.text()).copied();
-            assert_eq!(line, Some(format!("{code},").as_str()), "{}", cause.text());
-        }
     }
 
     #[test]
