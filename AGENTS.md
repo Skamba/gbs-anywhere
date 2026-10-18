@@ -162,3 +162,8 @@ public, such as pushing, deleting data or publishing an image.
 AGPL-3.0-or-later (`LICENSE`). Source files carry no license header. Only
 add third-party code, assets or dependencies whose license is compatible with
 the AGPL (MIT, Apache-2.0, BSD and ISC are); ask when unsure.
+
+The image ships the crates' licenses (`THIRD-PARTY-NOTICES`, made by
+cargo-about from `about.toml` and `about.hbs`). A crate under a license not
+in `accepted` there fails the image build: add the license only once it is
+known to be compatible. `cargo about generate about.hbs` checks it locally.
