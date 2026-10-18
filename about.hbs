@@ -1,0 +1,20 @@
+gbs-anywhere includes these third-party Rust crates. gbs-anywhere itself is
+under the GNU AGPL version 3 or later (LICENSE); each crate below keeps its
+own license, given here with the crates that use it.
+
+{{#each overview}}
+- {{{name}}} ({{{id}}}): {{count}} crate(s)
+{{/each}}
+
+{{#each licenses}}
+================================================================================
+{{{name}}} ({{{id}}})
+Used by:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}}
+{{/each}}
+--------------------------------------------------------------------------------
+
+{{{text}}}
+
+{{/each}}

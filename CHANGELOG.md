@@ -76,6 +76,8 @@ a minor release may change behaviour.
   with a note, when every integration has failed or none has reported the
   shot a minute after it should have ended. The History tab replaces the
   list of this session's shots.
+- The image carries the licenses of the Rust crates built into it, in
+  `/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES`.
 
 ### Changed
 
