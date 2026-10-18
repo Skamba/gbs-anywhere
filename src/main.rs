@@ -106,6 +106,16 @@ struct Args {
     )]
     grinder_pairing_id: Option<u32>,
 
+    /// Look for a newer release on GitHub once a day, to show in the app (on
+    /// unless set; a choice made in the app wins).
+    #[arg(
+        long,
+        env = "UPDATE_CHECK",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        value_name = "ON|OFF"
+    )]
+    update_check: Option<bool>,
+
     #[command(flatten)]
     integrations: integration::CliArgs,
 }
@@ -179,6 +189,7 @@ async fn main() -> anyhow::Result<()> {
                 .map(|c| c.with_file_name("grinder-pairing.json"))
         }),
         pairing_id: args.grinder_pairing_id,
+        update_check: args.update_check,
     };
     x.start_settings(startup, file.clone())?;
     let data = file.as_ref().map(|f| f.data()).unwrap_or_default();
@@ -207,6 +218,8 @@ async fn main() -> anyhow::Result<()> {
         let n = x.integrations().load(&x, file, integration::KINDS)?;
         tracing::info!("settings in {}: {n} added in the app", path.display());
     }
+    // It sends nothing while the check is off (see the settings).
+    x.start_update_check(server::UpdateConfig::default());
     if !args.no_stdin {
         println!("{HELP}");
         tokio::spawn(stdin_loop(x.clone()));
@@ -403,5 +416,24 @@ mod tests {
             assert!(parse("--finishing-hold-s", bad).is_err(), "{bad}");
             assert!(parse("--brew-timeout-s", bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_update_check_can_be_turned_off() {
+        let parse = |args: &[&str]| Args::try_parse_from(args).map(|a| a.update_check);
+        assert_eq!(parse(&["gbs-anywhere"]).unwrap(), None, "on unless set");
+        for (value, on) in [
+            ("off", false),
+            ("OFF", false),
+            ("on", true),
+            ("false", false),
+        ] {
+            assert_eq!(
+                parse(&["gbs-anywhere", "--update-check", value]).unwrap(),
+                Some(on),
+                "{value}"
+            );
+        }
+        assert!(parse(&["gbs-anywhere", "--update-check", "maybe"]).is_err());
     }
 }

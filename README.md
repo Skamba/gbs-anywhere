@@ -47,8 +47,21 @@ in your router: the grinder and your phone need the computer's address (e.g.
 `192.168.1.20`). Port 80 must be free and allowed in the firewall.
 
 `latest` is the newest release; pin one with e.g. `:0.2`, or follow
-`:nightly`, built each night from `main`. The app shows its version at the
-bottom of the page; what changed is in [CHANGELOG.md](CHANGELOG.md).
+`:nightly`, built each night from `main`. The app shows its version under
+**Status** (and at the bottom of the other tabs); what changed is in
+[CHANGELOG.md](CHANGELOG.md).
+
+**Update check.** One minute after it starts, and then once a day,
+gbs-anywhere asks GitHub for its latest release, and the gbs-anywhere card
+under **Status** says when a newer one is out. GitHub sees the request like
+any other, including your IP address; it carries nothing but the
+gbs-anywhere version. Turn it off under **Status → Settings**, or with
+`--update-check off` (`UPDATE_CHECK=off` in Docker).
+
+**To update** with Docker, get the new image and re-create the container
+with the same command and volume: `docker pull ghcr.io/skamba/gbs-anywhere`,
+`docker rm -f gbs-anywhere`, then the `docker run` above. The `/data` volume
+keeps everything you set up.
 
 ## Set up the E64 WS
 
@@ -209,8 +222,8 @@ still set.
 
 ## Settings in the app
 
-Two settings can be changed under **Status → Settings**, so the command line
-can stay as it is:
+Three settings can be changed under **Status → Settings**, so the command
+line can stay as it is:
 
 - **Time to pull the shot**: how long gbs-anywhere waits for a shot's time
   and weight before it gives up on that shot (`--brew-timeout-s`, 3 minutes
@@ -219,6 +232,9 @@ can stay as it is:
   `GRINDER_HOST`), optionally with `:port`. A new address takes effect at
   once and keeps the pairing; removing it stops pairing, also when
   `GRINDER_HOST` is set and after a restart.
+- **Update check**: whether gbs-anywhere looks for a newer release once a
+  day (see [Update check](#run-it); `--update-check`, `UPDATE_CHECK`, on
+  unless set).
 
 A setting changed in the app is saved in the settings file and wins over its
 flag from then on; without a settings file it lasts until the next restart.
@@ -249,6 +265,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | `--grinder <host>` | off | pair with this E65/E80 GbS over its "Generic WiFi" option; also `GRINDER_HOST`; an address set in the app wins |
 | `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing across restarts; also `GRINDER_PAIRING_FILE` |
 | `--grinder-pairing-id <id>` | off | the pairing ID the grinder shows, used when none is saved or the grinder refuses the saved one (the app can take it too); also `GRINDER_PAIRING_ID` |
+| `--update-check <on\|off>` | on | look for a newer release once a day (see [Update check](#run-it)); also `UPDATE_CHECK`; a choice made in the app wins |
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
 | `--hds-*` | off | Half Decent Scale, see [its README](src/integration/half_decent/README.md) |
 

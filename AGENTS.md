@@ -19,11 +19,12 @@ file is for agents changing the code.
   brew jobs into brews of the same machine; `control_api.rs` is the JSON API
   and page for people. Around them: `settings.rs` holds the settings people
   change in the app (shot window, grinder address, which restarts the
-  E65/E80 link) and is the only writer of the settings file; `history.rs`
-  records the shots from the machine's events; `logbook.rs` keeps the last
-  log lines for the app (a `tracing` layer next to the console output);
-  `utc.rs` formats times. `tests.rs` and `wifi_grinder/tests.rs` hold the
-  end-to-end tests.
+  E65/E80 link, update check) and is the only writer of the settings file;
+  `history.rs` records the shots from the machine's events; `logbook.rs`
+  keeps the last log lines for the app (a `tracing` layer next to the
+  console output); `update_check.rs` looks for a newer release; `utc.rs`
+  formats times. `tests.rs` and `wifi_grinder/tests.rs` hold the end-to-end
+  tests.
 - `src/integration/`: optional integrations that report shots by themselves,
   one folder each (see [Integrations](#integrations)). `mod.rs` has the
   shared rules (`Link`), `kind.rs` the setup forms and `manager.rs` the
@@ -39,7 +40,7 @@ cargo test
 cargo clippy --all-targets
 cargo fmt
 # Local run, then open http://localhost:8089/
-cargo run -- -p 8089 --control off --no-stdin --config target/dev.json
+cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-check off
 ```
 
 - `web/index.html` is compiled into the binary (`include_str!`). After
@@ -118,7 +119,8 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   integration have their German; at run time a missing entry shows the
   server's English. Errors and log lines stay English.
 - Test against a local fake of the vendor's service. Don't send test traffic
-  or made-up credentials to a vendor's real service.
+  or made-up credentials to a vendor's real service. The same goes for
+  GitHub in the update check: tests pass a local URL (`UpdateConfig`).
 
 ## Web app
 

@@ -1,5 +1,6 @@
 //! Settings people change in the app (`PUT /api/settings`): how long the
-//! machine waits for a shot, and the address of an E65/E80 grinder. A value
+//! machine waits for a shot, the address of an E65/E80 grinder, and whether
+//! to look for newer releases (see `update_check.rs`). A value
 //! changed in the app wins over its flag or environment variable from then
 //! on, because it is saved in the settings file (`--config`). Without a
 //! settings file it lasts until the next restart.
@@ -161,6 +162,9 @@ pub struct AppSettings {
         skip_serializing_if = "Option::is_none"
     )]
     pub grinder_host: Option<Option<String>>,
+    /// Whether to look for a newer release once a day.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_check: Option<bool>,
 }
 
 impl AppSettings {
@@ -187,6 +191,8 @@ pub struct Startup {
     pub pairing_file: Option<PathBuf>,
     /// `--grinder-pairing-id`.
     pub pairing_id: Option<u32>,
+    /// `--update-check` (`UPDATE_CHECK`), when given.
+    pub update_check: Option<bool>,
 }
 
 /// Where a setting's value comes from.
@@ -204,6 +210,7 @@ pub struct SettingsChange {
     pub shot_window_s: Option<u32>,
     /// `Some(None)` removes the address (`null` or `""`).
     pub grinder_host: Option<Option<String>>,
+    pub update_check: Option<bool>,
 }
 
 impl SettingsChange {
@@ -234,6 +241,12 @@ impl SettingsChange {
                         }
                     };
                     change.grinder_host = Some(host);
+                }
+                "update_check" => {
+                    let on = value
+                        .as_bool()
+                        .ok_or("the update check is true (on) or false (off)")?;
+                    change.update_check = Some(on);
                 }
                 other => return Err(format!("unknown setting `{other}`")),
             }
@@ -328,6 +341,16 @@ fn grinder_host(startup: &Startup, app: &AppSettings) -> (Option<String>, Settin
     }
 }
 
+/// Whether to look for newer releases (on unless set) and where that comes
+/// from.
+fn update_check(startup: &Startup, app: &AppSettings) -> (bool, SettingSource) {
+    match (app.update_check, startup.update_check) {
+        (Some(on), _) => (on, SettingSource::App),
+        (None, Some(on)) => (on, SettingSource::CommandLine),
+        (None, None) => (true, SettingSource::Default),
+    }
+}
+
 /// The machine's brew timeout for a shot window.
 fn brew_timeout(secs: u32) -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs.into()))
@@ -337,10 +360,16 @@ impl Live {
     fn json(&self) -> Value {
         let (window, window_from) = shot_window(&self.startup, &self.app);
         let (host, host_from) = grinder_host(&self.startup, &self.app);
+        let (update, update_from) = update_check(&self.startup, &self.app);
         json!({
             "shot_window_s": window,
             "grinder_host": host,
-            "source": { "shot_window_s": window_from, "grinder_host": host_from },
+            "update_check": update,
+            "source": {
+                "shot_window_s": window_from,
+                "grinder_host": host_from,
+                "update_check": update_from,
+            },
             "persistent": self.file.is_some(),
         })
     }
@@ -375,6 +404,15 @@ impl Server {
             );
         }
         self.with(|m, _| m.set_brew_timeout(brew_timeout(window)));
+        let (update, from) = update_check(&live.startup, &live.app);
+        if from == SettingSource::App && live.startup.update_check.is_some() {
+            tracing::info!(
+                "settings: the update check set in the app ({}) is used instead of \
+                 --update-check",
+                if update { "on" } else { "off" }
+            );
+        }
+        self.set_update_check(update);
         let (host, from) = grinder_host(&live.startup, &live.app);
         if from == SettingSource::App && live.startup.grinder_host.is_some() {
             if host.is_some() {
@@ -420,6 +458,9 @@ impl Server {
         if let Some(host) = change.grinder_host {
             app.grinder_host = Some(host);
         }
+        if let Some(on) = change.update_check {
+            app.update_check = Some(on);
+        }
         let old_host = grinder_host(&live.startup, &live.app).0;
         let new_host = grinder_host(&live.startup, &app).0;
         let relink = old_host != new_host;
@@ -435,7 +476,16 @@ impl Server {
                 .map_err(|e| SettingsError::Save(format!("{e:#}")))?;
         }
         let old_window = shot_window(&live.startup, &live.app).0;
+        let old_update = update_check(&live.startup, &live.app).0;
         live.app = app;
+        let update = update_check(&live.startup, &live.app).0;
+        if update != old_update {
+            tracing::info!(
+                "settings: update check now {} (changed in the app)",
+                if update { "on" } else { "off" }
+            );
+            self.set_update_check(update);
+        }
         let window = shot_window(&live.startup, &live.app).0;
         if window != old_window {
             tracing::info!("settings: shot window now {window} s (changed in the app)");
@@ -501,16 +551,19 @@ mod tests {
         let bad = AppSettings {
             shot_window_s: Some(5),
             grinder_host: Some(Some("http://192.168.1.30/x".into())),
+            ..AppSettings::default()
         };
         assert_eq!(checked(bad), AppSettings::default());
         let good = AppSettings {
             shot_window_s: Some(120),
             grinder_host: Some(Some("192.168.1.30".into())),
+            update_check: Some(false),
         };
         assert_eq!(checked(good.clone()), good);
         let removed = AppSettings {
             shot_window_s: Some(0),
             grinder_host: Some(None),
+            ..AppSettings::default()
         };
         assert_eq!(checked(removed.clone()), removed);
     }
@@ -534,7 +587,7 @@ mod tests {
             change(json!({ "shot_window_s": 120 })),
             Ok(SettingsChange {
                 shot_window_s: Some(120),
-                grinder_host: None
+                ..SettingsChange::default()
             })
         );
         assert_eq!(
@@ -698,6 +751,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_update_check_is_on_unless_turned_off() {
+        let x = Server::new(MachineConfig::default());
+        x.start_settings(Startup::default(), None).unwrap();
+        let s = x.settings_json();
+        assert_eq!(s["update_check"], true);
+        assert_eq!(s["source"]["update_check"], "default");
+        assert_eq!(x.update_json()["enabled"], true);
+
+        // Off by the flag, then on again in the app.
+        let x = Server::new(MachineConfig::default());
+        let off = Startup {
+            update_check: Some(false),
+            ..Startup::default()
+        };
+        x.start_settings(off, None).unwrap();
+        assert_eq!(x.update_json()["enabled"], false);
+        assert_eq!(x.settings_json()["source"]["update_check"], "command_line");
+        let s = x
+            .change_settings(change(json!({ "update_check": true })).unwrap())
+            .unwrap();
+        assert_eq!(s["update_check"], true);
+        assert_eq!(s["source"]["update_check"], "app");
+        assert_eq!(x.update_json()["enabled"], true);
+        assert!(change(json!({ "update_check": "off" })).is_err());
+    }
+
+    #[tokio::test]
     async fn without_a_file_changes_last_until_restart() {
         let x = Server::new(MachineConfig::default());
         x.start_settings(Startup::default(), None).unwrap();
@@ -723,9 +803,11 @@ mod tests {
         let e = x.change_settings(SettingsChange {
             shot_window_s: Some(90),
             grinder_host: Some(Some("127.0.0.1:9".into())),
+            update_check: Some(false),
         });
         assert!(matches!(e, Err(SettingsError::Save(_))), "{e:?}");
         assert_eq!(x.settings_json()["shot_window_s"], DEFAULT_SHOT_WINDOW_S);
+        assert_eq!(x.settings_json()["update_check"], true);
         assert!(x.grinder_link().wifi.is_none(), "no link started");
         let _ = std::fs::remove_dir_all(dir);
     }

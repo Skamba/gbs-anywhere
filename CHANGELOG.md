@@ -47,6 +47,12 @@ a minor release may change behaviour.
   last 1,000 lines it printed (INFO and up), and new ones as they come
   (`GET /api/log`, `GET /api/log/stream`). Copying or downloading it
   replaces IP addresses with placeholders, so it can go into a bug report.
+- Update check: once a day gbs-anywhere asks GitHub for its latest release,
+  so the app can say when a newer one is out (`update` in `GET /api/state`).
+  GitHub sees the request like any other, including your IP address; it
+  carries nothing but the gbs-anywhere version. Turn it off under Status →
+  Settings (saved like the other settings; `update_check` in
+  `PUT /api/settings`) or with `--update-check off` (`UPDATE_CHECK=off`).
 - `grinder.wifi.pairing_id` in `GET /api/state`: the E65/E80 pairing in use;
   `grinder.wifi.unknown_pairing_id`: one typed in that the grinder did not
   take, while the app asks for the ID.
@@ -64,11 +70,11 @@ a minor release may change behaviour.
   integrations' setup forms, to show both in German.
 - A redesigned app with three tabs: Start (the three steps of a shot, with
   the step that is running or failed opened), Status (grinder, integrations,
-  settings) and History. Appearance (System, Light, Dark) and language
-  (English, Deutsch; by default the device's) can be set under Status →
-  Settings; both are kept on each device. When no shot can start (no
-  grinder connected, or the grinder blocked), System status opens by itself
-  and says why in plain words, and step 1 shows "Blocked" instead of
+  settings, version) and History. Appearance (System, Light, Dark) and
+  language (English, Deutsch; by default the device's) can be set under
+  Status → Settings; both are kept on each device. When no shot can start
+  (no grinder connected, or the grinder blocked), System status opens by
+  itself and says why in plain words, and step 1 shows "Blocked" instead of
   "Grind". When shots still work but something needs a look (an
   integration that is not working, or a grinder that turned a request
   down), System status turns yellow and says so. While an integration
