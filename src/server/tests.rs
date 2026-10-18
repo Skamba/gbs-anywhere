@@ -340,8 +340,8 @@ async fn settings_change_in_the_app_and_are_saved() {
         json!({ "shot_window_s": 120, "grinder_host": "127.0.0.1:9", "update_check": false })
     );
 
-    // No address: the link stops, and a pairing ID has nowhere to go.
-    let (code, settings) = put(json!({ "grinder_host": null })).await;
+    // No address (`""`): the link stops, and a pairing ID has nowhere to go.
+    let (code, settings) = put(json!({ "grinder_host": "" })).await;
     assert_eq!(code, 200);
     assert_eq!(settings["grinder_host"], Value::Null);
     assert_eq!(settings["source"]["grinder_host"], "app");
@@ -349,6 +349,62 @@ async fn settings_change_in_the_app_and_are_saved() {
     let url = format!("{base}/api/grinder/pairing");
     let (code, _) = call(reqwest::Method::POST, url, Some(json!({ "pairing_id": 7 }))).await;
     assert_eq!(code, 409);
+
+    // `null` goes back to the start settings, here the defaults: the app's
+    // values are forgotten.
+    let all = json!({ "shot_window_s": null, "grinder_host": null, "update_check": null });
+    let (code, settings) = put(all).await;
+    assert_eq!(code, 200);
+    assert_eq!(
+        settings["source"],
+        json!({ "shot_window_s": "default", "grinder_host": "default", "update_check": "default" })
+    );
+    assert_eq!(settings["shot_window_s"], 180);
+    let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert!(saved.get("settings").is_none(), "{saved}");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn null_goes_back_to_the_grinder_address_of_the_start_settings() {
+    let (base, x) = start_server().await;
+    let dir = temp_dir("host-reset");
+    let startup = Startup {
+        grinder_host: Some("127.0.0.1:9".into()),
+        pairing_file: Some(dir.join("grinder-pairing.json")),
+        ..Startup::default()
+    };
+    let file = SettingsFile::open(&dir.join("settings.json")).unwrap();
+    x.start_settings(startup, Some(file)).unwrap();
+    let put = |host: Value| {
+        call(
+            reqwest::Method::PUT,
+            format!("{base}/api/settings"),
+            Some(json!({ "grinder_host": host })),
+        )
+    };
+    let linked_to = |grinder: &'static str| {
+        let x = x.clone();
+        move || x.grinder_link().wifi.is_some_and(|w| w.grinder == grinder)
+    };
+    wait_for("the flag's link", linked_to("https://127.0.0.1:9")).await;
+
+    // Changed in the app, then back to the flag.
+    let (_, settings) = put(json!("127.0.0.1:10")).await;
+    assert_eq!(settings["source"]["grinder_host"], "app");
+    assert_eq!(settings["start"]["grinder_host"], "127.0.0.1:9");
+    wait_for("the app's link", linked_to("https://127.0.0.1:10")).await;
+    let (code, settings) = put(Value::Null).await;
+    assert_eq!(code, 200);
+    assert_eq!(settings["grinder_host"], "127.0.0.1:9");
+    assert_eq!(settings["source"]["grinder_host"], "command_line");
+    wait_for("the flag's link again", linked_to("https://127.0.0.1:9")).await;
+
+    // Removed in the app: no link, whatever the flag says.
+    let (_, settings) = put(json!("")).await;
+    assert_eq!(settings["grinder_host"], Value::Null);
+    assert_eq!(settings["source"]["grinder_host"], "app");
+    wait_for("the link to stop", || x.grinder_link().wifi.is_none()).await;
     let _ = std::fs::remove_dir_all(dir);
 }
 

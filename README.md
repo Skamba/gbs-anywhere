@@ -234,19 +234,36 @@ line can stay as it is:
 
 - **Time to pull the shot**: how long gbs-anywhere waits for a shot's time
   and weight before it gives up on that shot (`--brew-timeout-s`, 3 minutes
-  unless set). In the app it goes from 0:30 to 10:00 minutes.
+  unless set). In the app it goes from 0:30 to 60:00 minutes, or **No
+  limit**. − and + change it in 15 s steps (whole minutes above 10:00). To
+  type it, a number alone is minutes up to 60 and seconds above (`3` is
+  3:00, `150` is 2:30), which works on a phone's number pad; `m:ss`
+  (`2:30`) and a number with a unit (`2.5 min`, `150 s`) work too. `0` is
+  no limit.
 - **Grinder IP address**: the E65/E80 GbS to pair with (`--grinder`,
   `GRINDER_HOST`), optionally with `:port`. A new address takes effect at
-  once and keeps the pairing; removing it stops pairing, also when
-  `GRINDER_HOST` is set and after a restart.
+  once and keeps the pairing. Saving the field empty removes the address and
+  stops pairing, also when `GRINDER_HOST` is set and after a restart
+  (without `GRINDER_HOST`, it only forgets the app's address, so one set
+  later counts).
 - **Update check**: whether gbs-anywhere looks for a newer release once a
   day (see [Update check](#run-it); `--update-check`, `UPDATE_CHECK`, on
   unless set).
 
-A setting changed in the app is saved in the settings file and wins over its
+Under each one the app says where its value comes from: the default, the
+start settings (a flag or environment variable), or set in the app. A
+setting changed in the app is saved in the settings file and wins over its
 flag from then on; without a settings file it lasts until the next restart.
-To go back to the flags, stop gbs-anywhere and remove `settings` from the
-settings file (`/data/gbs-anywhere.json` in Docker).
+**Use start setting** forgets the app's value, so the flag or environment
+variable counts again, or the default when neither is set. For the grinder
+address, that is the way back to `GRINDER_HOST`; an empty field instead
+means no grinder, whatever `GRINDER_HOST` says.
+
+In the API (`PUT /api/settings`), `null` goes back to the start setting,
+like **Use start setting**. For `grinder_host` that is not the same as
+removing the address, which is `""`. (Nightly builds before this took
+`null` as removing it; an address removed that way stays removed.)
+
 **Appearance** (System, Light, Dark) and **Language** (Auto, English,
 Deutsch) sit in the same card but are kept on each device: by default the app
 follows the device's light or dark mode and its language.
