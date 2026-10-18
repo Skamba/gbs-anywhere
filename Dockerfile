@@ -27,12 +27,14 @@ RUN case "$TARGETARCH" in \
 ARG GBS_COMMIT=""
 WORKDIR /src
 COPY . .
+# cargo-about may download crates: it reads every crate in Cargo.lock,
+# including Windows-only ones the build itself never fetched.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
     cargo build --release --locked \
  && cp target/release/gbs-anywhere /usr/local/bin/gbs-anywhere \
  && mkdir -p /out/data /out/doc \
- && cargo about generate --locked --offline --fail \
+ && cargo about generate --locked --fail \
       -o /out/doc/THIRD-PARTY-NOTICES about.hbs
 
 FROM gcr.io/distroless/cc-debian13:nonroot
