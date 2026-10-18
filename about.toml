@@ -1,0 +1,31 @@
+# cargo-about settings: the third-party notices shipped in the image
+# (/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES), made by the Dockerfile
+# with about.hbs. To see them locally:
+#   cargo about generate --locked about.hbs
+
+# Licenses we take, in order of preference: of `MIT OR Apache-2.0` the
+# notice uses MIT. A dependency under any other license fails the build, so
+# a new one is looked at (it must be compatible with the AGPL) before it
+# ships.
+accepted = ["MIT", "Apache-2.0", "ISC", "BSD-3-Clause", "Unicode-3.0"]
+# What the images are built for.
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+# gbs-anywhere itself: its license is LICENSE.
+private = { ignore = true }
+
+# ring's own files say which parts are under which license; without this,
+# cargo-about lists the ISC notice of every source file.
+[ring.clarify]
+license = "Apache-2.0 AND ISC"
+
+[[ring.clarify.files]]
+path = "LICENSE-other-bits"
+license = "ISC"
+checksum = "f025ccfb7dfb6bdfedc75ca0f67acc69e6fb4998143d834f7c2f38a29989680f"
+
+[[ring.clarify.files]]
+path = "LICENSE-BoringSSL"
+license = "Apache-2.0"
+checksum = "005fc765ddc5115da796cca915baa9557abae13ff35e0a47c47affc56f6c414d"

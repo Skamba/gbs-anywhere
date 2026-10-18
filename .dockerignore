@@ -5,3 +5,6 @@
 !src/
 !web/
 !LICENSE
+# The third-party notices (cargo-about).
+!about.toml
+!about.hbs
