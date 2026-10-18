@@ -1189,7 +1189,7 @@
       "history.empty": "No shots yet. Each shot shows up here once it is done.",
       "history.noMatch": "No shots match the filter. Tap a status above to show it again.",
       "history.kept": { one: "The last shot is kept on this computer.", other: "The last {n} shots are kept on this computer." },
-      "history.keptMemory": { one: "The last shot is kept in memory only, until gbs-anywhere restarts.", other: "The last {n} shots are kept in memory only, until gbs-anywhere restarts." },
+      "history.keptMemory": { one: "The last shot is kept in memory for now, not saved on this computer.", other: "The last {n} shots are kept in memory for now, not saved on this computer." },
 
       "log.follow": "Follow",
       "log.warnOnly": "Warnings only",
@@ -1538,7 +1538,7 @@
       "history.empty": "Noch keine Bezüge. Jeder Bezug erscheint hier, sobald er fertig ist.",
       "history.noMatch": "Kein Bezug passt zum Filter. Tippe oben auf einen Status, um ihn wieder anzuzeigen.",
       "history.kept": { one: "Der letzte Bezug wird auf diesem Computer gespeichert.", other: "Die letzten {n} Bezüge werden auf diesem Computer gespeichert." },
-      "history.keptMemory": { one: "Der letzte Bezug wird nur im Speicher gehalten, bis gbs-anywhere neu startet.", other: "Die letzten {n} Bezüge werden nur im Speicher gehalten, bis gbs-anywhere neu startet." },
+      "history.keptMemory": { one: "Der letzte Bezug wird vorerst nur im Arbeitsspeicher gehalten, nicht auf diesem Computer gespeichert.", other: "Die letzten {n} Bezüge werden vorerst nur im Arbeitsspeicher gehalten, nicht auf diesem Computer gespeichert." },
 
       "log.follow": "Folgen",
       "log.warnOnly": "Nur Warnungen",
@@ -1786,13 +1786,14 @@
     return t && typeof t.secs === "number" ? t.secs : 0;
   }
   const windowLabel = () => clock(windowS() * 1000);
-  /** The shot times the grinder takes: over min_ms, up to max_ms. */
-  function grinderRange() {
-    const r = S && S.grinder_range;
-    if (r && typeof r.min_ms === "number" && typeof r.max_ms === "number") return r;
-    // A server from before grinder_range: the same limits (drop with the
-    // other branches for older servers).
-    return { min_ms: 10000, max_ms: 80000 };
+  /** The shot times the grinder adjusts from (`grinder_range`: over min_ms,
+   *  up to max_ms), or null before the state is in. */
+  const grinderRange = () => (S && S.grinder_range) || null;
+  /** Whether the grinder adjusts from a shot of `ms`, or null when that is
+   *  not known yet. */
+  function inGrinderRange(ms) {
+    const r = grinderRange();
+    return r && ms != null ? ms > r.min_ms && ms <= r.max_ms : null;
   }
   function lastOf(kindsWanted) {
     for (let i = events.length - 1; i >= 0; i--) if (kindsWanted.includes(events[i].kind)) return events[i];
@@ -2357,18 +2358,18 @@
     return f.reason ? cap(f.reason) : t("start.error.generic");
   }
 
-  /** Green when the grinder takes the shot and may adjust; grey when it
-   *  ignores the shot or (as in the design) the shot was on target. */
+  /** Green when the grinder adjusts from the shot; grey when it ignores
+   *  the shot or (as in the design) the shot was on target. */
   function renderOutcome(res, tg, ev) {
     const secsShot = res.time_ms / 1000;
     const box = $("s3-outcome");
     const range = grinderRange();
-    const inRange = ev && typeof ev.in_grinder_range === "boolean" ? ev.in_grinder_range : res.time_ms <= range.max_ms;
+    const inRange = (ev ? ev.in_grinder_range : inGrinderRange(res.time_ms)) !== false;
     let result, change = "", good = false;
-    // Checked here too: a server from before the minimum was part of
-    // in_grinder_range sends true for a short shot (drop with the other
-    // branches for older servers).
-    if (res.time_ms <= range.min_ms) {
+    // in_grinder_range does not say on which side a shot missed, so the
+    // time picks the wording, with every server: a shot too short also
+    // gets the hint to grind finer by hand.
+    if (range && res.time_ms <= range.min_ms) {
       result = t("outcome.tooShort", { time: secs(secsShot) });
       change = t("outcome.finerByHand");
     } else if (!inRange) {
@@ -2426,9 +2427,10 @@
     $("send").disabled = !ok || busy;
     let text = message || "", isWarn = !!warn;
     if (!message && ok) {
+      // No warning before the state (and with it the limits) is in.
       const range = grinderRange(), limit = (ms) => ({ limit: fmt.upToOne.format(ms / 1000) });
-      if (typed * 1000 <= range.min_ms) { text = t("start.form.tooShort", limit(range.min_ms)); isWarn = true; }
-      else if (typed * 1000 > range.max_ms) { text = t("start.form.tooLong", limit(range.max_ms)); isWarn = true; }
+      if (range && typed * 1000 <= range.min_ms) { text = t("start.form.tooShort", limit(range.min_ms)); isWarn = true; }
+      else if (range && typed * 1000 > range.max_ms) { text = t("start.form.tooLong", limit(range.max_ms)); isWarn = true; }
     }
     h.textContent = text;
     h.className = "hint" + (isWarn ? " warn" : "");
@@ -3204,9 +3206,6 @@
 
   // --- History tab -----------------------------------------------------------------
   const HKINDS = ["succeeded", "aborted", "failed"];
-  // A server from before these kinds says `success` and `error` (drop with
-  // the other branches for older servers).
-  const OLD_KINDS = { success: "succeeded", error: "failed" };
   const kindLabel = (k) => (HKINDS.includes(k) ? t("history.kind." + k) : k);
   let hHidden = {};
   try { hHidden = JSON.parse(store.get("historyHidden") || "{}") || {}; } catch (_) {}
@@ -3222,10 +3221,7 @@
     histTried = Date.now();
     try {
       const h = await api("/api/history");
-      if (h && Array.isArray(h.shots)) {
-        for (const s of h.shots) if (s && Object.prototype.hasOwnProperty.call(OLD_KINDS, s.kind)) s.kind = OLD_KINDS[s.kind];
-        hist = h; histState = "ok";
-      } else histState = "unsupported";
+      if (h && Array.isArray(h.shots)) { hist = h; histState = "ok"; } else histState = "unsupported";
     } catch (e) {
       // Not there on an older server; otherwise tried again shortly (see refresh).
       if (e.status === 404) histState = "unsupported";
@@ -3268,15 +3264,17 @@
     if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
     return parts.join(" · ");
   }
-  /** A success the grinder ignored (too short or too long), as the server
-   *  recorded it. A shot saved by an older server has no in_grinder_range
-   *  and shows as recorded, without a guess. */
-  const ignoredShot = (s) => s.kind === "succeeded" && s.in_grinder_range === false;
+  /** A success the grinder did not adjust from (too short or too long): as
+   *  the server recorded it, or for a shot saved before it did, by the same
+   *  rule from its time (once the limits are known). */
+  const ignoredShot = (s) => s.kind === "succeeded"
+    && (s.in_grinder_range ?? inGrinderRange(s.time_s == null ? null : s.time_s * 1000)) === false;
 
-  // A shot dated before the shot history existed (2026) was recorded while
-  // the server's clock was not set yet: a computer without a clock battery
-  // counts from 1970 until it gets the time from the network. Its day and
-  // time are not known.
+  // Until it syncs, a computer's clock may still read the last shutdown
+  // time, or 1970 or the system's build date. A shot dated before the shot
+  // history existed (2026) was recorded in one of the last two cases: its
+  // day and time are not known. One dated by a last shutdown time looks
+  // right and is not caught here.
   const CLOCK_SET_MS = Date.UTC(2026, 0, 1);
   /** When the shot started, or null when that is not known. */
   function shotDate(s) {

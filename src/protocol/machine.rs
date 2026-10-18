@@ -96,8 +96,9 @@ impl ShotResult {
         Self::new(time, beverage_g)
     }
 
-    /// Whether the grinder takes the time: it ignores shots of 10 s or less
-    /// and over 80 s.
+    /// Whether the grinder adjusts from the time: not from a shot of 10 s or
+    /// less ([`MIN_EXTRACTION_TIME_MS`]) or over 80 s
+    /// ([`MAX_EXTRACTION_TIME_MS`]).
     pub fn in_grinder_range(&self) -> bool {
         self.time_ms > MIN_EXTRACTION_TIME_MS && self.time_ms <= MAX_EXTRACTION_TIME_MS
     }
@@ -144,7 +145,7 @@ pub enum MachineEvent {
     /// A shot result was reported and is being shown to the grinder.
     ShotReported {
         result: ShotResult,
-        /// Whether the grinder takes its time
+        /// Whether the grinder adjusts from its time
         /// ([`ShotResult::in_grinder_range`]).
         in_grinder_range: bool,
     },
@@ -620,9 +621,9 @@ mod tests {
     }
 
     #[test]
-    fn the_grinder_takes_shots_over_10_s_up_to_80_s() {
-        let range = |ms: u64| ShotResult::new(Duration::from_millis(ms), 36.0).in_grinder_range();
-        for (ms, takes) in [
+    fn the_grinder_adjusts_from_shots_over_10_s_up_to_80_s() {
+        let adjusts = |ms: u64| ShotResult::new(Duration::from_millis(ms), 36.0).in_grinder_range();
+        for (ms, expected) in [
             (0, false),
             (10_000, false),
             (10_001, true),
@@ -630,7 +631,7 @@ mod tests {
             (80_000, true),
             (80_001, false),
         ] {
-            assert_eq!(range(ms), takes, "{ms} ms");
+            assert_eq!(adjusts(ms), expected, "{ms} ms");
         }
     }
 

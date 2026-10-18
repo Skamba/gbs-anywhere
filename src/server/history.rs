@@ -59,18 +59,18 @@ impl ShotKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Shot {
     pub id: String,
-    /// When the grinder asked for it (UTC).
+    /// When the grinder asked for it (UTC): `ended_at` less how long the
+    /// brew took in whole seconds, counted on the machine's clock.
     pub at: String,
-    /// `at` plus how long the brew took in whole seconds, counted on the
-    /// machine's clock: a clock step during the brew does not change it.
+    /// When it ended, as the wall clock read then (UTC). A clock step during
+    /// the brew does not change how far apart the two are.
     pub ended_at: String,
     pub kind: ShotKind,
     /// Only for a success.
     pub time_s: Option<f64>,
     pub weight_g: Option<f64>,
-    /// Only for a success: whether the grinder took its time
+    /// Only for a success: whether the grinder adjusts from its time
     /// ([`ShotResult::in_grinder_range`]). Older files have none.
-    #[serde(default)]
     pub in_grinder_range: Option<bool>,
     /// What the grinder aims for, when it said.
     pub target_time_s: Option<f64>,
@@ -122,10 +122,11 @@ impl History {
         self.lock().iter().cloned().collect()
     }
 
-    /// Whether the history survives a restart: it has a file, and the last
-    /// save worked (a volume can fill up or turn read-only later).
+    /// Whether the history survives a restart: the last save worked (a
+    /// volume can fill up or turn read-only later). The file is set only
+    /// once the first save worked, so without one this stays false.
     pub fn persistent(&self) -> bool {
-        self.file.get().is_some() && self.saved.load(Ordering::Relaxed)
+        self.saved.load(Ordering::Relaxed)
     }
 
     /// Keeps the history in `path` from now on, starting with what it holds.
@@ -303,9 +304,8 @@ impl Target {
 /// A brew the grinder asked for that has not ended yet.
 #[derive(Debug, Clone)]
 struct Open {
-    /// When it started, on the wall clock.
-    at: SystemTime,
-    /// The same on the machine's clock, which a clock step does not move.
+    /// When it started, on the machine's clock, which a clock step does not
+    /// move.
     since: Instant,
     target: Target,
 }
@@ -313,7 +313,7 @@ struct Open {
 /// How a brew ended.
 #[derive(Debug, Clone, Copy)]
 enum End {
-    /// With a shot result, and whether the grinder takes its time.
+    /// With a shot result, and whether the grinder adjusts from its time.
     Shot {
         result: ShotResult,
         in_grinder_range: bool,
@@ -333,10 +333,11 @@ struct Recorder {
 impl Recorder {
     /// The finished shot, once `event` ends one. `at` is when the event
     /// happened on the machine's clock, and `wall` the same moment on the
-    /// wall clock. Only a brew's start reads `wall`; its end is counted on
-    /// from there with the machine's clock, so a clock step in between (a
-    /// computer without a clock battery getting the time from the network)
-    /// does not change how long the brew took.
+    /// wall clock. Only a brew's end reads `wall`; its start is counted back
+    /// from there with the machine's clock. Until it syncs, a computer's
+    /// clock may still read the last shutdown time, or 1970 or the system's
+    /// build date, and then steps forward: the later reading is the one to
+    /// trust, and a step during the brew does not change how long it took.
     fn observe(&mut self, event: &MachineEvent, at: Instant, wall: SystemTime) -> Option<Shot> {
         match event {
             MachineEvent::GrindResult { result } => {
@@ -354,12 +355,12 @@ impl Recorder {
                 requested_by_grinder,
                 ..
             } => {
-                let missed = self
-                    .open
-                    .take()
-                    .map(|open| shot(&open, at, End::Aborted(AbortCause::ShotEndMissed)));
+                // Ended when this one started, which can be hours later.
+                let missed = self.open.take().map(|open| {
+                    let end = End::Aborted(AbortCause::ShotEndMissed);
+                    shot(&open, at, wall, end)
+                });
                 self.open = requested_by_grinder.then(|| Open {
-                    at: wall,
                     since: at,
                     target: self.grind.take().unwrap_or_default(),
                 });
@@ -374,20 +375,21 @@ impl Recorder {
                     result: *result,
                     in_grinder_range: *in_grinder_range,
                 };
-                Some(shot(&open, at, end))
+                Some(shot(&open, at, wall, end))
             }
             MachineEvent::ShotAborted { cause, .. } => {
                 let open = self.open.take()?;
-                Some(shot(&open, at, End::Aborted(*cause)))
+                Some(shot(&open, at, wall, End::Aborted(*cause)))
             }
             MachineEvent::StartRequested { .. } | MachineEvent::Ready => None,
         }
     }
 }
 
-/// The shot of a brew that ended at `ended` (on the machine's clock); one
-/// that ended for a cause also gets its words as `reason`.
-fn shot(open: &Open, ended: Instant, end: End) -> Shot {
+/// The shot of a brew that ended at `ended` on the machine's clock and at
+/// `wall` on the wall clock; one that ended for a cause also gets its words
+/// as `reason`.
+fn shot(open: &Open, ended: Instant, wall: SystemTime, end: End) -> Shot {
     // Whole seconds, as the history keeps its times: `at` and `ended_at` are
     // then exactly this far apart, so a 3:00 timeout does not show as 3:01.
     let took = Duration::from_secs(ended.saturating_duration_since(open.since).as_secs());
@@ -405,8 +407,8 @@ fn shot(open: &Open, ended: Instant, end: End) -> Shot {
     };
     Shot {
         id: uuid::Uuid::new_v4().simple().to_string(),
-        at: super::utc::with_seconds(open.at),
-        ended_at: super::utc::with_seconds(open.at.checked_add(took).unwrap_or(open.at)),
+        at: super::utc::with_seconds(wall.checked_sub(took).unwrap_or(wall)),
+        ended_at: super::utc::with_seconds(wall),
         kind,
         time_s: result.map(|r| f64::from(r.time_ms) / 1000.0),
         weight_g: result.map(|r| r.volume_ml),
@@ -498,10 +500,15 @@ mod tests {
     /// A brew that started at `at(0)`.
     fn open() -> Open {
         Open {
-            at: wall(at(0)),
             since: at(0),
             target: Target::default(),
         }
+    }
+
+    /// The shot of [`open`] that ended at `at(secs)`, with the wall clock in
+    /// step.
+    fn ended(secs: u64, end: End) -> Shot {
+        shot(&open(), at(secs), wall(at(secs)), end)
     }
 
     /// A shot of `secs` seconds and 36 g.
@@ -598,9 +605,9 @@ mod tests {
     }
 
     #[test]
-    fn records_whether_the_grinder_took_the_shot() {
+    fn records_whether_the_grinder_adjusts_from_the_shot() {
         let mut r = Recorder::default();
-        for (ms, took) in [
+        for (ms, adjusts) in [
             (8_000, false),
             (10_000, false),
             (28_500, true),
@@ -609,53 +616,80 @@ mod tests {
             r.feed(&started(true), at(0));
             let shot = r.feed(&reported(ms, 36.0), at(100)).unwrap();
             assert_eq!(shot.kind, ShotKind::Succeeded, "{ms} ms");
-            assert_eq!(shot.in_grinder_range, Some(took), "{ms} ms");
+            assert_eq!(shot.in_grinder_range, Some(adjusts), "{ms} ms");
         }
     }
 
     #[test]
     fn a_clock_step_does_not_change_how_long_a_brew_took() {
+        // Until it syncs, a clock may still read the last shutdown time, or
+        // 1970 or the system's build date, and then steps forward. The end
+        // is read when the brew ends, and the start counted back from it.
         let mut r = Recorder::default();
-        // The clock jumps a year ahead during the brew.
-        r.feed(&started(true), at(0));
-        let ahead = wall(at(40)) + Duration::from_secs(365 * 86_400);
-        let shot = r.observe(&reported(28_500, 36.0), at(40), ahead).unwrap();
+        let unset = UNIX_EPOCH + Duration::from_secs(95);
+        let shutdown = wall(at(0)) - Duration::from_secs(3 * 86_400);
+
+        // Set during the brew, from the last shutdown time: the right times.
+        r.observe(&started(true), at(0), shutdown);
+        let shot = r.feed(&reported(28_500, 36.0), at(40)).unwrap();
         assert_eq!(
             (shot.at.as_str(), shot.ended_at.as_str()),
             ("2026-10-11T12:00:00Z", "2026-10-11T12:00:40Z")
         );
 
-        // The clock was not set yet when the brew started (a computer
-        // without a clock battery counts from 1970) and is right by its end:
-        // the shot stays on that day, and the timeout 3 minutes long.
-        let unset = UNIX_EPOCH + Duration::from_secs(95);
+        // Set during a timeout, from 1970: the right day, 3 minutes long.
         r.observe(&started(true), at(100), unset);
         let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
         let shot = r.feed(&timeout, at(280)).unwrap();
         assert_eq!(
             (shot.at.as_str(), shot.ended_at.as_str()),
-            ("1970-01-01T00:01:35Z", "1970-01-01T00:04:35Z")
+            ("2026-10-11T12:01:40Z", "2026-10-11T12:04:40Z")
         );
 
-        // The end of a brew whose end was missed is counted the same way.
+        // A brew whose end was missed ends when the next one starts, maybe
+        // hours later, with the clock set by then: dated right too.
         r.observe(&started(true), at(300), unset);
-        let missed = r.observe(&started(true), at(330), wall(at(330))).unwrap();
-        assert_eq!(missed.ended_at, "1970-01-01T00:02:05Z");
+        let missed = r.feed(&started(true), at(4 * 3600)).unwrap();
+        assert_eq!(
+            (missed.at.as_str(), missed.ended_at.as_str()),
+            ("2026-10-11T12:05:00Z", "2026-10-11T16:00:00Z")
+        );
+
+        // Still unset when the brew ends: the shot is dated in 1970, with
+        // its length right.
+        r.observe(&started(true), at(5 * 3600), unset);
+        let shot = r.observe(
+            &reported(30_000, 36.0),
+            at(5 * 3600 + 32),
+            unset + Duration::from_secs(32),
+        );
+        let shot = shot.unwrap();
+        assert_eq!(
+            (shot.at.as_str(), shot.ended_at.as_str()),
+            ("1970-01-01T00:01:35Z", "1970-01-01T00:02:07Z")
+        );
     }
 
     #[test]
     fn a_brew_is_kept_in_whole_seconds() {
-        // A brew that started 0.8 s into a second and timed out on the
-        // machine's next tick, 0.25 s after the 3 minutes: 3:00, not 3:01.
+        // A brew that ended 0.05 s into a second, after a timeout that came
+        // on the machine's next tick, 0.25 s after the 3 minutes. Read from
+        // the clock at both ends, it started 0.8 s into a second, and the
+        // two times cut to whole seconds would show 3:01. Counted back from
+        // the end in whole seconds: 3:00.
         let mut r = Recorder::default();
-        let started_at = wall(at(0)) + Duration::from_millis(800);
-        r.observe(&started(true), at(0), started_at);
         let end = at(180) + Duration::from_millis(250);
+        let end_wall = wall(at(0)) + Duration::from_millis(181_050);
+        r.observe(
+            &started(true),
+            at(0),
+            end_wall - Duration::from_millis(180_250),
+        );
         let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
-        let shot = r.observe(&timeout, end, wall(end)).unwrap();
+        let shot = r.observe(&timeout, end, end_wall).unwrap();
         assert_eq!(
             (shot.at.as_str(), shot.ended_at.as_str()),
-            ("2026-10-11T12:00:00Z", "2026-10-11T12:03:00Z")
+            ("2026-10-11T12:00:01Z", "2026-10-11T12:03:01Z")
         );
     }
 
@@ -705,7 +739,7 @@ mod tests {
         h.use_file(&path).unwrap();
         assert!(h.persistent());
         for i in 0..CAPACITY + 5 {
-            let mut s = shot(&open(), at(100), success(i as u64));
+            let mut s = ended(100, success(i as u64));
             s.id = format!("s{i}");
             h.add(s);
         }
@@ -749,7 +783,7 @@ mod tests {
         let dir = temp_dir();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("history.json");
-        let known = serde_json::to_value(shot(&open(), at(30), success(28))).unwrap();
+        let known = serde_json::to_value(ended(30, success(28))).unwrap();
         let mut newer = known.clone();
         newer["kind"] = "partial".into();
         newer["id"] = "from-a-newer-version".into();
@@ -801,7 +835,7 @@ mod tests {
         let mut shots: Vec<_> = older
             .iter()
             .map(|(reason, _)| {
-                let error = shot(&open(), at(180), End::Aborted(AbortCause::ShotTimedOut));
+                let error = ended(180, End::Aborted(AbortCause::ShotTimedOut));
                 let mut v = serde_json::to_value(error).unwrap();
                 v.as_object_mut().unwrap().remove("cause");
                 v.as_object_mut().unwrap().remove("in_grinder_range");
@@ -898,13 +932,13 @@ mod tests {
         // The folder is gone (say, a volume that came off): the next save
         // fails, and the shot is kept in memory only.
         std::fs::remove_dir_all(&dir).unwrap();
-        h.add(shot(&open(), at(30), success(30)));
+        h.add(ended(30, success(30)));
         assert!(!h.persistent());
         assert_eq!(h.list().len(), 1);
 
         // The next save that works writes every shot again.
         std::fs::create_dir_all(&dir).unwrap();
-        h.add(shot(&open(), at(30), success(28)));
+        h.add(ended(30, success(28)));
         assert!(h.persistent());
         let again = History::default();
         again.use_file(&path).unwrap();

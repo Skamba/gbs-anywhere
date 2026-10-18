@@ -43,13 +43,14 @@ pub const START_BREW_SCRIPT_ID: i64 = 9;
 /// `ACTIVE SERVING`, at most this many times.
 pub const START_BREW_MAX_SENDS: u32 = 3;
 
-/// The grinder ignores a shot of 10 s or less
+/// The grinder does not adjust from a shot of 10 s or less
 /// (`REAL_EXTRACTION_TIME_MS <= 10000`) and leaves it to the person to grind
-/// finer.
+/// finer. The E64 WS still takes the result, so [`GrinderModel`] counts it
+/// as accepted; the E65/E80 applies the 10 s minimum too.
 pub const MIN_EXTRACTION_TIME_MS: u32 = 10_000;
 
-/// The grinder rejects a shot with
-/// `REAL_EXTRACTION_TIME_MS > 80000`.
+/// The E64 WS skips a shot with `REAL_EXTRACTION_TIME_MS > 80000` (see
+/// [`GrinderModel`]); the app assumes the same for the E65/E80.
 pub const MAX_EXTRACTION_TIME_MS: u32 = 80_000;
 
 /// `MA_EXTRACTION_STATUS` value that means "user abort": the brew goes to

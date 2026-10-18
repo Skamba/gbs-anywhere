@@ -42,15 +42,16 @@ a minor release may change behaviour.
 - Shot history: the last 200 shots the grinder asked for, with time, weight,
   target and how they ended (`kind`: `succeeded`, `aborted` or `failed`),
   kept in `history.json` next to the settings file (`GET /api/history`).
-  How long a brew took is counted on a clock that does not jump, so a
-  computer that sets its clock from the network during a shot keeps its
-  length right; shots recorded before the clock was set are listed last,
-  under "Unknown day". When the file can no longer be saved, the app says
-  the history is kept in memory only.
-- `grinder_range` in `GET /api/state`: the shot times the grinder takes
-  (over 10 s, up to 80 s); and `in_grinder_range` on each shot in
-  `GET /api/history` that succeeded: whether the grinder took it. The
-  History tab shows a shot the grinder ignored with a grey **Ignored**
+  A shot is dated by the clock when it ends, and its length is counted on
+  a clock that does not jump, so a computer that sets its clock from the
+  network during a shot keeps both right. Until it syncs, a clock may still
+  read the last shutdown time, or 1970 or the system's build date; shots
+  dated before 2026 are listed last, under "Unknown day". When the file can
+  no longer be saved, the app says the history is kept in memory for now.
+- `grinder_range` in `GET /api/state`: the shot times the grinder adjusts
+  from (over 10 s, up to 80 s); and `in_grinder_range` on each shot in
+  `GET /api/history` that succeeded: whether the grinder adjusted from it.
+  The History tab shows a shot the grinder ignored with a grey **Ignored**
   badge instead of a green **Success**.
 - The app can show gbs-anywhere's log, in a card at the bottom of Status
   (also opened with **Log** next to the last error in System status): the
@@ -117,7 +118,7 @@ a minor release may change behaviour.
   space in it) at startup, instead of failing on every request.
 - A fractional `--brew-timeout-s` is rounded to whole seconds.
 - `in_grinder_range` on `shot_reported` events is now also false for a
-  shot of 10 s or less, which the grinder ignores as well.
+  shot of 10 s or less, which the grinder does not adjust from either.
 - The La Marzocco form calls its poll setting "Check interval (seconds)" and
   says what it does; the Half Decent Scale form asks for the scale's IP
   address.
