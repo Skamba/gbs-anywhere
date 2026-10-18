@@ -62,6 +62,20 @@ pub struct SavedIntegration {
     pub id: String,
     pub kind: String,
     pub settings: Settings,
+    /// Moved here from the command line: while it is here, the flags and
+    /// environment variables of its kind are ignored.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_command_line: bool,
+}
+
+impl FileData {
+    /// The integration moved into the app from the flags of `kind`, if it
+    /// is still there.
+    pub fn moved(&self, kind: &str) -> Option<&SavedIntegration> {
+        self.integrations
+            .iter()
+            .find(|s| s.from_command_line && s.kind == kind)
+    }
 }
 
 impl SettingsFile {
@@ -599,6 +613,10 @@ mod tests {
             json!({ "shot_window_s": 120, "grinder_host": null })
         );
         assert_eq!(text["integrations"][0]["settings"]["host"], "x");
+        assert!(
+            text["integrations"][0].get("from_command_line").is_none(),
+            "left out unless moved"
+        );
 
         let again = SettingsFile::open(&path).unwrap();
         assert_eq!(

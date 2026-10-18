@@ -9,7 +9,7 @@ pub const DEFAULT_HOST: &str = "hds.local";
 
 pub const FIELDS: &[Field] = &[Field {
     key: "host",
-    label: "Scale address",
+    label: "Scale IP address",
     help: "The scale's IP address, e.g. 192.168.1.40 (hds.local works outside Docker). \
            Turn on WiFi in the scale's Setup > Connections first.",
     input: Input::Text,
