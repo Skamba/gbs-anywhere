@@ -5,7 +5,7 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations (each status line also as `detail_key` and `detail_vars`, for wording it in another language), settings, update check; `boot_id` changes on every start, so an app can tell its event and log numbers start over |
+//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations (each status line also as `detail_key` and `detail_vars`, for wording it in another language), settings, update check; `boot_id` changes on every start, so an app can tell its event and log numbers start over; `grinder_range`: the shot times the grinder takes, over `min_ms` and up to `max_ms` (10 000 and 80 000), as `in_grinder_range` checks them |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them; they win over flags from then on |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
@@ -13,10 +13,10 @@
 //! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes one added in the app and restarts it; a password left out or empty stays |
 //! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
-//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first, each not a success with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart |
+//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first: how each ended as `kind` (`succeeded`, `aborted` or `failed`), `at` and `ended_at` (UTC, whole seconds; `ended_at` counted on from `at` with a clock that does not jump), each that succeeded with `in_grinder_range` as on `shot_reported` (none on shots saved by earlier builds), each other with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart (false while saving fails) |
 //! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (INFO and up) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
 //! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`); `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
-//! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened; `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
+//! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened; `shot_reported` says with `in_grinder_range` whether the grinder takes its time (see `grinder_range`); `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the brew as a user abort (grinder skips it) |
@@ -30,7 +30,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::protocol::machine::EventRecord;
-use crate::protocol::{MachineError, MakoState, ShotResult};
+use crate::protocol::{
+    MAX_EXTRACTION_TIME_MS, MIN_EXTRACTION_TIME_MS, MachineError, MakoState, ShotResult,
+};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -93,6 +95,10 @@ pub fn state_json(x: &Server) -> Value {
             "grind_blocked": blocked,
             "last_shot": m.last_shot(),
             "last_grind": m.last_grind(),
+            "grinder_range": {
+                "min_ms": MIN_EXTRACTION_TIME_MS,
+                "max_ms": MAX_EXTRACTION_TIME_MS,
+            },
             "overrides": m.overrides,
             "grinder": {
                 "peer": link.peer,
@@ -706,6 +712,38 @@ mod tests {
         }
         let stale: Vec<_> = rows.keys().filter(|k| !codes.contains(**k)).collect();
         assert!(stale.is_empty(), "not a cause: {stale:?}");
+    }
+
+    #[test]
+    fn the_page_knows_every_shot_kind() {
+        use crate::server::history::ShotKind;
+        let all = [ShotKind::Succeeded, ShotKind::Aborted, ShotKind::Failed];
+        for kind in all {
+            // No wildcard: a new kind fails to compile here until it is
+            // added to `all`.
+            match kind {
+                ShotKind::Succeeded | ShotKind::Aborted | ShotKind::Failed => {}
+            }
+        }
+        let start = PAGE.find("\n  const HKINDS = [").expect("HKINDS");
+        let line = &PAGE[start + 1..];
+        let line = &line[..line.find('\n').unwrap()];
+        let en = catalog("en");
+        for kind in all {
+            let code = serde_json::to_value(kind).unwrap();
+            let code = code.as_str().unwrap();
+            assert!(
+                line.contains(&format!("\"{code}\"")),
+                "{code} is not in HKINDS"
+            );
+            assert!(
+                PAGE.contains(&format!("\n  .k-{code} {{")),
+                "no .k-{code} colours"
+            );
+            let key = format!("history.kind.{code}");
+            assert!(en.contains_key(key.as_str()), "{key} is not in the catalog");
+        }
+        assert_eq!(line.matches('"').count(), 2 * all.len(), "only these kinds");
     }
 
     #[test]

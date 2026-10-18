@@ -540,12 +540,24 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
+    // A knob press and a shot too short for the grinder.
+    grinder
+        .post(PATH_SCRIPTS_EXECUTE, json!({ "ID": START_BREW_SCRIPT_ID }))
+        .await;
+    let shot = json!({ "time_s": 8, "weight_g": 18 });
+    let (code, _) = call(post.clone(), format!("{base}/api/shot/result"), Some(shot)).await;
+    assert_eq!(code, 200);
+    wait_for("the short shot", || x.history().list().len() == 2).await;
+    while grinder.poll().await.status != MachineStatus::On {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
     // Another knob press, aborted.
     grinder
         .post(PATH_SCRIPTS_EXECUTE, json!({ "ID": START_BREW_SCRIPT_ID }))
         .await;
     call(post, format!("{base}/api/shot/abort"), None).await;
-    wait_for("the abort", || x.history().list().len() == 2).await;
+    wait_for("the abort", || x.history().list().len() == 3).await;
 
     let (code, body) = call(reqwest::Method::GET, format!("{base}/api/history"), None).await;
     assert_eq!(code, 200);
@@ -558,12 +570,18 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
     assert_eq!(shots[0]["reason"], "aborted by user");
     assert_eq!(shots[0]["cause"], "shot_aborted_by_user");
     assert_eq!(shots[0]["time_s"], Value::Null);
-    let shot = &shots[1];
-    assert_eq!(shot["kind"], "success");
+    assert_eq!(shots[0]["in_grinder_range"], Value::Null);
+    let short = &shots[1];
+    assert_eq!(short["kind"], "succeeded");
+    assert_eq!(short["time_s"], 8.0);
+    assert_eq!(short["in_grinder_range"], false, "the grinder ignores it");
+    let shot = &shots[2];
+    assert_eq!(shot["kind"], "succeeded");
     assert_eq!(
         (&shot["time_s"], &shot["weight_g"]),
         (&json!(28.5), &json!(37.2))
     );
+    assert_eq!(shot["in_grinder_range"], true);
     assert_eq!(shot["target_weight_g"], 36.0);
     assert_eq!(shot["target_time_s"], Value::Null, "the E64 WS sends none");
     assert_eq!(
@@ -575,8 +593,18 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
     assert!(shot["ended_at"].as_str().unwrap() >= shot["at"].as_str().unwrap());
     let saved: Value =
         serde_json::from_slice(&std::fs::read(dir.join("history.json")).unwrap()).unwrap();
-    assert_eq!(saved["shots"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["shots"].as_array().unwrap().len(), 3);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn the_state_says_which_shot_times_the_grinder_takes() {
+    let base = start().await;
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(
+        state["grinder_range"],
+        json!({ "min_ms": 10_000, "max_ms": 80_000 })
+    );
 }
 
 #[tokio::test]

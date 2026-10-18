@@ -26,8 +26,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{
-    EXTRACTION_STATUS_USER_ABORT, GrindResult, MAX_EXTRACTION_TIME_MS, MachineIdentity,
-    MachineStatus, MakoState,
+    EXTRACTION_STATUS_USER_ABORT, GrindResult, MAX_EXTRACTION_TIME_MS, MIN_EXTRACTION_TIME_MS,
+    MachineIdentity, MachineStatus, MakoState,
 };
 
 /// Tunables. The extraction-status values for a normal brew are a best guess;
@@ -96,9 +96,10 @@ impl ShotResult {
         Self::new(time, beverage_g)
     }
 
-    /// Whether the grinder will accept the time (it drops shots over 80 s).
+    /// Whether the grinder takes the time: it ignores shots of 10 s or less
+    /// and over 80 s.
     pub fn in_grinder_range(&self) -> bool {
-        self.time_ms <= MAX_EXTRACTION_TIME_MS
+        self.time_ms > MIN_EXTRACTION_TIME_MS && self.time_ms <= MAX_EXTRACTION_TIME_MS
     }
 }
 
@@ -143,6 +144,8 @@ pub enum MachineEvent {
     /// A shot result was reported and is being shown to the grinder.
     ShotReported {
         result: ShotResult,
+        /// Whether the grinder takes its time
+        /// ([`ShotResult::in_grinder_range`]).
         in_grinder_range: bool,
     },
     /// The brew ended without a result; the grinder skips it. Made with
@@ -613,6 +616,21 @@ mod tests {
         assert_eq!(secs(600.0), Some(ShotResult::MAX_TIME));
         for bad in [-1.0, 600.1, 1e20, f64::INFINITY, f64::NAN] {
             assert_eq!(secs(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_grinder_takes_shots_over_10_s_up_to_80_s() {
+        let range = |ms: u64| ShotResult::new(Duration::from_millis(ms), 36.0).in_grinder_range();
+        for (ms, takes) in [
+            (0, false),
+            (10_000, false),
+            (10_001, true),
+            (28_500, true),
+            (80_000, true),
+            (80_001, false),
+        ] {
+            assert_eq!(range(ms), takes, "{ms} ms");
         }
     }
 

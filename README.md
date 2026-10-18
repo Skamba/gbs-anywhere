@@ -252,8 +252,9 @@ Deutsch) sit in the same card but are kept on each device: by default the app
 follows the device's light or dark mode and its language.
 
 The **History** tab shows the last 200 shots the grinder asked for, with
-their time, weight and target (kept in `history.json` next to the settings
-file). The **Log** card at the bottom of **Status** (also opened with **Log**
+their time, weight and target, and marks the ones the grinder ignored as
+too short or too long (kept in `history.json` next to the settings file).
+The **Log** card at the bottom of **Status** (also opened with **Log**
 next to the last error in System status) shows the last 1,000 lines of
 gbs-anywhere's log (INFO and up, as `docker logs` prints them by default),
 ready to copy into a bug report.

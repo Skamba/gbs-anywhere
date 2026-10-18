@@ -43,6 +43,11 @@ pub const START_BREW_SCRIPT_ID: i64 = 9;
 /// `ACTIVE SERVING`, at most this many times.
 pub const START_BREW_MAX_SENDS: u32 = 3;
 
+/// The grinder ignores a shot of 10 s or less
+/// (`REAL_EXTRACTION_TIME_MS <= 10000`) and leaves it to the person to grind
+/// finer.
+pub const MIN_EXTRACTION_TIME_MS: u32 = 10_000;
+
 /// The grinder rejects a shot with
 /// `REAL_EXTRACTION_TIME_MS > 80000`.
 pub const MAX_EXTRACTION_TIME_MS: u32 = 80_000;
