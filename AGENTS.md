@@ -57,7 +57,22 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
   `cargo test` pass. CI (`.github/workflows/ci.yml`) runs the same checks on
   every push and pull request.
 - For page changes, open the page at phone width (about 390 px) in light and
-  dark mode and look at the result. There is no JavaScript test suite.
+  dark mode and look at the result. There is no JavaScript test suite, so
+  also check by hand what reviews keep finding:
+  - **After a gap:** a reload, a phone that slept, a tab in the background, a
+    server restart. Times come from the server (`age_ms`), never from when
+    the page received an event, and an old error doesn't come back after a
+    reload.
+  - **Requests and live events:** mark something as the person's only after
+    the server accepted it; its event can arrive before the reply.
+  - **Live regions:** write a `role="status"` region only when its text
+    changes, so screen readers don't repeat it.
+  - **Every state:** a rule for one state (say, showing "Blocked") holds in
+    every state it belongs to, also after a shot was done, aborted or failed.
+  - **Deliberate behaviour stays:** keep what the page does on purpose (a
+    typed weight stays for the next shot) unless the change says why.
+  - **Values, not wording:** match machine-readable values from the server
+    (codes, limits in `/api/state`), not its English text.
 - README.md (and an integration's own README) matches any change to
   user-visible behaviour, flags or the API.
 
