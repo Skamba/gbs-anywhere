@@ -33,12 +33,12 @@ use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
 use crate::integration::Backoff;
-use crate::protocol::machine::{EventRecord, REPLACED_BY_NEWER_GRIND};
+use crate::protocol::machine::EventRecord;
 use crate::protocol::wifi::{
     self, API_VERSION, BrewAccept, BrewDone, BrewJob, BrewJobsRes, BrewResult, Paired,
     PairingApplication, PairingApplicationRes, PairingStatusRes,
 };
-use crate::protocol::{GrindResult, MachineEvent, Phase};
+use crate::protocol::{AbortCause, GrindResult, MachineEvent, Phase};
 use crate::server::Server;
 
 /// Between job requests (and pairing checks). The grinder shows the machine
@@ -702,7 +702,7 @@ impl WifiGrinder {
     /// line's ID if it is another one, else pair again, keeping the refused ID
     /// to try once more if the grinder still has gbs-anywhere paired.
     fn forget_pairing(&mut self, server: &Server) -> anyhow::Result<()> {
-        self.drop_job(server, "the grinder no longer knows this gbs-anywhere");
+        self.drop_job(server, AbortCause::GrinderUnpaired);
         self.answer = None;
         // The first refused ID stays: when the command-line ID is refused too,
         // the one saved before is the better guess.
@@ -763,7 +763,8 @@ impl WifiGrinder {
                 // If someone reported or aborted it a moment ago, that event
                 // answers it instead; only a brew already over leaves it.
                 let over = server.with(|m, now| {
-                    m.give_up(now, REPLACED_BY_NEWER_GRIND).is_err() && m.phase(now) == Phase::Ready
+                    m.give_up(now, AbortCause::GrinderShotReplaced).is_err()
+                        && m.phase(now) == Phase::Ready
                 });
                 if over {
                     self.current = None;
@@ -854,12 +855,12 @@ impl WifiGrinder {
         let accepted = match self.post(wifi::PATH_BREW_ACCEPT, &accept).await {
             Ok(reply) if reply.status() == wifi::STATUS_OK => true,
             Ok(reply) if reply.status() == wifi::STATUS_JOB_UNKNOWN => {
-                self.drop_job(server, "the grinder stopped waiting before the shot came");
+                self.drop_job(server, AbortCause::GrinderShotDropped);
                 return;
             }
             Ok(reply) if refused(&reply) => {
                 tracing::warn!("grinder: it refused the job: {:?}", reply.status());
-                self.drop_job(server, "the grinder refused the job");
+                self.drop_job(server, AbortCause::GrinderShotRefused);
                 return;
             }
             other => {
@@ -874,13 +875,13 @@ impl WifiGrinder {
     }
 
     /// Ends the brew of the current job without answering it.
-    fn drop_job(&mut self, server: &Server, reason: &'static str) {
+    fn drop_job(&mut self, server: &Server, cause: AbortCause) {
         if self.current.take().is_none() {
             return;
         }
         // Already over when someone reported or aborted it a moment ago.
-        let _ = server.with(|m, now| m.give_up(now, reason));
-        self.report_problem(server, reason);
+        let _ = server.with(|m, now| m.give_up(now, cause));
+        self.report_problem(server, cause.text());
     }
 
     /// A reported or aborted shot becomes the answer to the current job.
@@ -890,7 +891,7 @@ impl WifiGrinder {
             MachineEvent::ShotReported { result, .. } => {
                 (BrewResult::Success, result.time_ms, result.volume_ml, "")
             }
-            MachineEvent::ShotAborted { reason } => (BrewResult::Canceled, 0, 0.0, *reason),
+            MachineEvent::ShotAborted { reason, .. } => (BrewResult::Canceled, 0, 0.0, *reason),
             _ => return false,
         };
         let Some(held) = self.current.take() else {

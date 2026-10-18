@@ -1178,6 +1178,7 @@
       "history.stoppedWaiting": "The grinder stopped waiting",
       "history.refused": "The grinder refused the shot",
       "history.address": "Ended: grinder address changed",
+      "history.endMissed": "Ended: next shot started",
       "history.target": "Target {targets}",
       "history.ignored": "ignored by the grinder",
       "history.unsupported": "This gbs-anywhere server keeps no shot history. Update gbs-anywhere to see your shots here.",
@@ -1526,6 +1527,7 @@
       "history.stoppedWaiting": "Die Mühle hat aufgehört zu warten",
       "history.refused": "Die Mühle hat den Bezug abgelehnt",
       "history.address": "Beendet: Mühlenadresse geändert",
+      "history.endMissed": "Beendet: nächster Bezug gestartet",
       "history.target": "Ziel {targets}",
       "history.ignored": "von der Mühle ignoriert",
       "history.unsupported": "Dieser gbs-anywhere-Server führt keine Historie. Aktualisiere gbs-anywhere, um deine Bezüge hier zu sehen.",
@@ -1788,9 +1790,38 @@
     for (let i = events.length - 1; i >= 0; i--) if (kindsWanted.includes(events[i].kind)) return events[i];
     return null;
   }
-  // Ends of a brew that are no failure (history kind "aborted").
-  const ABORTS = ["aborted by user", "a newer Grind-by-Sync grind replaced it", "the grinder address changed"];
-  const isAbort = (r) => ABORTS.includes(r);
+  // Why a brew ended without a result, by its `cause` (the server's
+  // AbortCause): on purpose (history kind "aborted") or a failure, the text
+  // on the Start tab and the history title. A timeout's texts say how long
+  // it waited (errorTitle, shotTitle). A test in control_api.rs checks this
+  // table against the server.
+  const CAUSES = {
+    shot_aborted_by_user: { onPurpose: true, text: "start.aborted.user", title: "history.abortedUser" },
+    grinder_shot_replaced: { onPurpose: true, text: "start.aborted.replaced", title: "history.replaced" },
+    grinder_address_changed: { onPurpose: true, text: "start.aborted.address", title: "history.address" },
+    shot_timed_out: { onPurpose: false },
+    grinder_shot_dropped: { onPurpose: false, text: "start.error.stoppedWaiting", title: "history.stoppedWaiting" },
+    grinder_shot_refused: { onPurpose: false, text: "start.error.refused", title: "history.refused" },
+    grinder_unpaired: { onPurpose: false, text: "start.error.unknownApp", title: "start.error.unknownApp" },
+    shot_end_missed: { onPurpose: false, title: "history.endMissed" },
+  };
+  // A server from before `cause` sends only the words (drop with the other
+  // branches for older servers).
+  const OLD_REASONS = {
+    "aborted by user": "shot_aborted_by_user",
+    "a newer Grind-by-Sync grind replaced it": "grinder_shot_replaced",
+    "the grinder address changed": "grinder_address_changed",
+    "no result reported in time": "shot_timed_out",
+    "the grinder stopped waiting before the shot came": "grinder_shot_dropped",
+    "the grinder refused the job": "grinder_shot_refused",
+    "the grinder no longer knows this gbs-anywhere": "grinder_unpaired",
+    "the next brew started before this one ended": "shot_end_missed",
+  };
+  const own = (o, k) => k != null && Object.prototype.hasOwnProperty.call(o, k);
+  /** The cause of a shot_aborted event or a history entry, or null. */
+  const causeOf = (x) => (x && (x.cause || (own(OLD_REASONS, x.reason) ? OLD_REASONS[x.reason] : null))) || null;
+  const causeInfo = (cause) => (own(CAUSES, cause) ? CAUSES[cause] : {});
+  const isAbort = (cause) => !!causeInfo(cause).onPurpose;
   /** An E65/E80 setup: a Generic WiFi link, or an address it is starting with. */
   const wifiSetup = () => !!(wifiOf() || (S && S.settings && S.settings.grinder_host));
   /** The E65/E80 link is (re)starting and has not reached the grinder yet. */
@@ -1835,7 +1866,7 @@
     if (ev.kind === "shot_reported") {
       return h.kind === "success" && h.time_s != null && Math.abs(h.time_s * 1000 - ev.result.time_ms) < 60 ? h : null;
     }
-    return h.kind !== "success" && h.reason === ev.reason ? h : null;
+    return h.kind !== "success" && (ev.cause ? h.cause === ev.cause : h.reason === ev.reason) ? h : null;
   }
   /** When the brew ended with this event. */
   function endTime(ev) {
@@ -1868,19 +1899,25 @@
     const phase = S.phase.phase;
     const outcome = lastOf(["shot_reported", "shot_aborted"]);
     const last = lastOf(["grind_result", "brew_job", "shot_reported", "shot_aborted"]);
-    let sc = "ready", reason = null;
+    // `reason` is the server's words for `cause`, shown for a cause this
+    // app does not know.
+    let sc = "ready", reason = null, cause = null;
     if (phase === "brewing") sc = "running";
     else if (phase === "finishing") {
       if (!S.phase.aborted) sc = "checking";
       else {
-        reason = outcome && outcome.kind === "shot_aborted" ? outcome.reason : null;
-        sc = isAbort(reason) ? "aborted" : "error";
+        const ended = outcome && outcome.kind === "shot_aborted" ? outcome : null;
+        reason = ended ? ended.reason : null;
+        cause = causeOf(ended);
+        sc = isAbort(cause) ? "aborted" : "error";
       }
     } else if (last && last.kind === "grind_result" && knobFresh(last)) sc = "knob";
     else if (last && last.kind === "shot_reported") sc = fresh(last) ? "done" : "ready";
-    else if (last && last.kind === "shot_aborted" && !isAbort(last.reason) && fresh(last)) { sc = "error"; reason = last.reason; }
+    else if (last && last.kind === "shot_aborted" && !isAbort(causeOf(last)) && fresh(last)) {
+      sc = "error"; reason = last.reason; cause = causeOf(last);
+    }
     if (sc === "error" && outcome && outcome.seq <= ui.dismissed) sc = "ready";
-    return { sc, reason, outcome, started: lastOf(["brew_started"]), job: lastOf(["grind_result", "brew_job"]) };
+    return { sc, reason, cause, outcome, started: lastOf(["brew_started"]), job: lastOf(["grind_result", "brew_job"]) };
   }
 
   // Per state: the tone and badge (catalog key under badge.) of each step.
@@ -1999,7 +2036,7 @@
       return s("error", "alert", "noGrinder", missing.text, missing.detail);
     }
     if (blocked) return s("warn", "alert", "blocked", t("sys.text.blocked", { message: blocked.grinder_message }));
-    if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f.reason, f.outcome));
+    if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f));
     // Shots can still be made, but something needs a look: not green.
     if (wifi && wifi.problem) return s("warn", "alert", "problem", t("sys.text.problem"), sentence(wifi.problem));
     const failing = (S.integrations || []).find((i) => i.health === "error" || i.health === "stopped");
@@ -2285,17 +2322,14 @@
     }
     $("s2-error").hidden = f.sc !== "error";
     if (f.sc === "error") {
-      const timeout = f.reason === "no result reported in time";
-      $("s2-err-title").textContent = errorTitle(f.reason, f.outcome);
+      const timeout = f.cause === "shot_timed_out";
+      $("s2-err-title").textContent = errorTitle(f);
       $("s2-err-info-btn").hidden = !timeout;
       $("s2-err-info-btn").setAttribute("aria-expanded", String(ui.errInfo));
       $("s2-err-info").hidden = !(timeout && ui.errInfo);
     }
     $("s2-aborted").hidden = f.sc !== "aborted";
-    if (f.sc === "aborted") {
-      $("s2-aborted").textContent = t(f.reason === "aborted by user" ? "start.aborted.user"
-        : f.reason === "the grinder address changed" ? "start.aborted.address" : "start.aborted.replaced");
-    }
+    if (f.sc === "aborted") $("s2-aborted").textContent = t(causeInfo(f.cause).text);
 
     // Step 3
     $("s3-wait").hidden = !(f.sc === "ready" || f.sc === "knob" || f.sc === "running");
@@ -2313,23 +2347,19 @@
     return i ? t("start.step2.reportedBy", { title: i.title }) : t("start.step2.byHand");
   }
 
-  // The machine's reasons for ending a brew that failed, and their texts.
-  const ERROR_REASONS = {
-    "the grinder stopped waiting before the shot came": "start.error.stoppedWaiting",
-    "the grinder refused the job": "start.error.refused",
-    "the grinder no longer knows this gbs-anywhere": "start.error.unknownApp",
-  };
-  function errorTitle(reason, outcome) {
-    if (reason === "no result reported in time") {
+  /** Why the shot of flow() `f` failed. */
+  function errorTitle(f) {
+    if (f.cause === "shot_timed_out") {
       // How long it waited, from the history; else the current setting.
-      const h = histFor(outcome);
+      const h = histFor(f.outcome);
       const ms = h ? Date.parse(h.ended_at) - Date.parse(h.at) : NaN;
       if (isFinite(ms) && ms > 0) return t("start.error.timeout", { window: clock(ms) });
       return windowS() > 0 ? t("start.error.timeout", { window: windowLabel() }) : t("start.error.timeoutNoLimit");
     }
-    if (ERROR_REASONS[reason]) return t(ERROR_REASONS[reason]);
-    // A reason this app does not know: as the server says it.
-    return reason ? cap(reason) : t("start.error.generic");
+    const text = causeInfo(f.cause).text;
+    if (text) return t(text);
+    // A cause this app does not know: as the server says it.
+    return f.reason ? cap(f.reason) : t("start.error.generic");
   }
 
   /** Green when the grinder takes the shot and may adjust; grey when it
@@ -3210,28 +3240,20 @@
     return name + " · " + date;
   }
 
-  // The machine's reasons for ending a brew, and their short history titles.
-  const HISTORY_REASONS = {
-    "aborted by user": "history.abortedUser",
-    "a newer Grind-by-Sync grind replaced it": "history.replaced",
-    "the grinder stopped waiting before the shot came": "history.stoppedWaiting",
-    "the grinder refused the job": "history.refused",
-    "the grinder address changed": "history.address",
-    "the grinder no longer knows this gbs-anywhere": "start.error.unknownApp",
-  };
   function shotTitle(s) {
     if (s.kind === "success") {
       if (s.time_s == null) return "–";
       return s.weight_g != null ? t("unit.shot", { time: secs(s.time_s), weight: grams(s.weight_g) }) : t("unit.seconds", { time: secs(s.time_s) });
     }
-    const r = s.reason || "";
-    if (r === "no result reported in time") {
+    const cause = causeOf(s);
+    if (cause === "shot_timed_out") {
       const ms = Date.parse(s.ended_at) - Date.parse(s.at);
       return t("history.timeout", { time: isFinite(ms) ? clock(ms) : windowLabel() });
     }
-    if (HISTORY_REASONS[r]) return t(HISTORY_REASONS[r]);
-    // A reason this app does not know: as the server says it.
-    return r ? cap(r) : kindLabel(s.kind);
+    const title = causeInfo(cause).title;
+    if (title) return t(title);
+    // A cause this app does not know: as the server says it.
+    return s.reason ? cap(s.reason) : kindLabel(s.kind);
   }
   function shotSub(s) {
     const parts = [];

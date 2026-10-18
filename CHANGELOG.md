@@ -64,6 +64,13 @@ a minor release may change behaviour.
 - `age_ms` on each event in `GET /api/events` and the event stream: how long
   ago it happened, so an app that catches up after a gap shows the right
   times.
+- `cause` on `shot_aborted` events and on each shot in `GET /api/history`
+  that was not a success: why it ended as a fixed code
+  (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, …) for
+  apps to match on, next to the English `reason`. Shots saved by earlier
+  builds get theirs from `reason`. The app now matches the code; a shot
+  still open when the next one started also gets its own title in the
+  history.
 - `detail_key` and `detail_vars` on each integration in `GET /api/state`:
   its status line as a key and values (such as `time_s`, `weight_g`), next
   to the English `detail`. The app uses them, and its own catalog for the
