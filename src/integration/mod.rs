@@ -16,7 +16,9 @@
 //! first one to report a shot wins.
 //!
 //! Included: [`la_marzocco`], which reads the La Marzocco cloud's coffee
-//! log, and [`half_decent`], which weighs the shot on a Half Decent Scale.
+//! log, [`half_decent`], which weighs the shot on a Half Decent Scale, and,
+//! with the `bluetooth` feature, `precisa`, which weighs and times it on a
+//! Eureka Precisa.
 //!
 //! # Adding one
 //!
@@ -72,6 +74,8 @@ mod manager;
 pub mod bluetooth;
 pub mod half_decent;
 pub mod la_marzocco;
+#[cfg(feature = "bluetooth")]
+pub mod precisa;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -89,7 +93,12 @@ pub use kind::{Field, Input, Kind, Settings};
 pub use manager::{ChangeError, Integrations, Source, View};
 
 /// Every integration, in the order the app lists them.
-pub static KINDS: &[&Kind] = &[&la_marzocco::KIND, &half_decent::KIND];
+pub static KINDS: &[&Kind] = &[
+    &la_marzocco::KIND,
+    &half_decent::KIND,
+    #[cfg(feature = "bluetooth")]
+    &precisa::KIND,
+];
 
 /// The command-line flags of every integration.
 #[derive(Debug, Clone, clap::Args)]
@@ -98,6 +107,9 @@ pub struct CliArgs {
     la_marzocco: la_marzocco::config::Args,
     #[command(flatten)]
     half_decent: half_decent::config::Args,
+    #[cfg(feature = "bluetooth")]
+    #[command(flatten)]
+    precisa: precisa::config::Args,
 }
 
 impl CliArgs {
@@ -106,6 +118,8 @@ impl CliArgs {
         [
             (&la_marzocco::KIND, self.la_marzocco.settings()),
             (&half_decent::KIND, self.half_decent.settings()),
+            #[cfg(feature = "bluetooth")]
+            (&precisa::KIND, self.precisa.settings()),
         ]
         .into_iter()
         .filter_map(|(kind, settings)| Some((kind, settings?)))

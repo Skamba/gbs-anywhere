@@ -88,6 +88,13 @@ a minor release may change behaviour.
   (`-v /run/dbus:/run/dbus:ro`), and its `--bluetooth-scan` lists the
   Bluetooth devices nearby with their names and addresses. The normal image
   has no Bluetooth.
+- Eureka Precisa integration (`-bluetooth` image only): the scale stays
+  connected over Bluetooth and, after each knob press, waits a moment for
+  the machine to be started (2 s unless set), tares, starts its timer and
+  reports the time and the weight in the cup. The shot ends at the recipe
+  weight, when the weight stops rising, or when the scale's timer is
+  stopped; the scale beeps twice when the shot went to the grinder and four
+  times when it did not. Set it up in the app or with `--precisa`.
 - The image carries the licenses of the Rust crates built into it, in
   `/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES`.
 

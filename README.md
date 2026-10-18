@@ -226,13 +226,14 @@ still set.
 |---|---|---|
 | La Marzocco cloud | time and weight from a connected La Marzocco's coffee log | [src/integration/la_marzocco](src/integration/la_marzocco/README.md) |
 | Half Decent Scale | time from first drops and weight, from a Half Decent Scale over WiFi | [src/integration/half_decent](src/integration/half_decent/README.md) |
+| Eureka Precisa | time and weight from a Eureka Precisa scale over Bluetooth (`-bluetooth` image) | [src/integration/precisa](src/integration/precisa/README.md) |
 
 ### Bluetooth
 
 Scales that connect over Bluetooth need the image with Bluetooth in it: each
 tag has a `-bluetooth` twin, such as `latest-bluetooth` or
-`nightly-bluetooth`. The normal image has no Bluetooth. No Bluetooth scale
-integration is included yet.
+`nightly-bluetooth`. The normal image has no Bluetooth. Of the
+integrations above, the Eureka Precisa needs it.
 
 It uses BlueZ, the host's Bluetooth service, so the host needs BlueZ running
 and an adapter. Give the container the host's D-Bus, which is how it reaches
@@ -307,6 +308,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | `--update-check <on\|off>` | on | look for a newer release once a day (see [Update check](#run-it)); also `UPDATE_CHECK`; a choice made in the app wins |
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
 | `--hds-*` | off | Half Decent Scale, see [its README](src/integration/half_decent/README.md) |
+| `--precisa*` | off | Eureka Precisa, `-bluetooth` image only, see [its README](src/integration/precisa/README.md) |
 
 `gbs-anywhere --help` lists the rest, such as `--bind` and `--no-app`.
 

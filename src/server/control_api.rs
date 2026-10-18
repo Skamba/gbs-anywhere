@@ -717,12 +717,24 @@ mod tests {
         }
         assert!(missing.is_empty(), "no German for: {missing:?}");
         // And none left behind by a field or status line that is gone (a
-        // field's placeholder may have its own wording).
+        // field's placeholder may have its own wording). A kind left out of
+        // this build (one that needs the `bluetooth` feature) keeps its own.
         let field_of = |k: &str| k.strip_suffix(".placeholder").map(|f| format!("{f}.label"));
+        let left_out = |k: &str| {
+            let id = k
+                .strip_prefix("kind.")
+                .or_else(|| k.strip_prefix("integ.detail."))
+                .and_then(|rest| rest.split_once('.'))
+                .map_or("", |(id, _)| id);
+            !id.is_empty()
+                && dir.join(id).is_dir()
+                && !crate::integration::KINDS.iter().any(|kind| kind.id == id)
+        };
         let unused: Vec<_> = de
             .keys()
             .filter(|k| from_server(k) && !wanted.contains(**k))
             .filter(|k| field_of(k).is_none_or(|label| !wanted.contains(&label)))
+            .filter(|k| !left_out(k))
             .collect();
         assert!(unused.is_empty(), "German for nothing: {unused:?}");
     }
