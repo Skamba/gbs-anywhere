@@ -33,3 +33,6 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+      # The Bluetooth build (`-bluetooth` image): also compiles libdbus.
+      - run: cargo clippy --all-targets --locked --features bluetooth -- -D warnings
+      - run: cargo test --locked --features bluetooth
