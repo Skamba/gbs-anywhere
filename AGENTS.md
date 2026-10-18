@@ -20,8 +20,10 @@ file is for agents changing the code.
   and page for people. Around them: `settings.rs` holds the settings people
   change in the app (shot window, grinder address, which restarts the
   E65/E80 link) and is the only writer of the settings file; `history.rs`
-  records the shots from the machine's events; `utc.rs` formats times.
-  `tests.rs` and `wifi_grinder/tests.rs` hold the end-to-end tests.
+  records the shots from the machine's events; `logbook.rs` keeps the last
+  log lines for the app (a `tracing` layer next to the console output);
+  `utc.rs` formats times. `tests.rs` and `wifi_grinder/tests.rs` hold the
+  end-to-end tests.
 - `src/integration/`: optional integrations that report shots by themselves,
   one folder each (see [Integrations](#integrations)). `mod.rs` has the
   shared rules (`Link`), `kind.rs` the setup forms and `manager.rs` the

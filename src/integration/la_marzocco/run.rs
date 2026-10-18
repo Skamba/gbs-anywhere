@@ -3,7 +3,7 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, bail};
+use anyhow::bail;
 
 use super::TITLE;
 use super::cloud::{CloudClient, LastCoffee, Thing};
@@ -52,7 +52,12 @@ async fn run(link: Link, cfg: Config) {
                 }
             }
             Err(e) => {
-                tracing::warn!("{TITLE}: {e:#}");
+                // A wrong or missing serial: the card lists the machines in
+                // full, the log only by their last four characters.
+                match e.downcast_ref::<MachineChoice>() {
+                    Some(choice) => tracing::warn!("{TITLE}: {}", choice.log),
+                    None => tracing::warn!("{TITLE}: {e:#}"),
+                }
                 link.status.error(format!("{e:#}"));
             }
         }
@@ -119,20 +124,28 @@ async fn connect(cfg: &Config) -> anyhow::Result<(CloudClient, Machine)> {
                 .iter()
                 .find(|t| t.serial_number.eq_ignore_ascii_case(&sn))
                 .copied()
-                .with_context(|| {
-                    format!(
-                        "machine {sn} not on this account (found: {})",
-                        list_serials(&machines)
-                    )
+                .ok_or_else(|| {
+                    MachineChoice::new(|full| {
+                        format!(
+                            "machine {} not on this account (found: {})",
+                            show_serial(&sn, full),
+                            list_serials(&machines, full)
+                        )
+                    })
                 })?
         }
         None => match machines.as_slice() {
             [one] => one,
             [] => bail!("no coffee machine on this account"),
-            many => bail!(
-                "more than one machine on this account, set the serial number: {}",
-                list_serials(many)
-            ),
+            many => {
+                return Err(MachineChoice::new(|full| {
+                    format!(
+                        "more than one machine on this account, set the serial number: {}",
+                        list_serials(many, full)
+                    )
+                })
+                .into());
+            }
         },
     };
     let serial = machine.serial_number.clone();
@@ -140,7 +153,9 @@ async fn connect(cfg: &Config) -> anyhow::Result<(CloudClient, Machine)> {
     let last = coffees.first().map(Idle::from);
     let subject = format!("{serial} · {}", machine.model_name);
     tracing::info!(
-        "{TITLE}: connected to {subject}, {}",
+        "{TITLE}: connected to {} (serial ending {}), {}",
+        machine.model_name,
+        tail(&serial),
         idle_line(last.as_ref())
     );
     Ok((
@@ -153,12 +168,53 @@ async fn connect(cfg: &Config) -> anyhow::Result<(CloudClient, Machine)> {
     ))
 }
 
-fn list_serials(machines: &[&Thing]) -> String {
+fn list_serials(machines: &[&Thing], full: bool) -> String {
     machines
         .iter()
-        .map(|t| format!("{} ({})", t.serial_number, t.model_name))
+        .map(|t| format!("{} ({})", show_serial(&t.serial_number, full), t.model_name))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Which machine to use is unclear. The card names the machines by their
+/// serial numbers in full, as the person needs them to pick one; the log,
+/// which may end up in a bug report, only by their last four characters.
+#[derive(Debug)]
+struct MachineChoice {
+    card: String,
+    log: String,
+}
+
+impl MachineChoice {
+    /// `text(full)` words the error with the serials in full or cut short.
+    fn new(text: impl Fn(bool) -> String) -> Self {
+        Self {
+            card: text(true),
+            log: text(false),
+        }
+    }
+}
+
+impl std::fmt::Display for MachineChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.card)
+    }
+}
+
+impl std::error::Error for MachineChoice {}
+
+/// A serial's last four characters: enough to tell machines apart.
+fn tail(serial: &str) -> &str {
+    serial.get(serial.len().saturating_sub(4)..).unwrap_or("")
+}
+
+/// A serial number in full, or as `…1234` for the log.
+fn show_serial(serial: &str, full: bool) -> String {
+    if full {
+        serial.to_owned()
+    } else {
+        format!("…{}", tail(serial))
+    }
 }
 
 fn now_ms() -> i64 {
@@ -331,5 +387,20 @@ mod tests {
         // Only an invalid one is new: skipped.
         let only_invalid = vec![list[2].clone()];
         assert_eq!(new_coffee(&only_invalid, 0), None);
+    }
+
+    #[test]
+    fn the_log_gets_only_the_serials_last_digits() {
+        let things: Vec<Thing> = serde_json::from_value(json!([
+            {"serialNumber": "MI000012", "modelName": "Linea Mini R"},
+            {"serialNumber": "GS000034", "modelName": "GS3"},
+        ]))
+        .unwrap();
+        let machines: Vec<&Thing> = things.iter().collect();
+        let e = anyhow::Error::from(MachineChoice::new(|full| list_serials(&machines, full)));
+        assert_eq!(format!("{e:#}"), "MI000012 (Linea Mini R), GS000034 (GS3)");
+        let choice = e.downcast_ref::<MachineChoice>().unwrap();
+        assert_eq!(choice.log, "…0012 (Linea Mini R), …0034 (GS3)");
+        assert_eq!(show_serial("AB", false), "…AB");
     }
 }

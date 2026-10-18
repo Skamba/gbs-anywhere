@@ -27,7 +27,7 @@ use clap::Parser;
 use gbs_anywhere::integration;
 use gbs_anywhere::protocol::machine::EventRecord;
 use gbs_anywhere::protocol::{MachineConfig, MachineEvent, ShotResult};
-use gbs_anywhere::server::{self, ServeConfig, Server, SettingsFile, Startup};
+use gbs_anywhere::server::{self, LogBook, ServeConfig, Server, SettingsFile, Startup};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -215,11 +215,12 @@ commands:  <seconds> [grams]   report the shot (e.g. `30 36`)
            set KEY=VALUE ...   change ON-state mako fields, e.g. `set TANK_LEVEL=0`
            ?                   show state      h  this help";
 
+/// Says what the machine does, in the log (and so in the app's log view).
 async fn print_events(x: Arc<Server>) {
     let mut rx = x.subscribe();
     loop {
         match rx.recv().await {
-            Ok(rec) => println!("{}", describe(&rec)),
+            Ok(rec) => tracing::info!("{}", describe(&rec)),
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(_) => return,
         }
@@ -248,12 +249,11 @@ fn describe(rec: &EventRecord) -> String {
                 .beverage_weight_g
                 .map_or(String::new(), |w| format!(", {w} g")),
         ),
-        MachineEvent::StartRequested { script_id } => {
-            format!(
-                "[{}] grinder requests brew start (ID {script_id:?})",
-                rec.seq
-            )
-        }
+        MachineEvent::StartRequested { script_id } => format!(
+            "[{}] grinder requests brew start{}",
+            rec.seq,
+            script_id.map_or(String::new(), |id| format!(" (ID {id})")),
+        ),
         MachineEvent::BrewStarted { human_action, .. } => {
             format!("[{}] >>> {human_action}", rec.seq)
         }
@@ -261,7 +261,7 @@ fn describe(rec: &EventRecord) -> String {
             result,
             in_grinder_range,
         } => format!(
-            "[{}] showing shot to grinder: {:.1} s, {:.1} ml{}",
+            "[{}] showing shot to grinder: {:.1} s, {:.1} g{}",
             rec.seq,
             result.time_ms as f64 / 1000.0,
             result.volume_ml,
@@ -344,11 +344,18 @@ fn result_msg(r: Result<(), gbs_anywhere::protocol::MachineError>) -> String {
     }
 }
 
+/// The console log, and a copy of its INFO and higher lines for the app
+/// (`GET /api/log`).
 fn init_tracing() {
+    use tracing_subscriber::prelude::*;
     use tracing_subscriber::{EnvFilter, fmt};
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("gbs_anywhere=info"));
-    fmt().with_env_filter(filter).with_target(false).init();
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_target(false))
+        .with(server::LogLayer::new(LogBook::global()))
+        .init();
 }
 
 #[cfg(test)]
