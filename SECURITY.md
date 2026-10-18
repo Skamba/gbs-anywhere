@@ -16,6 +16,10 @@ Accepted on purpose:
   they don't check the host name. A page that re-points its own name to
   that address can read the machine state they report (nothing private),
   but not change it.
+- In a browser that sends neither `Origin` nor `Sec-Fetch-Site` (Safari
+  before 16.4), such a page's reads count as the grinder's polls, so Status
+  may show it as the grinder that polled last. Only that status is
+  affected, nothing changes, and current browsers send these headers.
 - The app may be shown in a frame, so that a dashboard such as Home
   Assistant can embed it. Another page could frame it too; removing an
   integration still asks you to type DELETE.

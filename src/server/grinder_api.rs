@@ -12,6 +12,7 @@ use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
+use futures_util::StreamExt;
 use serde_json::{Value, json};
 
 use crate::server::Server;
@@ -59,15 +60,17 @@ async fn handle(
     headers: HeaderMap,
     body: Body,
 ) -> Response {
-    // A refusal on the grinder's own paths could be a grinder after all: it
-    // is logged where people look, once per device, and in the transcript.
-    let refuse = async |code: StatusCode, why: &str, hint: &str| {
-        if !grinder_path(uri.path()) {
-            tracing::debug!("{peer} {method} {uri}: refused, {why}");
-        } else if first_refusal(&format!("grinder {why} {}", peer.ip())) {
-            tracing::warn!("{peer}: refused {method} {uri}: {why}. {hint}");
-        } else {
-            tracing::debug!("{peer} {method} {uri}: refused, {why}");
+    // A refusal on the grinder's own paths that could be a grinder after all
+    // (one with a `hint`) is logged where people look, once per device; every
+    // refusal is in the transcript.
+    let refuse = async |code: StatusCode, why: &str, hint: Option<&str>| {
+        match hint {
+            Some(hint)
+                if grinder_path(uri.path()) && first_refusal("grinder", Some(peer.ip()), why) =>
+            {
+                tracing::warn!("{peer}: refused {method} {uri}: {why}. {hint}");
+            }
+            _ => tracing::debug!("{peer} {method} {uri}: refused, {why}"),
         }
         let line = format!("{} {peer} {method} {uri} -> refused: {why}\n", unix_time());
         x.write_transcript(&line).await;
@@ -77,18 +80,32 @@ async fn handle(
         return refuse(
             StatusCode::FORBIDDEN,
             "browser headers (Origin or Sec-Fetch-Site)",
-            "They keep web pages from acting as the grinder. If this is your E64 WS, start \
-             gbs-anywhere with --accept-browser-headers, and please report it",
+            Some(
+                "They keep web pages from acting as the grinder. If this is your E64 WS, start \
+                 gbs-anywhere with --accept-browser-headers, and please report it",
+            ),
         )
         .await;
     }
-    let Ok(body) = axum::body::to_bytes(body, MAX_BODY_BYTES).await else {
-        return refuse(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "a body over 4 KiB",
-            "The grinder's are a few dozen bytes; if this is your E64 WS, please report it",
-        )
-        .await;
+    let body = match read_body(body).await {
+        Ok(body) => body,
+        Err(BodyError::TooLarge) => {
+            return refuse(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "a body over 4 KiB",
+                Some(
+                    "The grinder's are a few dozen bytes; if this is your E64 WS, please report \
+                     it",
+                ),
+            )
+            .await;
+        }
+        // A client that went away mid-body, or sent it garbled: not a sign
+        // of a grinder that needs something else.
+        Err(BodyError::Broken(e)) => {
+            let why = format!("a broken request body ({e})");
+            return refuse(StatusCode::BAD_REQUEST, &why, None).await;
+        }
     };
     let req = GrinderRequest::classify(method.as_str(), uri.path(), &body);
     let poll = matches!(req, GrinderRequest::PollMako);
@@ -153,9 +170,63 @@ async fn handle(
     (StatusCode::OK, [("content-type", "application/json")], text).into_response()
 }
 
+/// Why a request body was not read.
+enum BodyError {
+    /// Over [`MAX_BODY_BYTES`].
+    TooLarge,
+    /// The connection broke, or the body was not valid HTTP.
+    Broken(axum::Error),
+}
+
+/// The request body, up to [`MAX_BODY_BYTES`]. Counted here rather than by a
+/// limit inside the body, so a body that is too large can't be mistaken for
+/// a broken one.
+async fn read_body(body: Body) -> Result<Vec<u8>, BodyError> {
+    let mut chunks = body.into_data_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = chunks.next().await {
+        let chunk = chunk.map_err(BodyError::Broken)?;
+        if bytes.len() + chunk.len() > MAX_BODY_BYTES {
+            return Err(BodyError::TooLarge);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
 fn unix_time() -> String {
     let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     format!("{}.{:03}", d.as_secs(), d.subsec_millis())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Bytes;
+
+    fn body(chunks: Vec<std::io::Result<Bytes>>) -> Body {
+        Body::from_stream(futures_util::stream::iter(chunks))
+    }
+
+    fn bytes(n: usize) -> std::io::Result<Bytes> {
+        Ok(Bytes::from(vec![b'x'; n]))
+    }
+
+    #[tokio::test]
+    async fn only_a_body_over_the_limit_is_too_large() {
+        let fits = read_body(body(vec![bytes(MAX_BODY_BYTES - 1), bytes(1)])).await;
+        assert_eq!(fits.ok().map(|b| b.len()), Some(MAX_BODY_BYTES));
+        let over = read_body(body(vec![bytes(MAX_BODY_BYTES), bytes(1)])).await;
+        assert!(matches!(over, Err(BodyError::TooLarge)));
+        // A client that goes away mid-body.
+        let cut = std::io::Error::other("connection closed");
+        let broken = read_body(body(vec![bytes(10), Err(cut)])).await;
+        assert!(matches!(broken, Err(BodyError::Broken(_))));
+        // Too large before it broke off is too large.
+        let cut = std::io::Error::other("connection closed");
+        let both = read_body(body(vec![bytes(MAX_BODY_BYTES + 1), Err(cut)])).await;
+        assert!(matches!(both, Err(BodyError::TooLarge)));
+    }
 }

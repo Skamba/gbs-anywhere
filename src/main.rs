@@ -75,11 +75,18 @@ struct Args {
     #[arg(long)]
     no_app: bool,
 
-    /// Also open the app by this host name (comma-separated for several),
-    /// besides IP addresses and home-network names such as `localhost`, a
-    /// name without a dot or one ending in `.local`, `.lan`, `.home.arpa` or
-    /// `.fritz.box`. `*` accepts any name.
-    #[arg(long, env = "ALLOW_HOST", value_delimiter = ',', value_name = "NAME")]
+    /// Also open the app by this host name, given in full (comma-separated
+    /// for several), besides IP addresses and home-network names such as
+    /// `localhost`, a name without a dot or one ending in `.local`, `.lan`,
+    /// `.home.arpa` or `.fritz.box`. `*` alone accepts any name, even that of
+    /// a web page that re-points its own name to this address.
+    #[arg(
+        long,
+        env = "ALLOW_HOST",
+        value_delimiter = ',',
+        value_name = "NAME",
+        value_parser = full_host_name
+    )]
     allow_host: Vec<String>,
 
     /// Let requests with browser headers (Origin, Sec-Fetch-Site) reach the
@@ -384,6 +391,18 @@ fn up_to_an_hour(s: &str) -> Result<f64, String> {
     }
 }
 
+/// Parses a name for `--allow-host`: `*` alone is a wildcard, anything else
+/// is compared as given, so a pattern such as `*.ts.net` would never match.
+fn full_host_name(s: &str) -> Result<String, String> {
+    if s.contains('*') && s.trim() != "*" {
+        return Err(
+            "give the name in full, e.g. gbs.tail1234.ts.net, or `*` alone to allow any name"
+                .to_owned(),
+        );
+    }
+    Ok(s.to_owned())
+}
+
 fn result_msg(r: Result<(), gbs_anywhere::protocol::MachineError>) -> String {
     match r {
         Ok(()) => String::new(),
@@ -451,5 +470,23 @@ mod tests {
             );
         }
         assert!(parse(&["gbs-anywhere", "--update-check", "maybe"]).is_err());
+    }
+
+    #[test]
+    fn allowed_hosts_are_full_names() {
+        let parse = |value: &str| Args::try_parse_from(["gbs-anywhere", "--allow-host", value]);
+        assert_eq!(
+            parse("gbs.tail1234.ts.net,*").unwrap().allow_host,
+            ["gbs.tail1234.ts.net", "*"]
+        );
+        for pattern in ["*.ts.net", "gbs.*.ts.net", "**", "gbs.local,*.example"] {
+            let Err(e) = parse(pattern) else {
+                panic!("{pattern} was taken");
+            };
+            assert!(
+                e.to_string().contains("give the name in full"),
+                "{pattern}: {e}"
+            );
+        }
     }
 }

@@ -96,6 +96,33 @@ async fn call(method: reqwest::Method, url: String, body: Option<Value>) -> (u16
     (res.status().as_u16(), res.json().await.unwrap())
 }
 
+/// Sends `request` exactly as written and returns the status of the reply,
+/// for requests no HTTP client would send.
+async fn raw_status(base: &str, request: &str) -> u16 {
+    use tokio::io::AsyncReadExt;
+    let mut conn = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    conn.write_all(request.as_bytes()).await.unwrap();
+    // Only the status line: the server may close the connection on what it
+    // has not read.
+    let mut reply = Vec::new();
+    let mut buf = [0; 1024];
+    while !reply.windows(2).any(|w| w == b"\r\n") {
+        let read = tokio::time::timeout(Duration::from_secs(5), conn.read(&mut buf));
+        match read.await.expect("a reply in time") {
+            Ok(0) | Err(_) => break,
+            Ok(n) => reply.extend_from_slice(&buf[..n]),
+        }
+    }
+    let reply = String::from_utf8_lossy(&reply);
+    reply
+        .split(' ')
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap_or_else(|| panic!("not an HTTP reply: {reply:?}"))
+}
+
 #[tokio::test]
 async fn grinder_accepts_a_shot_entered_in_the_app() {
     let base = start().await;
@@ -756,6 +783,60 @@ async fn the_app_answers_home_names_only_and_refuses_other_sites() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200);
+}
+
+#[tokio::test]
+async fn without_a_host_header_the_host_in_the_uri_is_checked() {
+    // HTTP/2 names the host only in the URI; an HTTP/1.1 request in absolute
+    // form without a Host header arrives the same way.
+    let base = start().await;
+    let start_shot = |origin: &str| {
+        format!(
+            "POST http://192.168.1.20/api/shot/start HTTP/1.1\r\norigin: {origin}\r\n\
+             content-length: 0\r\nconnection: close\r\n\r\n"
+        )
+    };
+    assert_eq!(
+        raw_status(&base, &start_shot("https://evil.example")).await,
+        403
+    );
+    assert_eq!(
+        raw_status(&base, &start_shot("http://192.168.1.20:8080")).await,
+        403,
+        "another site on the same computer"
+    );
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_ne!(state["phase"]["phase"], "brewing");
+    assert_eq!(
+        raw_status(&base, &start_shot("http://192.168.1.20")).await,
+        200
+    );
+    let rebound = "GET http://attacker.example/api/state HTTP/1.1\r\nconnection: close\r\n\r\n";
+    assert_eq!(raw_status(&base, rebound).await, 421);
+}
+
+#[tokio::test]
+async fn a_broken_body_is_not_taken_for_a_large_one() {
+    let base = start().await;
+    let post = |body: &str| {
+        format!(
+            "POST {PATH_BREWRATIO} HTTP/1.1\r\nhost: 127.0.0.1\r\n\
+             transfer-encoding: chunked\r\nconnection: close\r\n\r\n{body}"
+        )
+    };
+    assert_eq!(
+        raw_status(&base, &post("not a chunk size\r\n\r\n")).await,
+        400
+    );
+    // Too large is too large, also in chunks.
+    let big = "x".repeat(5000);
+    let chunked = format!("{:x}\r\n{big}\r\n0\r\n\r\n", big.len());
+    assert_eq!(raw_status(&base, &post(&chunked)).await, 413);
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(
+        state["grinder"]["requests"], 0,
+        "not counted as the grinder"
+    );
 }
 
 #[tokio::test]

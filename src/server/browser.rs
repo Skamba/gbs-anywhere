@@ -7,12 +7,12 @@
 //! a page does: the grinder is no browser. A plain read can't be told apart,
 //! so the machine state the grinder polls stays readable.
 
-use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, OnceLock};
 
-use axum::extract::{MatchedPath, Request, State};
+use axum::extract::{ConnectInfo, MatchedPath, Request, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -38,7 +38,9 @@ const HOME_SUFFIXES: [&str; 8] = [
 pub struct AllowedHosts(Arc<Vec<String>>);
 
 impl AllowedHosts {
-    /// From `--allow-host`: names with or without a port, in any case.
+    /// From `--allow-host`: names with or without a port, in any case. Only
+    /// `*` alone is a wildcard; the binary refuses a name with a `*` in it
+    /// at startup.
     pub fn new(names: impl IntoIterator<Item = String>) -> Self {
         Self(Arc::new(
             names
@@ -82,17 +84,25 @@ fn home_name(host: &str) -> bool {
 }
 
 /// A request a web page made from another site: the browser says so
-/// (`Sec-Fetch-Site`), or its `Origin` is not this host.
-fn from_other_site(headers: &HeaderMap) -> bool {
-    let text = |name| headers.get(name).and_then(|v| v.to_str().ok());
-    if let Some(site) = text(header::HeaderName::from_static("sec-fetch-site")) {
+/// (`Sec-Fetch-Site`), or its `Origin` is not the host it asked for.
+/// `authority` is that host as the request names it (the `Host` header, or
+/// over HTTP/2 the URI's authority), port included, so another site on the
+/// same computer stays another site.
+fn from_other_site(headers: &HeaderMap, authority: Option<&str>) -> bool {
+    if let Some(site) = headers.get("sec-fetch-site") {
         return site != "same-origin" && site != "none";
     }
-    match (text(header::ORIGIN), text(header::HOST)) {
-        (Some(origin), Some(host)) => origin
+    let Some(origin) = headers.get(header::ORIGIN) else {
+        // A script, not a browser.
+        return false;
+    };
+    // A browser always names the host, so an `Origin` with nothing to
+    // compare it to is not this site.
+    match (origin.to_str(), authority) {
+        (Ok(origin), Some(host)) => origin
             .split_once("://")
-            .is_none_or(|(_, authority)| !authority.eq_ignore_ascii_case(host)),
-        _ => false,
+            .is_none_or(|(_, a)| !a.eq_ignore_ascii_case(host)),
+        _ => true,
     }
 }
 
@@ -101,38 +111,88 @@ pub fn from_browser(headers: &HeaderMap) -> bool {
     headers.contains_key(header::ORIGIN) || headers.contains_key("sec-fetch-site")
 }
 
-/// How many different refusals of one kind are told apart in the log.
+/// How many different refusals of one kind to one device the log tells
+/// apart.
 const TOLD_APART: usize = 64;
 
-/// Whether `what` is refused for the first time, so the log says so once,
-/// however often a page tries. Each kind (the first word of `what`: `host`,
-/// `site`, `grinder`) tells up to [`TOLD_APART`] apart, so a page that fills
-/// one kind can't hide another, such as a real grinder's refusal. Past that,
-/// the log says once that the rest go to the debug log.
-pub fn first_refusal(what: &str) -> bool {
-    static SEEN: OnceLock<Mutex<HashMap<String, HashSet<String>>>> = OnceLock::new();
-    let kind = what.split(' ').next().unwrap_or_default();
-    let mut seen = SEEN
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let told = seen.entry(kind.to_owned()).or_default();
-    if told.contains(what) {
-        return false;
-    }
-    match told.len().cmp(&TOLD_APART) {
-        Ordering::Less => told.insert(what.to_owned()),
-        Ordering::Equal => {
-            // An empty entry marks that this was said.
-            told.insert(String::new());
-            tracing::warn!(
-                "more than {TOLD_APART} different refused requests ({kind}); further ones go \
-                 to the debug log only"
-            );
-            false
+/// How many devices the log tells apart for each kind of refusal.
+const DEVICES: usize = 64;
+
+/// The refusals the log has told, so that it tells each once.
+#[derive(Default)]
+struct Told {
+    /// By kind, then by device. Requests from an unknown address (a router
+    /// served without its peers' addresses) share one entry.
+    kinds: HashMap<&'static str, Devices>,
+}
+
+#[derive(Default)]
+struct Devices {
+    seen: HashMap<Option<IpAddr>, Seen>,
+    /// The log said that refusals to further devices go to the debug log.
+    full: bool,
+}
+
+#[derive(Default)]
+struct Seen {
+    what: HashSet<String>,
+    /// The log said that further refusals to this device go to the debug
+    /// log.
+    full: bool,
+}
+
+impl Told {
+    fn first(&mut self, kind: &'static str, peer: Option<IpAddr>, what: &str) -> bool {
+        // Kept short, however long the request made it.
+        let what = short(what);
+        let devices = self.kinds.entry(kind).or_default();
+        let known = devices.seen.len();
+        let seen = match devices.seen.entry(peer) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) if known < DEVICES => e.insert(Seen::default()),
+            Entry::Vacant(_) => {
+                if !std::mem::replace(&mut devices.full, true) {
+                    tracing::warn!(
+                        "refused requests ({kind}) from more than {DEVICES} devices; those from \
+                         further devices go to the debug log only"
+                    );
+                }
+                return false;
+            }
+        };
+        if seen.what.contains(&what) {
+            return false;
         }
-        Ordering::Greater => false,
+        if seen.what.len() < TOLD_APART {
+            seen.what.insert(what);
+            return true;
+        }
+        if !std::mem::replace(&mut seen.full, true) {
+            let from = peer.map_or_else(|| "an unknown address".to_owned(), |ip| ip.to_string());
+            tracing::warn!(
+                "more than {TOLD_APART} different refused requests ({kind}) from {from}; further \
+                 ones from it go to the debug log only"
+            );
+        }
+        false
     }
+}
+
+/// Whether `what` is refused to the device at `peer` for the first time, so
+/// the log says so once, however often a page tries. Each kind (`host`,
+/// `site`, `grinder`) tells up to [`TOLD_APART`] apart for each device, so a
+/// page on one device can't hide what is refused to another, and a page that
+/// fills one kind can't hide another, such as a real grinder's refusal. Up
+/// to [`DEVICES`] devices are told apart per kind, which keeps the memory
+/// small. Past either limit, the log says once that the rest go to the debug
+/// log. A device is an IP address: behind a reverse proxy, every device
+/// counts as the proxy.
+pub fn first_refusal(kind: &'static str, peer: Option<IpAddr>, what: &str) -> bool {
+    static TOLD: OnceLock<Mutex<Told>> = OnceLock::new();
+    TOLD.get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .first(kind, peer, what)
 }
 
 /// Text from a request, cut short for the log.
@@ -143,20 +203,27 @@ fn short(text: &str) -> String {
 /// For the app's routes: a host name of the home network, and for writes, no
 /// other site.
 pub async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) -> Response {
-    // Without a Host (HTTP/1.0, some scripts) there is nothing to check; a
-    // browser always sends one. HTTP/2 carries it as the URI's authority.
-    let host = match req.headers().get(header::HOST) {
-        Some(value) => Some(value.to_str().map(host_of).unwrap_or_default()),
-        None => req.uri().authority().map(|a| host_of(a.as_str())),
+    // Unknown when the router is served without its peers' addresses.
+    let peer = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip());
+    // The host as the request names it. Without a Host (HTTP/1.0, some
+    // scripts) there is nothing to check; a browser always sends one. HTTP/2
+    // carries it as the URI's authority.
+    let authority = match req.headers().get(header::HOST) {
+        Some(value) => Some(value.to_str().unwrap_or_default()),
+        None => req.uri().authority().map(|a| a.as_str()),
     };
-    if let Some(host) = host
+    if let Some(host) = authority.map(host_of)
         && (host.is_empty() || !hosts.allows(&host))
     {
         let host = short(&host);
-        if first_refusal(&format!("host {host}")) {
+        if first_refusal("host", peer, &host) {
             tracing::warn!(
-                "refused requests for {host:?}: not a name on the home network (to open \
-                     the app by that name, start gbs-anywhere with --allow-host {host})"
+                "refused requests for {host:?}: not a name on the home network. --allow-host \
+                 lets the app answer to more names, but a web page can also cause this \
+                 refusal, so add a name with it only if you open the app by that name yourself"
             );
         } else {
             tracing::debug!("refused a request for {host:?}");
@@ -169,7 +236,9 @@ pub async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) 
             .into_response();
     }
     let reads = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
-    if !reads && from_other_site(req.headers()) {
+    if !reads && from_other_site(req.headers(), authority) {
+        // A method can be any word, as long as the request allows.
+        let method = short(req.method().as_str());
         let path = short(req.uri().path());
         // Told apart by route, not by path, so a page can't use up the log's
         // warnings with made-up paths.
@@ -177,10 +246,10 @@ pub async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) 
             .extensions()
             .get::<MatchedPath>()
             .map_or_else(|| path.clone(), |m| m.as_str().to_owned());
-        if first_refusal(&format!("site {} {route}", req.method())) {
-            tracing::warn!("refused {} {path} requested by another site", req.method());
+        if first_refusal("site", peer, &format!("{method} {route}")) {
+            tracing::warn!("refused {method} {path} requested by another site");
         } else {
-            tracing::debug!("refused {} {path} requested by another site", req.method());
+            tracing::debug!("refused {method} {path} requested by another site");
         }
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -191,15 +260,81 @@ pub async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) 
 mod tests {
     use super::*;
 
+    const PHONE: Option<IpAddr> = Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 50)));
+    const LAPTOP: Option<IpAddr> = Some(IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 51)));
+
     #[test]
     fn one_kind_of_refusal_cannot_hide_another() {
+        let mut told = Told::default();
         for n in 0..TOLD_APART {
-            assert!(first_refusal(&format!("flood {n}")));
+            assert!(told.first("host", PHONE, &format!("r{n}.attacker.example")));
         }
-        assert!(!first_refusal("flood 3"), "said once");
-        assert!(!first_refusal("flood 999"), "past the cap: debug only");
-        assert!(!first_refusal("flood 1000"));
-        assert!(first_refusal("other kind"), "another kind still warns");
+        assert!(
+            !told.first("host", PHONE, "r3.attacker.example"),
+            "said once"
+        );
+        assert!(
+            !told.first("host", PHONE, "r999.attacker.example"),
+            "past the cap: debug only"
+        );
+        assert!(!told.first("host", PHONE, "r1000.attacker.example"));
+        assert!(
+            told.first("grinder", PHONE, "a body over 4 KiB"),
+            "another kind still warns"
+        );
+        assert!(told.first("site", PHONE, "POST /api/shot/start"));
+
+        // What a request makes long is kept short.
+        let long = format!("{} /api/shot/start", "M".repeat(100_000));
+        assert!(told.first("site", LAPTOP, &long));
+        assert!(!told.first("site", LAPTOP, &long), "said once");
+        assert!(
+            told.kinds["site"].seen[&LAPTOP]
+                .what
+                .iter()
+                .all(|w| w.len() <= 64)
+        );
+    }
+
+    #[test]
+    fn a_page_on_one_device_cannot_silence_another() {
+        let mut told = Told::default();
+        // A rebinding page on the phone fills the phone's share.
+        for n in 0..=TOLD_APART {
+            told.first("host", PHONE, &format!("r{n}.attacker.example"));
+        }
+        assert!(!told.first("host", PHONE, "gbs.tail1234.ts.net"));
+        // The laptop opening the app by its Tailscale name is still told.
+        assert!(told.first("host", LAPTOP, "gbs.tail1234.ts.net"));
+        assert!(
+            told.first("host", None, "gbs.tail1234.ts.net"),
+            "unknown addresses share their own entry"
+        );
+
+        // The devices told apart are capped too; the ones known stay.
+        let device = |n: usize| {
+            let n = u16::try_from(n).unwrap();
+            Some(IpAddr::V6(std::net::Ipv6Addr::new(
+                0x2001, 0xdb8, 0, 0, 0, 0, 0, n,
+            )))
+        };
+        let mut told = Told::default();
+        for n in 0..DEVICES {
+            assert!(told.first("host", device(n), "attacker.example"));
+        }
+        assert!(
+            !told.first("host", PHONE, "attacker.example"),
+            "one device too many"
+        );
+        assert!(!told.first("host", LAPTOP, "attacker.example"));
+        assert!(
+            told.first("host", device(0), "other.example"),
+            "a known device"
+        );
+        assert!(
+            told.first("grinder", PHONE, "a body over 4 KiB"),
+            "another kind"
+        );
     }
 
     #[test]
@@ -245,42 +380,52 @@ mod tests {
             }
             h
         };
-        let host = ("host", "192.168.1.20");
+        let host = Some("192.168.1.20");
         assert!(
-            !from_other_site(&headers(&[host])),
+            !from_other_site(&headers(&[]), host),
             "a script, not a browser"
         );
-        assert!(!from_other_site(&headers(&[
-            host,
-            ("origin", "http://192.168.1.20")
-        ])));
-        assert!(from_other_site(&headers(&[
-            host,
-            ("origin", "https://evil.example")
-        ])));
-        assert!(from_other_site(&headers(&[host, ("origin", "null")])));
-        assert!(!from_other_site(&headers(&[
-            host,
-            ("sec-fetch-site", "same-origin")
-        ])));
-        assert!(from_other_site(&headers(&[
-            host,
-            ("sec-fetch-site", "cross-site")
-        ])));
-        assert!(from_other_site(&headers(&[
-            host,
-            ("sec-fetch-site", "same-site")
-        ])));
+        assert!(!from_other_site(&headers(&[]), None));
+        assert!(!from_other_site(
+            &headers(&[("origin", "http://192.168.1.20")]),
+            host
+        ));
+        assert!(from_other_site(
+            &headers(&[("origin", "https://evil.example")]),
+            host
+        ));
+        assert!(from_other_site(&headers(&[("origin", "null")]), host));
+        assert!(
+            from_other_site(&headers(&[("origin", "http://192.168.1.20")]), None),
+            "an Origin, but no host to compare it to"
+        );
+        assert!(
+            from_other_site(&headers(&[("origin", "http://192.168.1.20:8080")]), host),
+            "another port is another site"
+        );
+        assert!(!from_other_site(
+            &headers(&[("sec-fetch-site", "same-origin")]),
+            host
+        ));
+        assert!(from_other_site(
+            &headers(&[("sec-fetch-site", "cross-site")]),
+            host
+        ));
+        assert!(from_other_site(
+            &headers(&[("sec-fetch-site", "same-site")]),
+            host
+        ));
         // The browser's own word wins over a Host a proxy rewrote.
-        let proxied = ("host", "10.0.0.5:8080");
-        assert!(!from_other_site(&headers(&[
-            proxied,
-            ("origin", "https://gbs.example.net"),
-            ("sec-fetch-site", "same-origin"),
-        ])));
-        assert!(!from_other_site(&headers(&[
-            ("host", "192.168.1.20:8080"),
-            ("origin", "http://192.168.1.20:8080"),
-        ])));
+        assert!(!from_other_site(
+            &headers(&[
+                ("origin", "https://gbs.example.net"),
+                ("sec-fetch-site", "same-origin"),
+            ]),
+            Some("10.0.0.5:8080")
+        ));
+        assert!(!from_other_site(
+            &headers(&[("origin", "http://GBS.local:8080")]),
+            Some("gbs.local:8080")
+        ));
     }
 }

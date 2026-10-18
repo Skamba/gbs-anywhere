@@ -57,8 +57,9 @@ than one, `-p 192.168.1.20:80:80` keeps it to the home network. Open the app
 by the computer's IP address or a home-network name: a name without a dot,
 or one ending in `.local`, `.localhost`, `.lan`, `.home`, `.home.arpa`,
 `.internal`, `.localdomain` or `.fritz.box`. Any other name, such as a Tailscale
-`*.ts.net` name, needs `--allow-host`. Behind a reverse proxy, pass the
-`Host` header through and allow the proxy's name the same way.
+name like `gbs.tail1234.ts.net`, needs `--allow-host`, with the name given in
+full. Behind a reverse proxy, pass the `Host` header through and allow the
+proxy's name the same way.
 
 `latest` is the newest release; pin one with e.g. `:0.2`, or follow
 `:nightly`, built each night from `main`. The app shows its version under
@@ -280,7 +281,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
 | `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
 | `-p, --ports <list>` | 80 | ports to serve on |
-| `--allow-host <names>` | off | also open the app by these host names, comma-separated (`*` for any); the IP address and home-network names always work; also `ALLOW_HOST` |
+| `--allow-host <names>` | off | also open the app by these host names, each in full (e.g. `gbs.tail1234.ts.net`), comma-separated; `*` alone allows any name, even that of a web page that re-points its own name to this address; the IP address and home-network names always work; also `ALLOW_HOST` |
 | `--accept-browser-headers` | off | let requests with browser headers reach the E64 WS's routes; only if the log says your E64 WS was refused (then please report it) |
 | `--grinder <host>` | off | pair with this E65/E80 GbS over its "Generic WiFi" option; also `GRINDER_HOST`; an address set in the app wins |
 | `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing across restarts; also `GRINDER_PAIRING_FILE` |

@@ -19,7 +19,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use crate::protocol::machine::{ABORTED_BY_USER, EventRecord, REPLACED_BY_NEWER_GRIND};
 use crate::protocol::{GrindResult, MachineEvent};
 use crate::server::Server;
-use crate::server::settings::{GRINDER_CHANGED, write_private};
+use crate::server::settings::{GRINDER_CHANGED, make_private, write_private};
 
 /// Shots kept.
 pub const CAPACITY: usize = 200;
@@ -93,6 +93,7 @@ impl History {
     /// new one is started; if it cannot be set aside or written, the history
     /// is kept in memory only.
     fn use_file(&self, path: &Path) -> anyhow::Result<()> {
+        make_private(path);
         let loaded = match read_file(path)? {
             Ok(shots) => shots,
             Err(why) => {
