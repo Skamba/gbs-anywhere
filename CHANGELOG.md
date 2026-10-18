@@ -58,19 +58,24 @@ a minor release may change behaviour.
 - `age_ms` on each event in `GET /api/events` and the event stream: how long
   ago it happened, so an app that catches up after a gap shows the right
   times.
+- `detail_key` and `detail_vars` on each integration in `GET /api/state`:
+  its status line as a key and values (such as `time_s`, `weight_g`), next
+  to the English `detail`. The app uses them, and its own catalog for the
+  integrations' setup forms, to show both in German.
 - A redesigned app with three tabs: Start (the three steps of a shot, with
   the step that is running or failed opened), Status (grinder, integrations,
-  settings) and History. Appearance (System, Light, Dark) can be set under
-  Status → Settings; it is kept on each device. When no shot can start (no
+  settings) and History. Appearance (System, Light, Dark) and language
+  (English, Deutsch; by default the device's) can be set under Status →
+  Settings; both are kept on each device. When no shot can start (no
   grinder connected, or the grinder blocked), System status opens by itself
   and says why in plain words, and step 1 shows "Blocked" instead of
-  "Grind". When shots still work but something needs a look (an integration
-  that is not working, or a grinder that turned a request down), System
-  status turns yellow and says so. While an integration reports the shot,
-  the fields to type it in are hidden; they come back, with a note, when
-  every integration has failed or none has reported the shot a minute after
-  it should have ended. The History tab replaces the list of this session's
-  shots.
+  "Grind". When shots still work but something needs a look (an
+  integration that is not working, or a grinder that turned a request
+  down), System status turns yellow and says so. While an integration
+  reports the shot, the fields to type it in are hidden; they come back,
+  with a note, when every integration has failed or none has reported the
+  shot a minute after it should have ended. The History tab replaces the
+  list of this session's shots.
 - The image carries the licenses of the Rust crates built into it, in
   `/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES`.
 
