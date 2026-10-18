@@ -21,6 +21,10 @@ The two grinder families connect differently:
 Tested with the E64 WS and the E65W GbS; the other E65/E80 GbS models offer
 the same "Generic WiFi" option.
 
+**New here? Start with the [wiki](https://github.com/Skamba/gbs-anywhere/wiki):**
+setup for each grinder and integration, daily use and troubleshooting, step
+by step. This README is the reference.
+
 > Not affiliated with Mahlkönig or Hemro.
 
 ## Run it
@@ -131,9 +135,9 @@ grinder on port 30001 over HTTPS.
    WiFi → Configuration** and tap **Start Pairing**. (If you enabled Generic
    WiFi after starting gbs-anywhere, give it up to a minute to notice.)
    Within a few seconds **gbs-anywhere** shows up under **Available
-   devices**, with the same code. Select it and tap **Accept Pairing**. If the
-   grinder's pairing times out first, tap **Start Pairing** again (the code
-   may change: the app always shows the current one).
+   devices**, with the same code: tap **Accept Pairing**. If the grinder's
+   pairing times out first, tap **Start Pairing** again (the code may
+   change: the app always shows the current one).
 5. The Generic WiFi entry is now called **gbs-anywhere**, and the app shows
    the grinder as **Ready** under Status. A restart needs no new pairing, and
    neither does a new address for the grinder.
@@ -160,6 +164,9 @@ WiFi → Configuration** on the grinder:
 To start over, tap **Clear Pairing** on the grinder, which also switches
 Generic WiFi off, and switch it on again. After about a minute gbs-anywhere
 asks to pair again by itself.
+
+The wiki's [E65 and E80 GbS page](https://github.com/Skamba/gbs-anywhere/wiki/E65-and-E80-GbS#if-pairing-doesnt-work)
+has these steps and other fixes.
 
 </details>
 
