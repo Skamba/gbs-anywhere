@@ -137,9 +137,15 @@ async fn run(server: Arc<Server>, cfg: UpdateConfig, http: reqwest::Client) {
                 continue;
             }
         }
-        wait = match latest_release(&http, &cfg.url).await {
+        let found = latest_release(&http, &cfg.url).await;
+        let mut s = server.update_state();
+        if !s.enabled {
+            // Turned off while it looked: the answer is not kept.
+            wait = cfg.first;
+            continue;
+        }
+        wait = match found {
             Ok(latest) => {
-                let mut s = server.update_state();
                 if is_newer(&latest) && s.latest.as_deref() != Some(latest.as_str()) {
                     tracing::info!(
                         "update: gbs-anywhere {latest} is out (this is {}): {RELEASES_PAGE}",
@@ -151,7 +157,6 @@ async fn run(server: Arc<Server>, cfg: UpdateConfig, http: reqwest::Client) {
                 cfg.every
             }
             Err(e) => {
-                let mut s = server.update_state();
                 if !s.failing {
                     tracing::info!(
                         "update check: could not look for a newer version, trying again in {} \
@@ -443,6 +448,36 @@ mod tests {
         let state = server.update_json();
         assert_eq!(state["enabled"], false);
         assert_eq!(state["latest"], Value::Null, "an old result is not kept");
+    }
+
+    #[tokio::test]
+    async fn an_answer_after_it_was_turned_off_is_not_kept() {
+        // GitHub answers slowly; the check is turned off while it waits.
+        let app = axum::Router::new().route(
+            "/latest",
+            axum::routing::get(|| async {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                r#"{"tag_name":"v999.0.0"}"#
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let server = Server::new(MachineConfig::default());
+        server.set_update_check(true);
+        server.start_update_check(UpdateConfig {
+            url: format!("http://{addr}/latest"),
+            first: Duration::from_millis(10),
+            every: Duration::from_secs(60),
+            retry: Duration::from_secs(60),
+            timeout: Duration::from_secs(5),
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        server.set_update_check(false);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        let state = server.update_json();
+        assert_eq!(state["enabled"], false);
+        assert_eq!(state["latest"], Value::Null, "the late answer is dropped");
     }
 
     #[tokio::test]
