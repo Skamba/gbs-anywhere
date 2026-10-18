@@ -51,10 +51,20 @@
 //! GbS: after a Grind-by-Sync grind), and a missing weight falls back to the
 //! recipe weight the grinder sent. Keep vendor code free of those so all
 //! integrations behave the same.
+//!
+//! # Bluetooth
+//!
+//! An integration that talks to a device over Bluetooth LE uses
+//! [`bluetooth`], which shares one adapter among all of them. It only exists
+//! with the `bluetooth` Cargo feature (the `-bluetooth` image), so put the
+//! integration's `pub mod`, its `KIND` in [`KINDS`] and its [`CliArgs`]
+//! field behind `#[cfg(feature = "bluetooth")]` too.
 
 mod kind;
 mod manager;
 
+#[cfg(feature = "bluetooth")]
+pub mod bluetooth;
 pub mod half_decent;
 pub mod la_marzocco;
 

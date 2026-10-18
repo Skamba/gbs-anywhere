@@ -57,6 +57,11 @@ a minor release may change behaviour.
   are hidden; they come back, with a note, when every integration has failed
   or none has reported the shot a minute after it should have ended. The
   History tab replaces the list of this session's shots.
+- Groundwork for Bluetooth scales: built with `--features bluetooth`
+  (`docker build --build-arg FEATURES=bluetooth`), gbs-anywhere reaches
+  BlueZ on the host through its D-Bus (`-v /run/dbus:/run/dbus:ro` in
+  Docker), and `--bluetooth-scan` lists the Bluetooth devices nearby with
+  their names and addresses. The normal build and image have no Bluetooth.
 
 ### Changed
 

@@ -9,11 +9,14 @@
 FROM rust:1-trixie AS build
 # Commit shown next to the version (`0.1.0+1a2b3c4`); empty for releases.
 ARG GBS_COMMIT=""
+# Cargo features, e.g. `bluetooth` for Bluetooth scales. That build needs
+# the host's D-Bus: add `-v /run/dbus:/run/dbus:ro` to `docker run`.
+ARG FEATURES=""
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
-    cargo build --release --locked \
+    cargo build --release --locked --features "$FEATURES" \
  && cp target/release/gbs-anywhere /usr/local/bin/gbs-anywhere \
  && mkdir -p /out/data
 

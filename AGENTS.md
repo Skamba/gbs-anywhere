@@ -51,7 +51,8 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json
 ## Done means
 
 - `cargo fmt --check`, `cargo clippy --all-targets` (no warnings) and
-  `cargo test` pass. CI (`.github/workflows/ci.yml`) runs the same checks on
+  `cargo test` pass, and clippy and the tests also with
+  `--features bluetooth` (Bluetooth scales; off by default). CI (`.github/workflows/ci.yml`) runs the same checks on
   every push and pull request.
 - For page changes, open the page at phone width (about 390 px) in light and
   dark mode and look at the result. There is no JavaScript test suite.

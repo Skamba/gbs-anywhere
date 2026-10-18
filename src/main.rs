@@ -106,6 +106,18 @@ struct Args {
     )]
     grinder_pairing_id: Option<u32>,
 
+    /// List the Bluetooth devices nearby, then exit: their names and
+    /// addresses, for setting up a Bluetooth scale. Scans for S seconds.
+    #[cfg(feature = "bluetooth")]
+    #[arg(
+        long,
+        value_name = "S",
+        num_args = 0..=1,
+        default_missing_value = "10",
+        value_parser = clap::value_parser!(u64).range(1..=60)
+    )]
+    bluetooth_scan: Option<u64>,
+
     #[command(flatten)]
     integrations: integration::CliArgs,
 }
@@ -115,6 +127,10 @@ async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     init_tracing();
     tracing::info!("gbs-anywhere {}", gbs_anywhere::version());
+    #[cfg(feature = "bluetooth")]
+    if let Some(secs) = args.bluetooth_scan {
+        return bluetooth_scan(Duration::from_secs(secs)).await;
+    }
     let file = args.config.as_deref().map(SettingsFile::open).transpose()?;
     // The brew timeout follows the shot window (`start_settings` below).
     let mut config = MachineConfig {
@@ -194,6 +210,32 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(stdin_loop(x.clone()));
     }
     server::serve(x, cfg).await
+}
+
+/// `--bluetooth-scan`: prints what the adapter sees, strongest first.
+#[cfg(feature = "bluetooth")]
+async fn bluetooth_scan(scan_for: Duration) -> anyhow::Result<()> {
+    use integration::bluetooth::Bluetooth;
+    let bt = Bluetooth::shared().await?;
+    println!(
+        "scanning with {} for {} s ...",
+        bt.info(),
+        scan_for.as_secs()
+    );
+    let seen = bt.scan(scan_for).await?;
+    if seen.is_empty() {
+        println!("no Bluetooth devices seen");
+    }
+    for s in &seen {
+        let rssi = s.rssi.map_or(" ".repeat(7), |r| format!("{r:>4}dBm"));
+        let name = if s.name.is_empty() {
+            "(no name)"
+        } else {
+            &s.name
+        };
+        println!("{rssi}  {}  {name}", s.address);
+    }
+    Ok(())
 }
 
 /// The address this host uses on the LAN (no packet is sent).
@@ -359,6 +401,21 @@ mod tests {
     fn cli_is_well_formed() {
         use clap::CommandFactory;
         Args::command().debug_assert();
+    }
+
+    #[cfg(feature = "bluetooth")]
+    #[test]
+    fn bluetooth_scan_takes_optional_seconds() {
+        let parse = |a: &[&str]| Args::try_parse_from([&["gbs-anywhere"], a].concat());
+        assert_eq!(parse(&[]).unwrap().bluetooth_scan, None);
+        assert_eq!(
+            parse(&["--bluetooth-scan"]).unwrap().bluetooth_scan,
+            Some(10)
+        );
+        let s = parse(&["--bluetooth-scan", "3"]).unwrap().bluetooth_scan;
+        assert_eq!(s, Some(3));
+        assert!(parse(&["--bluetooth-scan", "0"]).is_err());
+        assert!(parse(&["--bluetooth-scan", "61"]).is_err());
     }
 
     #[test]

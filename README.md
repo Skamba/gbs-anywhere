@@ -196,6 +196,36 @@ Integrations can also be set with flags or environment variables. Those show
 | La Marzocco cloud | time and weight from a connected La Marzocco's coffee log | [src/integration/la_marzocco](src/integration/la_marzocco/README.md) |
 | Half Decent Scale | time from first drops and weight, from a Half Decent Scale over WiFi | [src/integration/half_decent](src/integration/half_decent/README.md) |
 
+### Bluetooth
+
+Scales that connect over Bluetooth need a build with Bluetooth in it; the
+normal image has none. No Bluetooth scale integration is included yet. To
+build one:
+
+```sh
+docker build --build-arg FEATURES=bluetooth -t gbs-anywhere-bluetooth .
+```
+
+From source it is `cargo build --release --features bluetooth`. On Linux it
+uses BlueZ, the host's Bluetooth service, so the host needs BlueZ running and
+an adapter. In Docker, give the container the host's D-Bus, which is how it
+reaches BlueZ:
+
+```sh
+docker run -d --name gbs-anywhere --restart unless-stopped   -p 80:80 -v gbs-anywhere:/data -v /run/dbus:/run/dbus:ro   gbs-anywhere-bluetooth
+```
+
+To find a scale's name and address, run the image with `--bluetooth-scan`
+(scans for 10 s, or `--bluetooth-scan 30`) in place of the server:
+
+```sh
+docker run --rm -v /run/dbus:/run/dbus:ro gbs-anywhere-bluetooth --bluetooth-scan
+```
+
+If it says BlueZ refused this user, the host only lets some users use
+Bluetooth. The container runs as user 65532: allow that user for
+`org.bluez` in the host's D-Bus policy, or add `--user 0:0` to `docker run`.
+
 ## Settings in the app
 
 Two settings can be changed under **Status → Settings**, so the command line

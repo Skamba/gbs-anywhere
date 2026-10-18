@@ -18,7 +18,8 @@ Thanks for helping. A few things make a contribution easy to review and merge.
 - Say what you tested it on: which grinder, machine, scale or integration,
   or "tests only".
 - `cargo fmt --check`, `cargo clippy --all-targets` (no warnings) and
-  `cargo test` must pass. CI runs them on every pull request.
+  `cargo test` must pass, and clippy and the tests also with
+  `--features bluetooth`. CI runs them on every pull request.
 - Update README.md when behaviour, flags or the API change, and add a line
   under `## [Unreleased]` in CHANGELOG.md for anything users will notice.
 - The repository is public: leave out IP addresses, serial numbers, account

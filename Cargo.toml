@@ -27,6 +27,19 @@ tokio-tungstenite = "0.30"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.26.1", features = ["v4"] }
+# Bluetooth LE for scales; only with the `bluetooth` feature.
+btleplug = { version = "0.13.5", optional = true }
+
+# Not used directly: btleplug talks to BlueZ through libdbus, and `vendored`
+# builds libdbus into the binary (cc only, no pkg-config), so the distroless
+# image needs no libdbus of its own.
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = { version = "0.9.12", optional = true, features = ["vendored"] }
+
+[features]
+# Bluetooth scales. Off by default: it adds C code (libdbus) to the build,
+# so the default build and image stay pure Rust.
+bluetooth = ["dep:btleplug", "dep:dbus"]
 
 [lints.rust]
 unsafe_code = "forbid"
