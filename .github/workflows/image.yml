@@ -9,9 +9,13 @@
 # (from 1.0) and `latest`, and creates the GitHub release from that version's
 # section in CHANGELOG.md.
 #
+# Running it by hand on a `feature/...` branch publishes a test image tagged
+# with the branch name, e.g. `feature-bluetooth`, for trying a feature before
+# it reaches `main`.
+#
 # Each image also comes with Bluetooth (`--features bluetooth`, for Bluetooth
 # scales), tagged the same with `-bluetooth` after it: `nightly-bluetooth`,
-# `X.Y.Z-bluetooth`, `latest-bluetooth`.
+# `X.Y.Z-bluetooth`, `latest-bluetooth`, `feature-bluetooth-bluetooth`.
 name: image
 
 on:
@@ -54,8 +58,9 @@ jobs:
         run: |
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] \
             && [ "$GITHUB_REF" != refs/heads/main ] \
-            && [[ $GITHUB_REF != refs/tags/v* ]]; then
-            echo "::error::run this on main (nightly) or on a vX.Y.Z tag (release)"
+            && [[ $GITHUB_REF != refs/tags/v* ]] \
+            && [[ $GITHUB_REF != refs/heads/feature/* ]]; then
+            echo "::error::run this on main (nightly), a vX.Y.Z tag (release) or a feature/ branch (test image)"
             exit 1
           fi
           if [ "$GITHUB_EVENT_NAME" = schedule ]; then
@@ -200,11 +205,15 @@ jobs:
           # only moves on a release; pre-releases get their exact tag only.
           tags: |
             type=raw,value=nightly,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch,enable=${{ startsWith(github.ref, 'refs/heads/feature/') }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
           # The Bluetooth image: every tag with `-bluetooth`, `latest` too.
-          flavor: ${{ matrix.suffix && format('suffix={0},onlatest=true', matrix.suffix) || '' }}
+          # A feature branch never moves `latest`.
+          flavor: |
+            latest=${{ startsWith(github.ref, 'refs/heads/feature/') && 'false' || 'auto' }}
+            ${{ matrix.suffix && format('suffix={0},onlatest=true', matrix.suffix) || '' }}
 
       - uses: docker/login-action@v4
         with:
