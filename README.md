@@ -298,3 +298,9 @@ Copyright 2026 Skamba and the gbs-anywhere contributors.
 [GNU AGPL v3 or later](LICENSE): anyone, cafés included, may use, change and
 share it. If you share a changed version, or let other people use one over a
 network, you must offer them its source code under the same license.
+
+The Bluetooth build (`-bluetooth` images) also contains
+[libdbus](https://gitlab.freedesktop.org/dbus/dbus), used under the GNU GPL
+version 2 or later (it is offered under that or the Academic Free License
+2.1). Its license and where to find its source are in
+`/usr/share/doc/gbs-anywhere/` in the image.

@@ -88,8 +88,11 @@ jobs:
             runner: ubuntu-24.04-arm
           - variant: default
             features: ""
+            licenses: AGPL-3.0-or-later
+          # libdbus is built in, under its GPL-2.0-or-later option.
           - variant: bluetooth
             features: bluetooth
+            licenses: AGPL-3.0-or-later AND GPL-2.0-or-later
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -123,7 +126,7 @@ jobs:
           images: ${{ env.IMAGE }}
           # GitHub reports plain AGPL-3.0; give the exact SPDX id.
           labels: |
-            org.opencontainers.image.licenses=AGPL-3.0-or-later
+            org.opencontainers.image.licenses=${{ matrix.licenses }}
 
       - uses: docker/login-action@v4
         if: env.PUSH == 'true'

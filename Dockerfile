@@ -18,11 +18,26 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
     cargo build --release --locked --features "$FEATURES" \
  && cp target/release/gbs-anywhere /usr/local/bin/gbs-anywhere \
- && mkdir -p /out/data
+ && mkdir -p /out/data /out/doc \
+ && case "$FEATURES" in *bluetooth*) \
+      v=$(grep -A1 '^name = "libdbus-sys"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p') \
+   && cp "$(ls -d /usr/local/cargo/registry/src/*/libdbus-sys-$v | head -n 1)/vendor/dbus/COPYING" \
+        /out/doc/libdbus-COPYING \
+   && printf '%s\n' \
+        "The Bluetooth build has libdbus built in, from the libdbus-sys $v crate:" \
+        "https://crates.io/crates/libdbus-sys/$v (its source is under vendor/dbus)." \
+        "libdbus is offered under the Academic Free License 2.1 or the GNU GPL" \
+        "version 2 or later; gbs-anywhere uses it under the GNU GPL version 2 or" \
+        "later (see libdbus-COPYING). gbs-anywhere's own source:" \
+        "https://github.com/Skamba/gbs-anywhere" > /out/doc/libdbus-SOURCE ;; \
+    esac
 
 FROM gcr.io/distroless/cc-debian13:nonroot
 COPY --from=build /usr/local/bin/gbs-anywhere /usr/local/bin/gbs-anywhere
 COPY LICENSE /usr/share/doc/gbs-anywhere/LICENSE
+# The Bluetooth build's libdbus license and where its source is; empty
+# otherwise.
+COPY --from=build /out/doc/ /usr/share/doc/gbs-anywhere/
 LABEL org.opencontainers.image.licenses="AGPL-3.0-or-later"
 # What is set up in the app (integrations, settings), an E65/E80 pairing and
 # the shot history are saved here; mount a volume to keep them when the
