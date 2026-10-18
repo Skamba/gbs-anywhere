@@ -266,3 +266,10 @@ Copyright 2026 Skamba and the gbs-anywhere contributors.
 [GNU AGPL v3 or later](LICENSE): anyone, cafés included, may use, change and
 share it. If you share a changed version, or let other people use one over a
 network, you must offer them its source code under the same license.
+
+The image also carries the licenses of the Rust crates built into it, in
+`/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES`
+(`docker cp gbs-anywhere:/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES .`
+copies it out). From source, `cargo about generate about.hbs` prints the same
+list, with [cargo-about](https://github.com/EmbarkStudios/cargo-about)
+installed.
