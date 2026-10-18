@@ -430,6 +430,7 @@ async fn the_log_is_kept_for_the_app() {
     );
     let first = x.log().push(tracing::Level::WARN, "routes test: first");
     x.log().push(tracing::Level::INFO, "routes test: second");
+    x.log().push(tracing::Level::ERROR, "routes test: third");
 
     let (code, body) = call(
         reqwest::Method::GET,
@@ -444,12 +445,14 @@ async fn the_log_is_kept_for_the_app() {
         .iter()
         .filter(|l| l["text"].as_str().unwrap().starts_with("routes test:"))
         .collect();
-    assert_eq!(ours.len(), 2);
+    assert_eq!(ours.len(), 3);
     assert_eq!(ours[0]["seq"], first.seq);
-    assert_eq!(ours[0]["level"], "WARN");
     assert_eq!(ours[0]["text"], "routes test: first");
     assert!(ours[0]["ts"].as_str().unwrap().ends_with('Z'));
-    assert_eq!(body["last_seq"], first.seq + 1);
+    assert_eq!(body["last_seq"], first.seq + 2);
+    // Lower case, like the API's other codes.
+    let levels: Vec<_> = ours.iter().map(|l| l["level"].as_str().unwrap()).collect();
+    assert_eq!(levels, ["warn", "info", "error"]);
 
     // The stream sends the same lines as `log` events.
     let mut text = String::new();
@@ -464,6 +467,7 @@ async fn the_log_is_kept_for_the_app() {
     assert!(text.contains("event: log"), "{text}");
     assert!(text.contains(&format!("id: {}", first.seq)), "{text}");
     assert!(text.contains(r#""text":"routes test: first""#), "{text}");
+    assert!(text.contains(r#""level":"warn""#), "{text}");
 
     // A browser reconnecting says what it saw last, and gets what it missed;
     // that wins over the query of the URL it reconnects to.

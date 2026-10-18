@@ -14,7 +14,7 @@
 //! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
 //! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first; `capacity` (200); `persistent`: whether they survive a restart |
-//! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (INFO and up) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
+//! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (`level`: `info`, `warn` or `error`) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
 //! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`); `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
 //! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |

@@ -26,7 +26,7 @@ pub struct LogLine {
     pub seq: u64,
     /// UTC, RFC 3339 with milliseconds.
     pub ts: String,
-    /// `ERROR`, `WARN` or `INFO`.
+    /// `error`, `warn` or `info`, lower case like the API's other codes.
     pub level: &'static str,
     /// The message as printed, without colour codes.
     pub text: String,
@@ -117,11 +117,11 @@ impl LogBook {
 
 fn level_name(level: Level) -> &'static str {
     match level {
-        Level::ERROR => "ERROR",
-        Level::WARN => "WARN",
-        Level::INFO => "INFO",
-        Level::DEBUG => "DEBUG",
-        Level::TRACE => "TRACE",
+        Level::ERROR => "error",
+        Level::WARN => "warn",
+        Level::INFO => "info",
+        Level::DEBUG => "debug",
+        Level::TRACE => "trace",
     }
 }
 
@@ -288,9 +288,9 @@ mod tests {
         assert_eq!(
             got,
             [
-                ("INFO", "grinder: paired"),
-                ("WARN", "cannot bind port=80 name=\"x\""),
-                ("ERROR", "broken"),
+                ("info", "grinder: paired"),
+                ("warn", "cannot bind port=80 name=\"x\""),
+                ("error", "broken"),
             ]
         );
         assert_eq!(live.try_recv().unwrap().text, "grinder: paired");

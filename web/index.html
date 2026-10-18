@@ -472,10 +472,10 @@
   .ll .t { flex: none; color: var(--log-dim); }
   .ll .v { flex: none; width: 5ch; font-weight: 700; }
   .ll .x { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-  .l-INFO .v { color: var(--log-info); }
-  .l-WARN .v { color: var(--log-warn); }
-  .l-ERROR .v { color: var(--log-error); }
-  .warn-only .l-INFO { display: none; }
+  .l-info .v { color: var(--log-info); }
+  .l-warn .v { color: var(--log-warn); }
+  .l-error .v { color: var(--log-error); }
+  .warn-only .l-info { display: none; }
   .log-live { display: flex; align-items: center; gap: 8px; padding-top: 6px; color: var(--log-dim); }
   .live-block { width: 7px; height: 14px; background: var(--log-dim); }
   .live-block.on { background: var(--log-info); }
@@ -3306,13 +3306,13 @@
     if (log.state === "live") { log.state = "idle"; if (logShown()) openLog(); }
   }
 
-  /** One log line on the page: time in the language's format, level, text as the server wrote it. */
+  /** One log line on the page: time in the language's format, level (lower case from the server, shown in capitals), text as the server wrote it. */
   function lineEl(l) {
     const d = new Date(l.ts);
-    const level = String(l.level || "INFO").toUpperCase();
-    return el("div", { class: "ll l-" + (level === "WARNING" ? "WARN" : level) },
+    const level = String(l.level || "info");
+    return el("div", { class: "ll l-" + level },
       el("span", { class: "t", text: isNaN(d) ? "--:--:--" : hhmmss(d) }),
-      el("span", { class: "v", text: level }),
+      el("span", { class: "v", text: level.toUpperCase() }),
       el("span", { class: "x", lang: "en", text: String(l.text || "") }));
   }
   function rebuildLogLines() {
@@ -3501,7 +3501,7 @@
     const body = lines.map((l) => {
       const d = new Date(l.ts);
       return (isNaN(d) ? String(l.ts) : stamp(d) + "." + String(d.getMilliseconds()).padStart(3, "0")) + " "
-        + String(l.level).padEnd(5) + " " + scrub(String(l.text || ""));
+        + String(l.level).toUpperCase().padEnd(5) + " " + scrub(String(l.text || ""));
     });
     const first = lines.length ? new Date(lines[0].ts) : new Date();
     const last = lines.length ? new Date(lines[lines.length - 1].ts) : new Date();
@@ -3540,7 +3540,7 @@
 
   $("log-copy").addEventListener("click", async () => {
     const since = Date.now() - 60 * 60000;
-    let lines = log.lines.filter((l) => Date.parse(l.ts) >= since && (!log.warnOnly || l.level !== "INFO"));
+    let lines = log.lines.filter((l) => Date.parse(l.ts) >= since && (!log.warnOnly || l.level !== "info"));
     if (lines.length > 500) lines = lines.slice(-500);
     if (!lines.length) {
       logDone("note", t(log.warnOnly ? "log.nothingWarnings" : "log.nothingLines"));
