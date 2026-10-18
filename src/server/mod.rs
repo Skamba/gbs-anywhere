@@ -13,7 +13,8 @@
 //! for brew jobs and drives the same machine from them.
 //!
 //! Around them: [`settings`] (what people change in the app, and the settings
-//! file) and the shot history.
+//! file), [`logbook`] (the server's log for the app), the shot history and
+//! [`update_check`].
 //!
 //! The `gbs-anywhere` binary is a thin wrapper: build a [`Server`], then
 //! [`serve`] it or mount the routers in another app.
@@ -21,9 +22,11 @@
 mod control_api;
 mod grinder_api;
 pub mod history;
+pub mod logbook;
 pub mod settings;
 #[cfg(test)]
 mod tests;
+pub mod update_check;
 mod utc;
 pub mod wifi_grinder;
 
@@ -42,7 +45,9 @@ use tokio::sync::{broadcast, mpsc};
 pub use control_api::{ShotInput, control_router, patch_ready, state_json};
 pub use grinder_api::grinder_router;
 pub use history::{History, Shot, ShotKind};
+pub use logbook::{LogBook, LogLayer, LogLine};
 pub use settings::{SettingsChange, SettingsError, SettingsFile, Startup};
+pub use update_check::UpdateConfig;
 pub use wifi_grinder::{
     PairingIdRefusal, WifiConfig, WifiGrinder, WifiLink, WifiState, grinder_address,
 };
@@ -57,7 +62,11 @@ pub struct Server {
     /// The shot window and grinder address, and the E65/E80 link.
     settings: Mutex<settings::Live>,
     history: History,
-    /// New on every start: event numbers start over with it.
+    update: Mutex<update_check::UpdateState>,
+    /// Wakes the update check when it is turned on or off.
+    update_wake: tokio::sync::Notify,
+    log: Arc<LogBook>,
+    /// New on every start: event and log numbers start over with it.
     boot_id: String,
 }
 
@@ -114,14 +123,26 @@ impl Server {
             icons_dir: OnceLock::new(),
             settings: Mutex::default(),
             history: History::default(),
+            update: Mutex::default(),
+            update_wake: tokio::sync::Notify::new(),
+            log: LogBook::global(),
             boot_id: uuid::Uuid::new_v4().simple().to_string(),
         })
     }
 
-    /// Changes on every start, so an app can tell that event numbers
+    /// Changes on every start, so an app can tell that event and log numbers
     /// started over.
     pub fn boot_id(&self) -> &str {
         &self.boot_id
+    }
+
+    /// Like [`Server::new`], with a log book of its own (tests run side by
+    /// side).
+    #[cfg(test)]
+    fn with_log(config: MachineConfig, log: Arc<LogBook>) -> Arc<Self> {
+        let mut me = Arc::into_inner(Self::new(config)).expect("fresh Arc");
+        me.log = log;
+        Arc::new(me)
     }
 
     /// Like [`Server::new`], also appending every grinder request and our
@@ -173,6 +194,11 @@ impl Server {
     /// The running integrations (vendor clouds, scales, hubs): start, add, remove.
     pub fn integrations(&self) -> &Integrations {
         &self.integrations
+    }
+
+    /// The server's log as the app shows it.
+    pub fn log(&self) -> &Arc<LogBook> {
+        &self.log
     }
 
     /// A grinder request (E64 WS), or a successful request to an E65/E80
@@ -252,6 +278,28 @@ impl Server {
         // A panic while holding the lock leaves plain data; keep serving.
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
+
+/// Reads a reply's body, but no more than `max` bytes: `what` names the
+/// reply in the error ("the grinder's reply").
+pub(crate) async fn read_capped(
+    res: &mut reqwest::Response,
+    max: usize,
+    what: &str,
+) -> anyhow::Result<Vec<u8>> {
+    use anyhow::Context;
+    let mut bytes = Vec::new();
+    while let Some(chunk) = res
+        .chunk()
+        .await
+        .with_context(|| format!("reading {what}"))?
+    {
+        if bytes.len() + chunk.len() > max {
+            anyhow::bail!("{what} is too large");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
 }
 
 /// Waits until `cond` holds, for up to five seconds.

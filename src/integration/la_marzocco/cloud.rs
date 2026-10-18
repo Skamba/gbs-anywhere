@@ -258,13 +258,12 @@ impl CloudClient {
         let resp = req
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("auth/init: {e}"))?;
-        let status = resp.status();
-        if status.is_success() {
+            .map_err(reqwest::Error::without_url)
+            .context("auth/init")?;
+        if resp.status().is_success() {
             return Ok(());
         }
-        let body = resp.text().await.unwrap_or_default();
-        bail!("auth/init failed: {status} {}", body.trim());
+        Err(refused("auth/init", resp).await)
     }
 
     async fn access_token(&mut self) -> anyhow::Result<String> {
@@ -303,18 +302,19 @@ impl CloudClient {
         let resp = req
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("{path}: {e}"))?;
+            .map_err(reqwest::Error::without_url)
+            .with_context(|| path.to_owned())?;
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
             bail!("{path}: login refused (check the e-mail address and password)");
         }
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            bail!("{path} failed: {status} {}", body.trim());
+            return Err(refused(path, resp).await);
         }
         let v: Value = resp
             .json()
             .await
+            .map_err(reqwest::Error::without_url)
             .with_context(|| format!("{path}: bad JSON"))?;
         let (Some(access), Some(refresh)) = (v["accessToken"].as_str(), v["refreshToken"].as_str())
         else {
@@ -327,8 +327,9 @@ impl CloudClient {
         })
     }
 
-    /// Authenticated `GET`, signing in again once on 401.
-    async fn get(&mut self, path: &str) -> anyhow::Result<Value> {
+    /// Authenticated `GET`, signing in again once on 401. Errors name `what`
+    /// was asked for rather than the path, which holds the serial number.
+    async fn get(&mut self, path: &str, what: &str) -> anyhow::Result<Value> {
         for attempt in 0..2 {
             let token = self.access_token().await?;
             let mut req = self
@@ -341,26 +342,28 @@ impl CloudClient {
             let resp = req
                 .send()
                 .await
-                .map_err(|e| anyhow::anyhow!("GET {path}: {e}"))?;
+                // The error's URL holds the serial number.
+                .map_err(reqwest::Error::without_url)
+                .with_context(|| what.to_owned())?;
             let status = resp.status();
             if status == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
                 self.token = None;
                 continue;
             }
             if !status.is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                bail!("GET {path} failed: {status} {}", body.trim());
+                return Err(refused(what, resp).await);
             }
             return resp
                 .json()
                 .await
-                .with_context(|| format!("GET {path}: bad JSON"));
+                .map_err(reqwest::Error::without_url)
+                .with_context(|| format!("{what}: bad JSON"));
         }
-        bail!("GET {path}: still unauthorized after signing in again")
+        bail!("{what}: still unauthorized after signing in again")
     }
 
     pub async fn things(&mut self) -> anyhow::Result<Vec<Thing>> {
-        let v = self.get("things").await?;
+        let v = self.get("things", "machine list").await?;
         serde_json::from_value(v).context("things: unexpected shape")
     }
 
@@ -371,13 +374,26 @@ impl CloudClient {
         days: u32,
     ) -> anyhow::Result<Vec<LastCoffee>> {
         let v = self
-            .get(&format!("things/{serial}/stats/LAST_COFFEE/1?days={days}"))
+            .get(
+                &format!("things/{serial}/stats/LAST_COFFEE/1?days={days}"),
+                "coffee log",
+            )
             .await?;
         let mut list: Vec<LastCoffee> = serde_json::from_value(v["output"]["lastCoffees"].clone())
             .context("LAST_COFFEE: unexpected shape")?;
         list.sort_by_key(|c| std::cmp::Reverse(c.time));
         Ok(list)
     }
+}
+
+/// A refused request as an error with its status only. The reply itself can
+/// repeat account details, so it goes to the debug log, which the app's log
+/// view leaves out.
+async fn refused(what: &str, resp: reqwest::Response) -> anyhow::Error {
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    tracing::debug!("{TITLE}: {what} failed: {status} {}", body.trim());
+    anyhow::anyhow!("{what} failed: {status}")
 }
 
 #[cfg(test)]

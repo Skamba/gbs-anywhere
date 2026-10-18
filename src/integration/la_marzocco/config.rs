@@ -35,8 +35,10 @@ pub const FIELDS: &[Field] = &[
     },
     Field {
         key: "poll_s",
-        label: "Seconds between checks",
-        help: "How often to look for the new coffee while the grinder waits.",
+        label: "Check interval (seconds)",
+        help: "After the grind, how often gbs-anywhere asks the La Marzocco cloud whether \
+               the shot has been logged. Lower reports sooner but sends more requests. \
+               Default: 3 (1 to 60).",
         input: Input::Number,
         required: false,
         default: "3",
@@ -117,7 +119,11 @@ impl Args {
                 .with("password", self.lm_password.as_ref())
                 .with("serial", self.lm_serial.as_ref())
                 .with("poll_s", Some(self.lm_poll_s))
-                .with("base_url", Some(&self.lm_base_url)),
+                // Only a test server: it keeps the integration out of the app.
+                .with(
+                    "base_url",
+                    (self.lm_base_url != BASE_URL).then_some(&self.lm_base_url),
+                ),
         )
     }
 }
@@ -141,6 +147,13 @@ mod tests {
         assert_eq!(cfg.poll, Duration::from_secs(2));
         assert_eq!(cfg.base_url, "http://127.0.0.1:9");
         assert!(KIND.create(&args.settings().unwrap(), false).is_ok());
+        // Only without a test server can it move into the app.
+        assert!(KIND.create(&args.settings().unwrap(), true).is_err());
+        let real = Args {
+            lm_base_url: BASE_URL.into(),
+            ..args.clone()
+        };
+        assert!(KIND.create(&real.settings().unwrap(), true).is_ok());
 
         let form = Settings::new()
             .with("username", Some("me@example.org"))

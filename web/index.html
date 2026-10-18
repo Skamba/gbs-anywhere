@@ -78,6 +78,14 @@
     --warn-solid: #8C5A0A;
     --outcome-bg: #EFEAE3;
     --outcome-fg: #3F3830;
+    --pressed-bg: #1F1B16;
+    --pressed-fg: #FFFFFF;
+    --log-bg: #17140F;
+    --log-ink: #E8E2D8;
+    --log-dim: #9C9285;
+    --log-info: #7FC79A;
+    --log-warn: #E8B860;
+    --log-error: #F08A7E;
     --scrim: rgba(31, 27, 22, .45);
     --shadow-tab: 0 1px 2px rgba(31, 27, 22, .10);
     --shadow-menu: 0 8px 24px rgba(31, 27, 22, .16);
@@ -95,7 +103,8 @@
     --ok-bg: #173526; --ok-fg: #92D7AD; --ok: #4FB97B; --ok-solid: #2F8053;
     --bad-bg: #431F19; --bad-fg: #F4A298; --bad: #E0695A; --bad-solid: #B5473A; --bad-box: #2D1814; --bad-line: #5A2B24; --bad-field: #7B3C33;
     --warn-bg: #3F2F12; --warn-fg: #F1C676; --warn-soft: #382A12; --warn-solid: #9A6814;
-    --outcome-bg: #2F2822; --outcome-fg: #E5DCD1;
+    --outcome-bg: #2F2822; --outcome-fg: #E5DCD1; --pressed-bg: #F3EDE5; --pressed-fg: #1F1B16;
+    --log-bg: #0C0A08; --log-ink: #E8E2D8; --log-dim: #9C9285; --log-info: #7FC79A; --log-warn: #E8B860; --log-error: #F08A7E;
     --scrim: rgba(0, 0, 0, .6); --shadow-tab: 0 1px 2px rgba(0, 0, 0, .5); --shadow-menu: 0 8px 24px rgba(0, 0, 0, .55);
   }
 
@@ -198,9 +207,22 @@
   .sys-label { margin: 2px 0 0; font-size: 20px; font-weight: 700; }
   .sys-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
   .sys-body .body-text { line-height: 1.45; }
-  .sys-detail { margin: -4px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
-  .checks { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; color: var(--text); }
-  .checks span { display: inline-flex; align-items: center; gap: 6px; }
+  /* The last error and the way to the log, in one box */
+  .sys-diag { display: flex; align-items: center; gap: 12px; background: var(--sunk); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; }
+  .sys-diag-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; line-height: 1.4; color: var(--text); overflow-wrap: anywhere; }
+  .sys-diag-k { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .sys-log {
+    flex: none; display: inline-flex; align-items: center; gap: 2px; min-height: 36px; padding: 0 10px 0 12px; border-radius: 999px;
+    border: 1px solid var(--field); background: var(--surface); color: var(--strong); font-size: 13px; font-weight: 650; text-decoration: none;
+  }
+  /* Grinder and integrations, in one quiet line */
+  .checks { overflow: hidden; border-top: 1px solid var(--line); padding-top: 10px; font-size: 13px; color: var(--text); }
+  .checks:empty { display: none; }
+  /* Each item brings its "·"; the row starts 19px to the left, so the dot of
+     the first item on each line falls outside and is clipped. */
+  .checks-in { display: flex; flex-wrap: wrap; align-items: center; row-gap: 4px; margin-left: -19px; }
+  .checks-in > span { display: inline-flex; align-items: center; gap: 5px; }
+  .checks-in > span::before { content: "\00b7"; content: "\00b7" / ""; flex: none; width: 19px; margin-right: -5px; text-align: center; color: var(--muted); }
   .checks .ok svg { color: var(--ok); }
   .checks .bad { color: var(--bad-fg); }
   .checks .wait svg, .checks .muted { color: var(--muted); }
@@ -379,7 +401,14 @@
     min-height: 44px; min-width: 64px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent;
     color: var(--nav-ink); font-size: 14px; font-weight: 500;
   }
+  .seg.two { grid-template-columns: repeat(2, auto); }
   .seg button[aria-pressed="true"] { background: var(--nav-on); color: var(--ink); font-weight: 600; box-shadow: var(--shadow-tab); }
+  .v-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; }
+  .link-btn { display: inline-flex; align-items: center; min-height: 44px; padding: 0 2px; border: 0; background: transparent; font-size: 14px; font-weight: 600; color: var(--accent); text-align: left; text-decoration: none; }
+  .gh-link {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-left: auto; font-size: 14px; font-weight: 600;
+    color: var(--strong); text-decoration: none;
+  }
 
   /* History */
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -413,6 +442,46 @@
     font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums;
   }
 
+  /* Log: the last card on Status, closed until needed */
+  .log-body { padding: 0 16px 16px; display: flex; flex-direction: column; gap: 10px; }
+  .log-body .log-box { flex: none; min-height: 160px; max-height: min(60vh, 520px); }
+  .log-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .tool-end { display: flex; gap: 6px; margin-left: auto; }
+  .tool {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 10px; border-radius: 10px;
+    border: 1px solid var(--field); background: var(--surface); color: var(--strong); font-size: 14px; font-weight: 600;
+  }
+  .tool[aria-pressed="true"] { background: var(--pressed-bg); color: var(--pressed-fg); }
+  /* The tools stay on one line down to 360 px, in English and German. */
+  @media (max-width: 370px) {
+    .log-tools, .tool-end { gap: 4px; }
+    .tool { gap: 4px; padding: 0 8px; font-size: 13px; }
+  }
+  .tool-icon {
+    width: 44px; height: 44px; border-radius: 10px; border: 1px solid var(--field); background: var(--surface);
+    color: var(--strong); display: grid; place-items: center;
+  }
+  .tool-icon.done { background: var(--ok-bg); color: var(--ok-fg); border-color: var(--ok-solid); }
+  .tool-icon .i-done, .tool-icon.done .i-idle { display: none; }
+  .tool-icon.done .i-done { display: block; }
+  .log-box {
+    flex: 1; min-height: 200px; overflow: auto; background: var(--log-bg); color: var(--log-ink); border-radius: 14px; padding: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; overscroll-behavior: contain;
+  }
+  .ll { display: flex; gap: 8px; padding: 1px 0; }
+  .ll .t { flex: none; color: var(--log-dim); }
+  .ll .v { flex: none; width: 5ch; font-weight: 700; }
+  .ll .x { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .l-INFO .v { color: var(--log-info); }
+  .l-WARN .v { color: var(--log-warn); }
+  .l-ERROR .v { color: var(--log-error); }
+  .warn-only .l-INFO { display: none; }
+  .log-live { display: flex; align-items: center; gap: 8px; padding-top: 6px; color: var(--log-dim); }
+  .live-block { width: 7px; height: 14px; background: var(--log-dim); }
+  .live-block.on { background: var(--log-info); }
+  .log-note { font-size: 12px; line-height: 1.45; color: var(--muted); }
+  .log-note.done { color: var(--ok-fg); font-weight: 600; }
+
   /* Bottom sheet */
   .scrim { position: fixed; inset: 0; z-index: 50; background: var(--scrim); display: flex; flex-direction: column; justify-content: flex-end; }
   .sheet {
@@ -427,11 +496,16 @@
     letter-spacing: 0.04em; color: var(--ink); background: var(--surface); outline: none;
   }
   .sheet-label input:focus { border-color: var(--accent); }
+  .sheet textarea {
+    width: 100%; min-height: 220px; border: 1px solid var(--field); border-radius: 10px; padding: 10px; background: var(--sunk);
+    color: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5;
+  }
   .sheet-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 4px; }
   .sheet-actions.one { grid-template-columns: minmax(0, 1fr); }
   .sheet-actions button { min-height: 48px; border-radius: 12px; font-size: 16px; font-weight: 600; }
   .s-plain { border: 1px solid var(--field); background: var(--surface); color: var(--ink); }
   .s-danger { border: 0; background: var(--bad-solid); color: var(--on-solid); }
+  .s-primary { border: 0; background: var(--accent); color: var(--on-accent); }
   .sheet-actions button:disabled { opacity: .45; }
 </style>
 </head>
@@ -483,7 +557,10 @@
       </button>
       <div class="sys-body" id="sys-body" hidden>
         <p class="body-text" id="sys-text"></p>
-        <p class="sys-detail" id="sys-detail" hidden></p>
+        <div class="sys-diag" id="sys-detail" hidden>
+          <span class="sys-diag-text"><span class="sys-diag-k" data-i18n="sys.lastError">Last error</span><span id="sys-detail-text"></span></span>
+          <a href="#log" class="sys-log" id="sys-log-link" data-i18n-attr="aria-label:log.show" aria-label="Show the log"><span data-i18n="log.title">Log</span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></a>
+        </div>
         <div class="checks" id="sys-checks"></div>
       </div>
     </section>
@@ -581,7 +658,7 @@
     </section>
   </main>
 
-  <!-- Status: grinder, integrations, settings -->
+  <!-- Status: grinder, integrations, settings, version, log -->
   <main class="panel" id="tab-status" hidden>
     <section class="card pad stack-12" data-i18n-attr="aria-label:status.grinder" aria-label="Grinder">
       <div class="row-12">
@@ -641,6 +718,15 @@
           <button type="button" data-theme-choice="dark" aria-pressed="false" data-i18n="settings.theme.dark">Dark</button>
         </span>
       </div>
+      <div class="set-row wrap">
+        <span class="set-text"><span class="set-name" id="language-name" data-i18n="settings.language">Language</span><span class="set-sub" data-i18n="settings.onDevice">on this device</span></span>
+        <span class="seg" role="group" aria-labelledby="language-name" id="language">
+          <button type="button" data-lang-choice="auto" aria-pressed="true" data-i18n="settings.lang.auto">Auto</button>
+          <!-- Each language by its own name. -->
+          <button type="button" data-lang-choice="en" aria-pressed="false" lang="en">English</button>
+          <button type="button" data-lang-choice="de" aria-pressed="false" lang="de">Deutsch</button>
+        </span>
+      </div>
       <!-- The shot window: − and + in 15 s steps, or typed into the field. -->
       <div class="stack-8" id="set-window-row" hidden>
         <div class="set-row wrap">
@@ -667,7 +753,56 @@
           <button type="submit" class="btn-send" id="set-host-save" data-i18n="common.save">Save</button>
         </div>
       </form>
+      <div class="set-row wrap" id="set-update-row" hidden>
+        <span class="set-text"><span class="set-name" id="update-name" data-i18n="settings.update">Update check</span><span class="set-sub" data-i18n="settings.updateSub">asks GitHub once a day</span></span>
+        <span class="seg two" role="group" aria-labelledby="update-name" id="set-update">
+          <button type="button" data-update="on" aria-pressed="true" data-i18n="settings.on">On</button>
+          <button type="button" data-update="off" aria-pressed="false" data-i18n="settings.off">Off</button>
+        </span>
+      </div>
+      <p class="hint warn" id="set-update-error" role="alert" hidden></p>
       <p class="foot" id="set-foot" hidden></p>
+    </section>
+
+    <section class="card pad stack-12" aria-labelledby="v-title">
+      <div class="row-12" style="justify-content:space-between">
+        <p class="card-title" id="v-title">gbs-anywhere</p>
+        <span class="badge" id="v-badge" hidden></span>
+        <span class="foot" id="v-off" data-i18n="version.checkOff" hidden>Update check off</span>
+      </div>
+      <dl class="facts">
+        <div><dt data-i18n="version.installed">Installed</dt><dd id="v-installed">–</dd></div>
+        <div id="v-latest-box"><dt data-i18n="version.latest">Latest release</dt><dd id="v-latest">–</dd></div>
+      </dl>
+      <p class="foot" id="v-note" data-i18n="version.note" hidden>Checks GitHub once a day for a newer release.</p>
+      <div class="v-actions">
+        <a class="link-btn" id="v-whatsnew" href="https://github.com/Skamba/gbs-anywhere/releases/latest" target="_blank" rel="noopener noreferrer" data-i18n="version.whatsNew" data-i18n-attr="aria-label:version.whatsNewLabel" aria-label="What’s new (opens in a new tab)" hidden>What’s new</a>
+        <a class="gh-link" href="https://github.com/Skamba/gbs-anywhere" target="_blank" rel="noopener noreferrer" data-i18n-attr="aria-label:version.github" aria-label="gbs-anywhere on GitHub (opens in a new tab)"><svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></a>
+      </div>
+    </section>
+
+    <!-- Log: the server's recent log lines, live; closed until needed -->
+    <section class="card clip" id="log-card" data-i18n-attr="aria-label:log.title" aria-label="Log">
+      <button type="button" class="card-head" id="log-toggle" aria-expanded="false" aria-controls="log-body">
+        <span class="minw"><span class="card-title" style="display:block" data-i18n="log.title">Log</span><span class="sub" style="display:block" data-i18n="log.sub">A record of the activity in gbs-anywhere's engine room.</span></span>
+        <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="log-body" id="log-body" hidden>
+        <div class="log-tools" id="log-tools">
+          <button type="button" class="tool" id="log-follow" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg><span data-i18n="log.follow">Follow</span></button>
+          <button type="button" class="tool" id="log-warn" aria-pressed="false" data-i18n="log.warnOnly">Warnings only</button>
+          <span class="tool-end">
+          <button type="button" class="tool-icon" id="log-copy" data-i18n-attr="aria-label:log.copy;title:log.copy" aria-label="Copy the last 60 minutes" title="Copy the last 60 minutes"><svg class="i-done" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg><svg class="i-idle" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a1 1 0 0 1 1-1h10"/></svg></button>
+          <button type="button" class="tool-icon" id="log-dl" data-i18n-attr="aria-label:log.download;title:log.download" aria-label="Download the complete log" title="Download the complete log"><svg class="i-done" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5 9-10"/></svg><svg class="i-idle" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 19h14"/></svg></button>
+          </span>
+        </div>
+        <div role="log" data-i18n-attr="aria-label:log.box" aria-label="gbs-anywhere log" aria-live="off" class="log-box" id="log-box" tabindex="0">
+          <div id="log-lines"></div>
+          <div class="log-live"><span class="live-block on" id="log-live-block"></span><span id="log-live-text">live · following new lines</span></div>
+        </div>
+        <p role="status" class="log-note" id="log-note"></p>
+        <p class="center-note" id="log-unsupported" data-i18n="log.unsupported" hidden>This gbs-anywhere server has no log view. Update gbs-anywhere to read its log here.</p>
+      </div>
     </section>
   </main>
 
@@ -682,7 +817,7 @@
   <footer class="app-footer" id="app-footer">gbs-anywhere</footer>
 </div>
 
-<!-- Bottom sheet for confirmations (delete) -->
+<!-- Bottom sheet for confirmations (delete, move into the app) and the copy fallback -->
 <div class="scrim" id="sheet" hidden>
   <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
     <p class="sheet-title" id="sheet-title"></p>
@@ -718,6 +853,7 @@
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
     clock: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2.5M9.5 2.5h5"/>',
     alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.5"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
     arrow: '<path d="M9 5l7 7-7 7"/>',
     cloud: '<path d="M7 18a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 9.5a3.5 3.5 0 0 1-.5 7H7z"/>',
@@ -740,12 +876,18 @@
   };
 
   // --- Texts ------------------------------------------------------------------
-  // Every text the app writes itself, in English. Keys are stable and dotted
-  // by place; {name} is filled in by t(). An object with one/other is a
-  // plural, picked by the number `n`. Keys ending in .e64 / .wifi are the
-  // wording for an E64 WS or an E65/E80 GbS (Generic WiFi), picked by tv().
-  // Texts from the server (integration names, summaries, forms and status
-  // lines, errors) are shown as they come.
+  // Every text the app writes itself, in English and German. Keys are stable
+  // and dotted by place; {name} is filled in by t(). An object with one/other
+  // is a plural, picked by the number `n`. Keys ending in .e64 / .wifi are
+  // the wording for an E64 WS or an E65/E80 GbS (Generic WiFi), picked by tv().
+  // Every key is in `en`, and `de` has the same keys, with one exception:
+  // texts an integration sends in English, its summary and form
+  // (kind.<id>.summary, kind.<id>.field.<key>.label|help|placeholder) and its
+  // keyed status lines (integ.detail.<detail_key>), are only in `de`. English,
+  // and any key missing here (a new integration), shows the server's text
+  // (serverText(), integDetail()). Other texts from the server (integration
+  // names, errors, log lines) are shown as they come; the copied or
+  // downloaded log stays English.
   const STRINGS = {
     en: {
       "nav.sections": "Sections",
@@ -758,7 +900,10 @@
       "common.add": "Add",
       "common.save": "Save",
       "common.change": "Change",
+      "common.edit": "Edit",
       "common.delete": "Delete",
+      "common.ok": "OK",
+      "common.done": "Done",
       "common.optional": " (optional)",
       "common.notSaved": "Not saved: {error}",
       "common.requestFailed": "The request failed ({status}).",
@@ -784,6 +929,9 @@
       "sys.label.blocked": "Blocked",
       "sys.label.error": "Error",
       "sys.label.ready": "Ready",
+      "sys.label.problem": "Grinder problem",
+      "sys.label.integError": "Integration not working",
+      "sys.label.integErrorShort": "Integration",
       "sys.text.offline": "Can’t reach gbs-anywhere. Is it running, and is this phone on the same network?",
       "sys.text.running": "Shot in progress: step 2 of 3.",
       "sys.text.checking": "The grinder is taking the result: step 3 of 3.",
@@ -794,6 +942,8 @@
       "sys.text.linkingNoHost": "Connecting to the grinder…",
       "sys.text.blocked": "Grinder blocked: {message}",
       "sys.text.error": "The last shot did not reach the grinder.",
+      "sys.text.problem": "The grinder answers, but turned down the last request. gbs-anywhere keeps trying.",
+      "sys.text.integError": "{title} is not working right now. You can still grind and enter the shot by hand.",
       "sys.text.done": "The last shot reached the grinder {ago}. Ready for the next one.",
       "sys.text.doneNoTime": "The last shot reached the grinder. Ready for the next one.",
       "sys.text.aborted": "Shot aborted. Grind again to start the next one.",
@@ -801,7 +951,7 @@
       "sys.missing.e64": "The grinder is not polling. Is it switched on and paired with gbs-anywhere (it appears as ‘Xenia’ on the grinder)?",
       "sys.missing.wifi": "The grinder does not answer. Is it switched on? gbs-anywhere reconnects by itself as soon as it can reach it.",
       "sys.missing.linkError": "The grinder answers, but the connection is not working right now. gbs-anywhere keeps trying.",
-      "sys.detail": "Last error: {detail}",
+      "sys.lastError": "Last error",
       "sys.problem": "Grinder: {problem}",
       "check.grinderPairing": "Grinder pairing",
       "check.grinderReady.e64": "Grinder connected",
@@ -812,7 +962,7 @@
       "check.integConnecting": "{title} connecting",
       "check.integStopped": "{title} stopped",
       "check.integError": "{title}: error",
-      "check.noIntegration": "No machine integration · shots by hand",
+      "check.noIntegration": "No machine integration",
 
       "pair.kicker": "Grinder pairing",
       "pair.accept.title": "Accept gbs-anywhere on the grinder",
@@ -956,11 +1106,23 @@
       "integ.fromStart": "From the start settings",
       "integ.more": "More actions for {title}",
       "integ.menu": "Actions for {title}",
+      "integ.cmdOnly.title": "{title} comes from the start settings",
+      "integ.cmdOnly.text": "This integration comes from the start settings (environment variables or flags), so it can only be changed or removed there.",
+      "integ.cmdOnly.noFile": "Moving it into the app needs a settings file (--config).",
+      "integ.adopt.title": "Move {title} into the app?",
+      "integ.adopt.text": "This integration comes from the start settings (environment variables or flags). Move it into the app to change it here? Its settings are taken over; nothing has to be typed again.",
+      "integ.adopt.textPassword": "This integration comes from the start settings (environment variables or flags). Move it into the app to change it here? Its settings, including the password, are taken over; nothing has to be typed again.",
+      "integ.adopt.after": "From the next start on, its flags or environment variables are ignored for as long as it is in the app. You can remove them.",
+      "integ.adopt.confirm": "Move into the app",
       "integ.delete.title": "Delete {title}?",
       "integ.delete.text": "This stops the integration and removes its saved settings. Shots are then no longer reported by themselves.",
       "integ.delete.textPassword": "This stops the integration and removes its saved settings, including the password. Shots are then no longer reported by themselves.",
+      "integ.delete.moved": "It was moved into the app from the start settings. If its flags or environment variables are still set, they start it again at the next start; remove them to turn it off for good.",
       "integ.delete.type": "Type DELETE to confirm",
       "integ.delete.failed": "Could not delete it: {error}",
+      "integ.edit.kicker": "Edit",
+      "integ.edit.cant": "Can’t edit {title}",
+      "integ.passwordSaved": "Saved. Leave this empty to keep the saved password.",
 
       "settings.title": "Settings",
       "settings.appearance": "Appearance",
@@ -968,6 +1130,8 @@
       "settings.theme.system": "System",
       "settings.theme.light": "Light",
       "settings.theme.dark": "Dark",
+      "settings.language": "Language",
+      "settings.lang.auto": "Auto",
       "settings.window": "Time to pull the shot",
       "settings.windowSub": "after the grind, before a timeout",
       "settings.windowRange": "{min}–{max} min",
@@ -981,8 +1145,24 @@
       "settings.host": "Grinder IP address",
       "settings.hostNone": "None · E64 WS",
       "settings.hostHelp": "The address of an E65/E80 GbS (Generic WiFi). Leave it empty when you use an E64 WS.",
-      "settings.saved": "The settings for time to pull the shot and the grinder IP address are saved on the computer (gbs-anywhere host) and kept after a restart. Appearance applies to this device only.",
-      "settings.notPersistent": "The settings for time to pull the shot and the grinder IP address apply until the next restart: gbs-anywhere runs without a settings file (--config). Appearance applies to this device only.",
+      "settings.saved": "The settings for time to pull the shot, the grinder IP address and the update check are saved on the computer (gbs-anywhere host) and kept after a restart. Appearance and language apply to this device only.",
+      "settings.notPersistent": "The settings for time to pull the shot, the grinder IP address and the update check apply until the next restart: gbs-anywhere runs without a settings file (--config). Appearance and language apply to this device only.",
+      "settings.update": "Update check",
+      "settings.updateSub": "asks GitHub once a day",
+      "settings.on": "On",
+      "settings.off": "Off",
+
+      "version.updateAvailable": "Update available",
+      "version.upToDate": "Up to date",
+      "version.checkOff": "Update check off",
+      "version.installed": "Installed",
+      "version.latest": "Latest release",
+      "version.notChecked": "not checked yet",
+      "version.whatsNew": "What’s new",
+      "version.whatsNewLabel": "What’s new (opens in a new tab)",
+      "version.failing": "Couldn’t reach GitHub",
+      "version.note": "Checks GitHub once a day for a newer release.",
+      "version.github": "gbs-anywhere on GitHub (opens in a new tab)",
 
       "history.filter": "Filter by status",
       "history.kind.success": "Success",
@@ -1007,17 +1187,391 @@
       "history.noMatch": "No shots match the filter. Tap a status above to show it again.",
       "history.kept": { one: "The last shot is kept on this computer.", other: "The last {n} shots are kept on this computer." },
       "history.keptMemory": { one: "The last shot is kept in memory only, until gbs-anywhere restarts.", other: "The last {n} shots are kept in memory only, until gbs-anywhere restarts." },
+
+      "log.follow": "Follow",
+      "log.warnOnly": "Warnings only",
+      "log.copy": "Copy the last 60 minutes",
+      "log.download": "Download the complete log",
+      "log.box": "gbs-anywhere log",
+      "log.live": "live · following new lines",
+      "log.paused": "paused · new lines arrive below",
+      "log.reconnecting": "connecting…",
+      "log.note": "Showing the last {n} lines. Copy takes the filtered entries of up to the last hour, at most 500 lines. Download takes the whole log. IP addresses are anonymised.",
+      "log.title": "Log",
+      "log.sub": "A record of the activity in gbs-anywhere's engine room.",
+      "log.show": "Show the log",
+      "log.nothingLines": "Nothing to copy: no lines in the last 60 min.",
+      "log.nothingWarnings": "Nothing to copy: no warnings in the last 60 min.",
+      "log.copied": { one: "Copied {n} line from the last 60 min. IP addresses replaced.", other: "Copied {n} lines from the last 60 min. IP addresses replaced." },
+      "log.copiedWarn": { one: "Copied {n} line from the last 60 min (warnings only). IP addresses replaced.", other: "Copied {n} lines from the last 60 min (warnings only). IP addresses replaced." },
+      "log.downloaded": { one: "Downloaded {file} ({n} line, all levels). IP addresses replaced.", other: "Downloaded {file} ({n} lines, all levels). IP addresses replaced." },
+      "log.copySheet.title": "Copy the log",
+      "log.copySheet.text": "This browser blocks copying here. Select the text below and copy it.",
+      "log.copySheet.selectAll": "Select all",
+      "log.copySheet.label": "Log text",
+      "log.unsupported": "This gbs-anywhere server has no log view. Update gbs-anywhere to read its log here.",
+    },
+
+    de: {
+      "nav.sections": "Bereiche",
+      "nav.start": "Start",
+      "nav.status": "Status",
+      "nav.history": "Historie",
+
+      "common.cancel": "Abbrechen",
+      "common.back": "Zurück",
+      "common.add": "Hinzufügen",
+      "common.save": "Speichern",
+      "common.change": "Ändern",
+      "common.edit": "Bearbeiten",
+      "common.delete": "Löschen",
+      "common.ok": "OK",
+      "common.done": "Fertig",
+      "common.optional": " (optional)",
+      "common.notSaved": "Nicht gespeichert: {error}",
+      "common.requestFailed": "Die Anfrage ist fehlgeschlagen ({status}).",
+      "common.and": "und",
+      "unit.shot": "{time}\u00a0s · {weight}\u00a0g",
+      "unit.seconds": "{time}\u00a0s",
+      "unit.grams": "{weight}\u00a0g",
+
+      "ago.s": "vor {n}\u00a0Sek.",
+      "ago.min": "vor {n}\u00a0Min.",
+      "ago.h": "vor {n}\u00a0Std.",
+      "ago.d": { one: "vor {n} Tag", other: "vor {n} Tagen" },
+
+      "sys.title": "Systemstatus",
+      "sys.pill": "Systemstatus: {label}",
+      "sys.label.connecting": "Verbindet…",
+      "sys.label.offline": "Offline",
+      "sys.label.running": "Läuft",
+      "sys.label.pairing": "Kopplung",
+      "sys.label.linking": "Verbindet",
+      "sys.label.noGrinder": "Keine Mühle verbunden",
+      "sys.label.noGrinderShort": "Keine Mühle",
+      "sys.label.blocked": "Blockiert",
+      "sys.label.error": "Fehler",
+      "sys.label.ready": "Bereit",
+      "sys.label.problem": "Problem mit der Mühle",
+      "sys.label.integError": "Integration funktioniert nicht",
+      "sys.label.integErrorShort": "Integration",
+      "sys.text.offline": "gbs-anywhere ist nicht erreichbar. Läuft es, und ist dieses Handy im selben Netzwerk?",
+      "sys.text.running": "Bezug läuft: Schritt 2 von 3.",
+      "sys.text.checking": "Die Mühle wertet den Bezug aus: Schritt 3 von 3.",
+      "sys.text.knob": "Gemahlen. Drücke den Drehknopf der Mühle, um den Bezug zu starten: Schritt 1 von 3.",
+      "sys.text.needsId": "Die Mühle ist gekoppelt, aber ihre Pairing-ID fehlt hier: Gib sie oben ein.",
+      "sys.text.pairing": "Bestätige gbs-anywhere an der Mühle, um sie zu koppeln.",
+      "sys.text.linking": "Verbindet mit der Mühle unter {host}…",
+      "sys.text.linkingNoHost": "Verbindet mit der Mühle…",
+      "sys.text.blocked": "Mühle blockiert: {message}",
+      "sys.text.error": "Der letzte Bezug hat die Mühle nicht erreicht.",
+      "sys.text.problem": "Die Mühle antwortet, hat aber die letzte Anfrage abgelehnt. gbs-anywhere versucht es weiter.",
+      "sys.text.integError": "{title} funktioniert gerade nicht. Du kannst trotzdem mahlen und den Bezug von Hand eingeben.",
+      "sys.text.done": "Der letzte Bezug hat die Mühle {ago} erreicht. Bereit für den nächsten.",
+      "sys.text.doneNoTime": "Der letzte Bezug hat die Mühle erreicht. Bereit für den nächsten.",
+      "sys.text.aborted": "Bezug abgebrochen. Mahle erneut für den nächsten.",
+      "sys.label.readyLong": "Bereit zum Mahlen 💪",
+      "sys.missing.e64": "Die Mühle meldet sich nicht. Ist sie eingeschaltet und mit gbs-anywhere gekoppelt (an der Mühle erscheint es als ‚Xenia‘)?",
+      "sys.missing.wifi": "Die Mühle antwortet nicht. Ist sie eingeschaltet? gbs-anywhere verbindet sich automatisch wieder, sobald sie erreichbar ist.",
+      "sys.missing.linkError": "Die Mühle antwortet, aber die Verbindung klappt gerade nicht. gbs-anywhere versucht es weiter.",
+      "sys.lastError": "Letzter Fehler",
+      "sys.problem": "Mühle: {problem}",
+      "check.grinderPairing": "Mühle wird gekoppelt",
+      "check.grinderReady.e64": "Mühle verbunden",
+      "check.grinderReady.wifi": "Mühle bereit",
+      "check.grinderConnecting": "Mühle verbindet",
+      "check.grinderOff": "Mühle nicht verbunden",
+      "check.integReady": "{title} bereit",
+      "check.integConnecting": "{title} verbindet",
+      "check.integStopped": "{title} gestoppt",
+      "check.integError": "{title}: Fehler",
+      "check.noIntegration": "Keine Maschinen-Integration",
+
+      "pair.kicker": "Mühle koppeln",
+      "pair.accept.title": "gbs-anywhere an der Mühle bestätigen",
+      "pair.code": "Code neben gbs-anywhere",
+      "pair.id.title": "Pairing-ID eingeben",
+      "pair.id.label": "Pairing-ID",
+      "pair.id.submit": "Diese Pairing-ID verwenden",
+      "pair.id.range": "Die Pairing-ID ist eine Zahl von 1 bis 65535.",
+      "pair.id.unknown": "Die Mühle hat die Pairing-ID {id} nicht angenommen. Prüfe die Zahl an der Mühle und gib sie noch einmal ein.",
+      "pair.accept.text": "Öffne an der Mühle Verbindungen → Maschine-zu-Maschine → Konfiguration, tippe auf „Pairing starten“ und dann auf „Pairing akzeptieren“.",
+      "pair.id.text": "Die Mühle hat gbs-anywhere gekoppelt, aber die Pairing-ID fehlt hier. Sie steht an der Mühle unter Maschine-zu-Maschine → Konfiguration als „Pairing ID“.",
+
+      "badge.start": "Mahlen",
+      "badge.blocked": "Blockiert",
+      "badge.pressKnob": "Knopf drücken",
+      "badge.waiting": "Wartet",
+      "badge.running": "Läuft",
+      "badge.done": "Fertig",
+      "badge.error": "Fehler",
+      "badge.skipped": "Entfällt",
+      "badge.aborted": "Abgebrochen",
+
+      "start.step1.kicker": "Schritt 1",
+      "start.step1.title": "Mit dem GbS-Rezept mahlen",
+      "start.step1.ready.e64": "Mahle mit einem GbS-Rezept, drücke dann den Drehknopf der Mühle und starte den Bezug sofort an der Maschine.",
+      "start.step1.ready.wifi": "Mahle mit einem GbS-Rezept.\ngbs-anywhere erkennt das automatisch.",
+      "start.step1.lastRecipe": "Letztes Rezept: {recipe}",
+      "start.step1.knob": "Drücke den Drehknopf der Mühle",
+      "start.step1.knobRest": " und starte den Bezug sofort an der Maschine.",
+      "start.step1.target": "Zielgewicht: {weight}",
+      "start.step1.at.e64": "Knopf gedrückt um {time}",
+      "start.step1.at.wifi": "Gemahlen um {time}",
+      "start.step1.ground": "Mit dem GbS-Rezept gemahlen",
+      "start.step1.recipeTarget": "Rezeptziel: {recipe}",
+
+      "start.step2.kicker": "Schritt 2",
+      "start.step2.title": "Bezug an der Maschine starten",
+      "start.step2.lead.e64": "Folgt nach dem Knopfdruck.",
+      "start.step2.lead.wifi": "Folgt nach dem Mahlen.",
+      "start.step2.window": "Starte den Bezug innerhalb von {window} Minuten {tail}",
+      "start.step2.noWindow": "Starte den Bezug {tail}",
+      "start.step2.tail.manual": "und gib danach Zeit und Gewicht ein.",
+      "start.step2.tail.auto": { one: "und {names} wird ihn automatisch melden.", other: "und {names} werden ihn automatisch melden." },
+      "start.integrationName": "{title}",
+      "start.step2.timer.e64": "Zeit seit dem Knopfdruck",
+      "start.step2.timer.wifi": "Zeit seit dem Mahlen",
+      "start.step2.infoButton": "Info zum Bezugs-Timer",
+      "start.step2.since.e64": "Zeit seit dem Knopfdruck.",
+      "start.step2.since.wifi": "Zeit seit dem Mahlen.",
+      "start.step2.info.manual": "Keine Maschinen-Integration meldet hier Bezüge, also gib Zeit und Gewicht selbst ein, gemessen ab dem Start der Pumpe.",
+      "start.step2.info.auto": { one: "{names} sendet Zeit und Gewicht wenige Sekunden nach dem Bezug.", other: "{names} senden Zeit und Gewicht wenige Sekunden nach dem Bezug." },
+      "start.step2.info.limit": "Ohne Bezug innerhalb von {window} meldet gbs-anywhere der Mühle einen Abbruch.",
+      "start.step2.missed": "Noch kein Bezug von {names}. Falls er verpasst wurde, gib ihn selbst ein.",
+      "start.step2.failed": { one: "{names} funktioniert gerade nicht, also gib den Bezug selbst ein.", other: "{names} funktionieren gerade nicht, also gib den Bezug selbst ein." },
+      "start.step2.left": "noch {time}",
+      "start.step2.flush": "Ohne Anfrage der Mühle gestartet: Die Mühle zählt das als Spülen.",
+      "start.step2.tile.time": "Bezugszeit",
+      "start.step2.tile.weight": "Gewicht",
+      "start.step2.tile.after": "nach dem Bezug",
+      "start.step2.tile.targetTime": "Zielzeit {value}",
+      "start.step2.tile.targetWeight": "Zielgewicht {value}",
+      "start.step2.abort": "Bezug abbrechen",
+      "start.step2.send": "Senden",
+      "start.step2.byHand": "Von Hand eingegeben",
+      "start.step2.reportedBy": "Gemeldet von {title}",
+      "start.form.tooShort": "10 s oder weniger: Die Mühle ignoriert diesen Bezug und bittet dich, selbst feiner zu stellen.",
+      "start.form.tooLong": "Über 80 s: Die Mühle ignoriert diesen Bezug.",
+      "start.form.enterTime": "Gib die Zeit ein.",
+      "start.form.notSent": "Nicht gesendet: {error}",
+      "start.abort.title": "Bezug abbrechen?",
+      "start.abort.text": "Die Mühle ignoriert diesen Bezug und behält ihren Mahlgrad.",
+      "start.abort.keep": "Zurück",
+      "start.abort.failed": "Bezug konnte nicht abgebrochen werden: {error}",
+
+      "start.error.timeout": "Zeit abgelaufen: kein Bezug innerhalb von {window}",
+      "start.error.timeoutNoLimit": "Zeit abgelaufen: kein Bezug",
+      "start.error.stoppedWaiting": "Die Mühle hat vor dem Bezug aufgehört zu warten",
+      "start.error.refused": "Die Mühle hat den Bezug abgelehnt",
+      "start.error.unknownApp": "Die Mühle kennt dieses gbs-anywhere nicht mehr",
+      "start.error.generic": "Der Bezug hat die Mühle nicht erreicht",
+      "start.error.infoButton": "Info zum Zeitlimit",
+      "start.error.hint.before": "Mehr Zeit nötig? Erhöhe das Limit unter ",
+      "start.error.hint.link": "Status → Einstellungen",
+      "start.error.hint.after": " → Zeit für den Bezug.",
+      "start.error.cancelled": "Der Bezug wurde abgebrochen. Mahle erneut, um bei Schritt 1 neu zu beginnen.",
+      "start.error.dismiss": "Ausblenden",
+      "start.aborted.user": "In der App abgebrochen. Die Mühle überspringt diesen Bezug.",
+      "start.aborted.address": "Beendet: Die Adresse der Mühle wurde geändert. Mahle erneut, um bei Schritt 1 neu zu beginnen.",
+      "start.aborted.replaced": "Durch einen neueren Mahlgang ersetzt. Der neue Mahlgang ist der nächste Bezug.",
+
+      "start.step3.kicker": "Schritt 3",
+      "start.step3.title": "Mühle prüft den Mahlgrad",
+      "start.step3.wait": "Die Mühle vergleicht den Bezug mit dem Rezept und passt den Mahlgrad automatisch an.",
+      "start.step3.result": "Ergebnis:",
+      "start.step3.expected": "Erwartet:",
+      "start.step3.skip": "Nichts zu prüfen: Kein Bezug hat die Mühle erreicht. Der Mahlgrad bleibt, wie er war.",
+      "outcome.tooShort": "{time}\u00a0s ist zu kurz: Die Mühle ignoriert den Bezug",
+      "outcome.finerByHand": "von Hand feiner stellen",
+      "outcome.tooLong": "{time}\u00a0s ist zu lang: Die Mühle ignoriert den Bezug",
+      "outcome.sent": "an die Mühle gesendet",
+      "outcome.compares": "sie vergleicht den Bezug mit dem Rezept",
+      "outcome.onTarget": "vermutlich im Ziel (Bezug: {time}\u00a0s, Ziel: {target}\u00a0s)",
+      "outcome.fast": "{diff}\u00a0s zu schnell",
+      "outcome.slow": "{diff}\u00a0s zu langsam",
+      "outcome.finer": "beim nächsten Mal feiner",
+      "outcome.coarser": "beim nächsten Mal gröber",
+
+      "status.grinder": "Mühle",
+      "grinder.model.e64": "E64 WS",
+      "grinder.model.wifi": "E65/E80 GbS · Generic WiFi",
+      "grinder.state.notConnected": "Nicht verbunden",
+      "grinder.state.needsId": "Pairing-ID fehlt",
+      "grinder.state.pairing": "Kopplung",
+      "grinder.state.ready": "Bereit",
+      "grinder.state.connecting": "Verbindet",
+      "grinder.fact.ip": "IP-Adresse",
+      "grinder.fact.pairingId": "Pairing-ID",
+      "grinder.fact.notPaired": "nicht gekoppelt",
+      "grinder.fact.pairingCode": "Kopplungscode",
+      "grinder.fact.lastContact": "Letzter Kontakt",
+      "grinder.fact.never": "nie",
+      "grinder.fact.group": "Brühgruppe 1",
+      "grinder.group.idle": "Leerlauf",
+      "grinder.group.brewing": "Bezug läuft",
+      "grinder.group.finishing": "Wird abgeschlossen",
+
+      "integ.title": "Integrationen",
+      "integ.add": "Integration hinzufügen",
+      "integ.empty": "Keine eingerichtet: Du gibst Zeit und Gewicht jedes Bezugs von Hand im Tab Start ein. Eine Integration kann sie für dich melden; tippe auf +, um eine hinzuzufügen.",
+      "integ.pick.title": "Was meldet deine Bezüge?",
+      "integ.pick.text": "Optional: Eine Integration sendet nach jedem Bezug Zeit und Gewicht an die Mühle, damit du sie nicht eintippen musst.",
+      "integ.notSaved": "Nicht gespeichert: gbs-anywhere läuft ohne Einstellungsdatei (--config), daher ist diese Integration nach einem Neustart weg.",
+      "integ.health.starting": "Verbindet",
+      "integ.health.connected": "Bereit",
+      "integ.health.watching": "Aktiv",
+      "integ.health.error": "Fehler",
+      "integ.health.stopped": "Gestoppt",
+      "integ.stopped": "Gestoppt",
+      "integ.errorFallback": "Fehler",
+      "integ.reports": { one: "{n} Bezug in dieser Sitzung an die Mühle gesendet", other: "{n} Bezüge in dieser Sitzung an die Mühle gesendet" },
+      "integ.fromStart": "Aus den Starteinstellungen",
+      "integ.more": "Weitere Aktionen für {title}",
+      "integ.menu": "Aktionen für {title}",
+      "integ.cmdOnly.title": "{title} stammt aus den Starteinstellungen",
+      "integ.cmdOnly.text": "Diese Integration stammt aus den Starteinstellungen (Umgebungsvariablen oder Flags) und lässt sich nur dort ändern oder entfernen.",
+      "integ.cmdOnly.noFile": "Für die Übernahme in die App ist eine Einstellungsdatei (--config) nötig.",
+      "integ.adopt.title": "{title} in die App übernehmen?",
+      "integ.adopt.text": "Diese Integration stammt aus den Starteinstellungen (Umgebungsvariablen oder Flags). Möchtest du sie in die App übernehmen, um sie hier zu ändern? Die Einstellungen werden vollständig übernommen.",
+      "integ.adopt.textPassword": "Diese Integration stammt aus den Starteinstellungen (Umgebungsvariablen oder Flags). Möchtest du sie in die App übernehmen, um sie hier zu ändern? Die Einstellungen werden samt Passwort vollständig übernommen.",
+      "integ.adopt.after": "Solange die Integration in der App ist, werden ab dem nächsten Start ihre Flags oder Umgebungsvariablen ignoriert. Diese kannst du entfernen.",
+      "integ.adopt.confirm": "In die App übernehmen",
+      "integ.delete.title": "{title} löschen?",
+      "integ.delete.text": "Das stoppt die Integration und entfernt ihre gespeicherten Einstellungen. Bezüge werden dann nicht mehr automatisch gemeldet.",
+      "integ.delete.textPassword": "Das stoppt die Integration und entfernt ihre gespeicherten Einstellungen samt Passwort. Bezüge werden dann nicht mehr automatisch gemeldet.",
+      "integ.delete.moved": "Diese Integration wurde aus den Starteinstellungen in die App übernommen. Sind ihre Flags oder Umgebungsvariablen noch gesetzt, läuft sie nach dem nächsten Neustart wieder. Um sie dauerhaft abzuschalten, entferne diese Flags oder Umgebungsvariablen.",
+      "integ.delete.type": "Zum Bestätigen LÖSCHEN eingeben",
+      "integ.delete.failed": "Löschen fehlgeschlagen: {error}",
+      "integ.edit.kicker": "Bearbeiten",
+      "integ.edit.cant": "{title} lässt sich nicht bearbeiten",
+      "integ.passwordSaved": "Gespeichert. Leer lassen, um das gespeicherte Passwort zu behalten.",
+
+      // Only in `de`: the server's English is the English (see above).
+      "kind.la_marzocco.summary": "Zeit und Gewicht aus dem Kaffeeprotokoll einer vernetzten La Marzocco (Gewicht nur mit der Connected Scale). Nutzt dein Konto für La Marzocco Home.",
+      "kind.la_marzocco.field.username.label": "E-Mail",
+      "kind.la_marzocco.field.username.help": "Dein Konto für La Marzocco Home.",
+      "kind.la_marzocco.field.password.label": "Passwort",
+      "kind.la_marzocco.field.serial.label": "Seriennummer der Maschine",
+      "kind.la_marzocco.field.serial.help": "Nur nötig, wenn mehr als eine Maschine im Konto ist, z.\u00a0B. MI000000.",
+      "kind.la_marzocco.field.poll_s.label": "Abfrageintervall (Sekunden)",
+      "kind.la_marzocco.field.poll_s.help": "Wie oft gbs-anywhere nach dem Mahlen in der La Marzocco Cloud nachsieht, ob der Bezug schon eingetragen ist. Kleiner meldet schneller, fragt aber öfter an. Standard: 3 (1 bis 60).",
+      "kind.half_decent.summary": "Zeit von den ersten Tropfen bis zum Ende des Flusses und Gewicht in der Tasse, gemessen von einer Half Decent Scale in deinem WLAN (Firmware 3.0 oder neuer).",
+      "kind.half_decent.field.host.label": "IP-Adresse der Waage",
+      "kind.half_decent.field.host.help": "Die IP-Adresse der Waage, z.\u00a0B. 192.168.1.40 (hds.local funktioniert außerhalb von Docker). Schalte vorher WLAN unter Setup > Connections an der Waage ein.",
+      "integ.detail.la_marzocco.logging_in": "Meldet sich an",
+      "integ.detail.la_marzocco.last_coffee": "Letzter Kaffee {ago}: {time}\u00a0s, {weight}\u00a0g",
+      "integ.detail.la_marzocco.last_coffee_no_weight": "Letzter Kaffee {ago}: {time}\u00a0s",
+      "integ.detail.la_marzocco.no_coffee": "Kein Kaffee in den letzten 7 Tagen",
+      "integ.detail.la_marzocco.watching": "Mühle wartet · sucht alle {every}\u00a0s nach dem neuen Kaffee",
+      "integ.detail.half_decent.connecting": "Verbindet mit {host}",
+      "integ.detail.half_decent.idle": "Bereit für den nächsten Bezug",
+      "integ.detail.half_decent.last_shot": "Letzter Bezug: {time}\u00a0s, {weight}\u00a0g",
+      "integ.detail.half_decent.away": "Beim Start nicht erreicht; neuer Versuch bei jedem Knopfdruck",
+      "integ.detail.half_decent.settling": "Mühle wartet · Gewicht stabilisiert sich",
+      "integ.detail.half_decent.ready": "Mühle wartet · achtet auf die ersten Tropfen",
+      "integ.detail.half_decent.flowing": "Kaffee fließt · {weight}\u00a0g",
+
+      "settings.title": "Einstellungen",
+      "settings.appearance": "Darstellung",
+      "settings.onDevice": "auf diesem Gerät",
+      "settings.theme.system": "System",
+      "settings.theme.light": "Hell",
+      "settings.theme.dark": "Dunkel",
+      "settings.language": "Sprache",
+      "settings.lang.auto": "Auto",
+      "settings.window": "Zeit für den Bezug",
+      "settings.windowSub": "nach dem Mahlen, vor einem Timeout",
+      "settings.windowRange": "{min}–{max} min",
+      "settings.windowLess": "15 s kürzer",
+      "settings.windowMore": "15 s länger",
+      "settings.windowIs": "Das sind {time} min.",
+      "settings.windowMax": "Höchstens {time} min.",
+      "settings.windowMin": "Mindestens {time} min.",
+      "settings.windowInvalid": "Gib eine Zeit von {min} bis {max} min ein, z.\u00a0B. 2:30, {decimal} (Minuten) oder 150 (Sekunden).",
+      "settings.noLimit": "Kein Limit",
+      "settings.host": "IP-Adresse der Mühle",
+      "settings.hostNone": "Keine · E64 WS",
+      "settings.hostHelp": "Die Adresse einer E65/E80 GbS (Generic WiFi). Leer lassen, wenn du eine E64 WS nutzt.",
+      "settings.saved": "Die Einstellungen „Zeit für den Bezug“, „IP-Adresse der Mühle“ und „Update-Prüfung“ sind auf dem Computer (gbs-anywhere-Host) gespeichert und bleiben nach einem Neustart erhalten. Darstellung und Sprache gelten nur für dieses Gerät.",
+      "settings.notPersistent": "Die Einstellungen „Zeit für den Bezug“, „IP-Adresse der Mühle“ und „Update-Prüfung“ gelten bis zum nächsten Neustart: gbs-anywhere läuft ohne Einstellungsdatei (--config). Darstellung und Sprache gelten nur für dieses Gerät.",
+      "settings.update": "Update-Prüfung",
+      "settings.updateSub": "fragt einmal am Tag bei GitHub nach",
+      "settings.on": "An",
+      "settings.off": "Aus",
+
+      "version.updateAvailable": "Update verfügbar",
+      "version.upToDate": "Aktuell",
+      "version.checkOff": "Update-Prüfung aus",
+      "version.installed": "Installiert",
+      "version.latest": "Neueste Version",
+      "version.notChecked": "noch nicht geprüft",
+      "version.whatsNew": "Was ist neu",
+      "version.whatsNewLabel": "Was ist neu (öffnet einen neuen Tab)",
+      "version.failing": "GitHub nicht erreichbar",
+      "version.note": "Prüft einmal am Tag bei GitHub, ob es eine neuere Version gibt.",
+      "version.github": "gbs-anywhere auf GitHub (öffnet einen neuen Tab)",
+
+      "history.filter": "Nach Status filtern",
+      "history.kind.success": "Erfolgreich",
+      "history.kind.aborted": "Abgebrochen",
+      "history.kind.error": "Fehler",
+      "history.chip": { one: "{label}, {n} Bezug", other: "{label}, {n} Bezüge" },
+      "history.today": "Heute",
+      "history.yesterday": "Gestern",
+      "history.unknownDay": "Unbekannter Tag",
+      "history.timeout": "Zeit abgelaufen: kein Bezug innerhalb von {time}",
+      "history.abortedUser": "In der App abgebrochen",
+      "history.replaced": "Durch neueren Mahlgang ersetzt",
+      "history.stoppedWaiting": "Die Mühle hat aufgehört zu warten",
+      "history.refused": "Die Mühle hat den Bezug abgelehnt",
+      "history.address": "Beendet: Mühlenadresse geändert",
+      "history.target": "Ziel {targets}",
+      "history.ignored": "von der Mühle ignoriert",
+      "history.unsupported": "Dieser gbs-anywhere-Server führt keine Historie. Aktualisiere gbs-anywhere, um deine Bezüge hier zu sehen.",
+      "history.failed": "Die Historie konnte nicht geladen werden: {error} Neuer Versuch…",
+      "history.loading": "Lädt…",
+      "history.empty": "Noch keine Bezüge. Jeder Bezug erscheint hier, sobald er fertig ist.",
+      "history.noMatch": "Kein Bezug passt zum Filter. Tippe oben auf einen Status, um ihn wieder anzuzeigen.",
+      "history.kept": { one: "Der letzte Bezug wird auf diesem Computer gespeichert.", other: "Die letzten {n} Bezüge werden auf diesem Computer gespeichert." },
+      "history.keptMemory": { one: "Der letzte Bezug wird nur im Speicher gehalten, bis gbs-anywhere neu startet.", other: "Die letzten {n} Bezüge werden nur im Speicher gehalten, bis gbs-anywhere neu startet." },
+
+      "log.follow": "Folgen",
+      "log.warnOnly": "Nur Warnungen",
+      "log.copy": "Die letzten 60 Minuten kopieren",
+      "log.download": "Das ganze Log herunterladen",
+      "log.box": "gbs-anywhere-Log",
+      "log.live": "live · folgt neuen Zeilen",
+      "log.paused": "pausiert · neue Zeilen kommen unten an",
+      "log.reconnecting": "verbindet…",
+      "log.note": "Anzeige der letzten {n} Zeilen. Kopieren umfasst gefilterte Einträge für max. 1 Std. und bis zu 500 Zeilen. Der Download umfasst das ganze Log. IP-Adressen werden anonymisiert.",
+      "log.title": "Log",
+      "log.sub": "Protokoll der Aktivität im Maschinenraum von gbs-anywhere.",
+      "log.show": "Log anzeigen",
+      "log.nothingLines": "Nichts zu kopieren: keine Zeilen in den letzten 60 Min.",
+      "log.nothingWarnings": "Nichts zu kopieren: keine Warnungen in den letzten 60 Min.",
+      "log.copied": { one: "{n} Zeile der letzten 60 Min. kopiert. IP-Adressen wurden ersetzt.", other: "{n} Zeilen der letzten 60 Min. kopiert. IP-Adressen wurden ersetzt." },
+      "log.copiedWarn": { one: "{n} Zeile der letzten 60 Min. kopiert (nur Warnungen). IP-Adressen wurden ersetzt.", other: "{n} Zeilen der letzten 60 Min. kopiert (nur Warnungen). IP-Adressen wurden ersetzt." },
+      "log.downloaded": { one: "{file} heruntergeladen ({n} Zeile, alle Level). IP-Adressen wurden ersetzt.", other: "{file} heruntergeladen ({n} Zeilen, alle Level). IP-Adressen wurden ersetzt." },
+      "log.copySheet.title": "Log kopieren",
+      "log.copySheet.text": "Dieser Browser blockiert hier das Kopieren. Markiere den Text unten und kopiere ihn.",
+      "log.copySheet.selectAll": "Alles markieren",
+      "log.copySheet.label": "Log-Text",
+      "log.unsupported": "Dieser gbs-anywhere-Server hat keine Log-Ansicht. Aktualisiere gbs-anywhere, um das Log hier zu lesen.",
     },
   };
 
-  // Language: the browser's, the first of its languages the catalog has
-  // (English only, so far).
-  const LANGS = ["en"];
+  // Language: the choice in Status → Settings (this device), else the
+  // browser's: the first of its languages that is English or German.
+  const LANGS = ["en", "de"];
+  const langChoice = () => { const v = store.get("lang"); return LANGS.includes(v) ? v : "auto"; };
   function browserLangs() {
     const list = navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || "en"];
     return list.map((l) => String(l));
   }
   function resolveLang() {
+    const c = langChoice();
+    if (c !== "auto") return c;
     for (const l of browserLangs()) {
       const base = l.toLowerCase().split("-")[0];
       if (LANGS.includes(base)) return base;
@@ -1026,10 +1580,10 @@
   }
   let lang = "en", locale = "en-GB", fmt = null;
   /** Intl formatters for the language, in the browser's own variant of it
-   *  when it has one (en-US, en-AU, ...). */
+   *  when it has one (de-CH, en-US, ...). */
   function setLanguage() {
     lang = resolveLang();
-    locale = browserLangs().find((l) => l.toLowerCase().split("-")[0] === lang) || "en-GB";
+    locale = browserLangs().find((l) => l.toLowerCase().split("-")[0] === lang) || (lang === "de" ? "de-DE" : "en-GB");
     try { new Intl.NumberFormat(locale); } catch (_) { locale = lang; }
     const nf = (o) => new Intl.NumberFormat(locale, o);
     const df = (o) => new Intl.DateTimeFormat(locale, o);
@@ -1080,6 +1634,12 @@
       return typeof x === "number" ? fmt.int.format(x) : String(x);
     });
   }
+  /** A text the server sends in English (see STRINGS): the catalog's
+   *  wording for `key` in the current language, else `english`. */
+  function serverText(key, english, vars) {
+    const v = STRINGS[lang] && STRINGS[lang][key];
+    return typeof v === "string" ? fill(v, vars) : english;
+  }
   /** The grinder-family wording: `key.e64` or `key.wifi` when the catalog has
    *  it, else `key`. */
   function tv(key, vars) {
@@ -1097,6 +1657,8 @@
   const I18N_ATTRS = ["aria-label", "title", "placeholder"];
   function applyStatic(root) {
     for (const e of (root || document).querySelectorAll("[data-i18n]")) e.textContent = t(e.dataset.i18n);
+    for (const e of (root || document).querySelectorAll("[data-st]")) e.textContent = serverText(e.dataset.st, e.dataset.stEn);
+    for (const e of (root || document).querySelectorAll("[data-st-placeholder]")) e.placeholder = serverText(e.dataset.stPlaceholder, e.dataset.stPlaceholderEn);
     for (const e of (root || document).querySelectorAll("[data-i18n-attr]")) {
       for (const pair of e.dataset.i18nAttr.split(";")) {
         const [attr, key] = pair.split(":").map((x) => (x || "").trim());
@@ -1106,12 +1668,24 @@
   }
   /** An element whose text follows the language (it carries its key). */
   const tEl = (tag, attrs, key) => el(tag, Object.assign({ "data-i18n": key, text: t(key) }, attrs || {}));
+  /** Sets a server text on `e` (see serverText); `e` keeps the key and the
+   *  English, so a language switch redoes it. */
+  function setServerText(e, key, english) {
+    e.dataset.st = key;
+    e.dataset.stEn = english || "";
+    e.textContent = serverText(key, english || "");
+    return e;
+  }
+  const stEl = (tag, attrs, key, english) => setServerText(el(tag, attrs), key, english);
+  /** The catalog key of an integration kind's text: kindKey("la_marzocco",
+   *  "field.username.label"). */
+  const kindKey = (kindId, part) => "kind." + kindId + "." + part;
 
   const cap = (s) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : "");
   const sentence = (s) => { s = cap(String(s || "").trim()); return s && !/[.!?]$/.test(s) ? s + "." : s; };
   const pad2 = (n) => String(n).padStart(2, "0");
   const num = (v) => { const n = parseFloat(String(v).replace(",", ".")); return isFinite(n) ? n : NaN; };
-  /** 28.5: one decimal. */
+  /** 28.5 (28,5 in German): one decimal. */
   const secs = (s) => fmt.one.format(Math.round(s * 10) / 10);
   /** A measured weight: 39.5. */
   const grams = (g) => fmt.one.format(Math.round(g * 10) / 10);
@@ -1138,6 +1712,17 @@
     const h = Math.round(m / 60);
     if (h < 48) return t("ago.h", { n: h });
     return t("ago.d", { n: Math.round(h / 24) });
+  }
+  /** An age in the steps `age_of` in la_marzocco/run.rs uses for its status
+   *  line (whole seconds below 2 min, minutes below 2 h, hours below 48 h,
+   *  then days, each rounded down), so the line shows the same number in
+   *  every language. */
+  function ageOf(ms) {
+    const s = Math.floor(Math.max(0, ms) / 1000);
+    if (s < 120) return t("ago.s", { n: s });
+    if (s < 7200) return t("ago.min", { n: Math.floor(s / 60) });
+    if (s < 48 * 3600) return t("ago.h", { n: Math.floor(s / 3600) });
+    return t("ago.d", { n: Math.floor(s / 86400) });
   }
   const reducedMotion = () => !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
@@ -1312,6 +1897,9 @@
   // --- Tabs --------------------------------------------------------------------
   const TABS = ["start", "status", "history"];
   function showTab(name) {
+    // The log is the last card on Status: #log opens it there.
+    const toLog = name === "log";
+    if (toLog) name = "status";
     if (!TABS.includes(name)) name = "start";
     const changed = name !== tab;
     tab = name;
@@ -1319,8 +1907,10 @@
     for (const a of document.querySelectorAll("nav.tabs a")) {
       if (a.dataset.tab === name) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     }
-    if (changed) window.scrollTo(0, 0);
+    if (changed && !toLog) window.scrollTo(0, 0);
     renderAll();
+    if (toLog) { log.open = true; scrollToLog(); openLog().then(scrollToLog); }
+    else if (name === "status" && log.open) openLog();   // back after a restart: start over
     if (name === "history") loadHistory();
   }
   /** Opens a tab and puts it in the address, without a navigation: Safari on
@@ -1409,7 +1999,15 @@
       return s("error", "alert", "noGrinder", missing.text, missing.detail);
     }
     if (blocked) return s("warn", "alert", "blocked", t("sys.text.blocked", { message: blocked.grinder_message }));
-    if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"));
+    if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f.reason, f.outcome));
+    // Shots can still be made, but something needs a look: not green.
+    if (wifi && wifi.problem) return s("warn", "alert", "problem", t("sys.text.problem"), sentence(wifi.problem));
+    const failing = (S.integrations || []).find((i) => i.health === "error" || i.health === "stopped");
+    if (failing) {
+      const r = s("warn", "alert", "integError", t("sys.text.integError", { title: failing.title }), failing.last_error);
+      r.integ = failing;
+      return r;
+    }
     if (f.sc === "done") {
       const at = endTime(f.outcome);
       return s("ok", "check", "ready", at ? t("sys.text.done", { ago: ago(Date.now() - at) }) : t("sys.text.doneNoTime"));
@@ -1418,25 +2016,34 @@
     return s("ok", "check", "ready", "");
   }
 
-  function renderChecks() {
+  /** The grinder and each integration, in one line. What System status
+   *  says already (its title) is left out. */
+  function renderChecks(s) {
     const box = $("sys-checks");
     const items = [];
     const wifi = wifiOf();
     if (S && online) {
-      if (wifi && (wifi.state === "pairing" || wifi.needs_pairing_id)) items.push(["wait", "clock", t("check.grinderPairing")]);
-      else if (linkOn()) items.push(["ok", "check", tv("check.grinderReady")]);
-      else if (linkStarting()) items.push(["wait", "clock", t("check.grinderConnecting")]);
-      else items.push(["bad", "alert", t("check.grinderOff")]);
+      let grinder = null;
+      if (["noGrinder", "pairing", "linking", "problem"].includes(s.key)) { /* said above */ }
+      else if (wifi && (wifi.state === "pairing" || wifi.needs_pairing_id)) grinder = ["wait", "clock", t("check.grinderPairing")];
+      else if (linkOn()) grinder = ["ok", "check", tv("check.grinderReady")];
+      else if (linkStarting()) grinder = ["wait", "clock", t("check.grinderConnecting")];
+      else grinder = ["bad", "alert", t("check.grinderOff")];
+      if (grinder) items.push(grinder);
       const list = S.integrations || [];
       for (const i of list) {
+        if (i === s.integ) continue;
         const title = { title: i.title };
         if (i.health === "connected" || i.health === "watching") items.push(["ok", "check", t("check.integReady", title)]);
         else if (i.health === "starting") items.push(["wait", "clock", t("check.integConnecting", title)]);
         else items.push(["bad", "alert", t(i.health === "stopped" ? "check.integStopped" : "check.integError", title)]);
       }
       if (list.length === 0) items.push(["muted", null, t("check.noIntegration")]);
+      // The grinder alone on a line says nothing System status doesn't.
+      if (items.length === 1 && items[0] === grinder) items.length = 0;
     }
-    box.replaceChildren(...items.map(([cls, ic, text]) => el("span", { class: cls }, ic ? icon(ic, 14, ic === "check" ? 2.6 : 2.2) : null, text)));
+    box.replaceChildren(...(items.length ? [el("div", { class: "checks-in" }, ...items.map(([cls, ic, text]) =>
+      el("span", { class: cls }, ic ? icon(ic, 14, ic === "check" ? 2.6 : 2.2) : null, text)))] : []));
   }
 
   function setTone(node, tone) {
@@ -1464,11 +2071,12 @@
     $("sys-icon").replaceChildren(icon(s.icon, 22, s.icon === "check" ? 2.2 : 2));
     $("sys-text").textContent = s.text;
     $("sys-text").hidden = !s.text;
-    $("sys-detail").textContent = s.detail ? t("sys.detail", { detail: s.detail }) : "";
+    // The last error, with the way to the log.
+    $("sys-detail-text").textContent = s.detail;
     $("sys-detail").hidden = !s.detail;
     $("sys-toggle").setAttribute("aria-expanded", String(ui.sysOpen));
     $("sys-body").hidden = !ui.sysOpen;
-    renderChecks();
+    renderChecks(s);
     return s;
   }
   /** The pill's label, or its short form when the long one would be cut off. */
@@ -1520,7 +2128,7 @@
     else if (wifi && (wifi.needs_pairing_id || wifi.state === "pairing")) b.hidden = true; // the pairing card says it
     else if (linkStarting()) b.hidden = true; // the system status says it
     else if (!linkOn()) { if (s.key === "noGrinder") b.hidden = true; else show("bad", grinderMissing(wifi).text); }
-    else if (wifi && wifi.problem && !(f.sc === "error" && f.reason === wifi.problem)) show("warn", t("sys.problem", { problem: sentence(wifi.problem) }));
+    else if (wifi && wifi.problem && s.key !== "problem" && !(f.sc === "error" && f.reason === wifi.problem)) show("warn", t("sys.problem", { problem: sentence(wifi.problem) }));
     else b.hidden = true;
   }
 
@@ -1961,8 +2569,9 @@
     $("g-facts").replaceChildren(...facts.map(([k, v]) => el("div", null, el("dt", { text: t("grinder.fact." + k) }), el("dd", { text: v }))));
   }
 
-  // Integrations list. Rebuilt only when something shown changes.
-  let integSig = "", menuFor = null, integOpen = store.get("integOpen") !== "0";
+  // Integrations list. Rebuilt only when something shown changes, and not
+  // while one of its forms is open.
+  let integSig = "", menuFor = null, editing = null, editForm = null, integOpen = store.get("integOpen") !== "0";
   /** Rebuilds the integrations list on the next render, and renders. */
   function invalidateIntegrations() { integSig = ""; renderStatus(); }
   /** Closes the ⋮ menu; `refocus` puts focus back on its button. */
@@ -1984,11 +2593,22 @@
     $("add-integration").hidden = !(kinds && kinds.length);
     const adding = !$("add-panel").hidden;
     $("integ-empty").hidden = list.length > 0 || adding;
-    const sig = JSON.stringify([list.map((i) => [i.id, i.title, i.subject, i.health, i.detail, i.last_error, i.reports, i.source, i.kind]),
-      !!kinds, menuFor]);
+    // Deleted from another phone while being edited here: the form goes.
+    if (editing && !list.some((i) => i.id === editing)) { editing = null; editForm = null; }
+    const sig = JSON.stringify([list.map((i) => [i.id, i.title, i.subject, i.health, i.detail, integDetail(i), i.last_error, i.reports, i.source, i.adoptable, i.kind]),
+      !!kinds, menuFor, hasNewApi(), editing]);
     if (sig === integSig) return;
     integSig = sig;
-    $("integ-list").replaceChildren(...list.map(integItem));
+    const box = $("integ-list");
+    const nodes = list.map((i) => (i.id === editing && editForm) || integItem(i));
+    if (editForm && editForm.parentNode === box) {
+      // The other cards change around the open form, which keeps its focus
+      // and what was typed.
+      const at = nodes.indexOf(editForm);
+      for (const c of [...box.children]) if (c !== editForm) c.remove();
+      editForm.before(...nodes.slice(0, at));
+      editForm.after(...nodes.slice(at + 1));
+    } else box.replaceChildren(...nodes);
   }
 
   function integItem(i) {
@@ -2015,7 +2635,7 @@
         actions.length ? more : null));
     const bad = i.health === "error" || i.health === "stopped";
     const detailText = i.health === "error" ? (i.last_error || i.detail || t("integ.errorFallback"))
-      : i.health === "stopped" ? t("integ.stopped") : i.detail;
+      : i.health === "stopped" ? t("integ.stopped") : integDetail(i);
     const foot = [];
     if (i.reports > 0) foot.push(t("integ.reports", { n: i.reports }));
     if (i.source === "command_line") foot.push(t("integ.fromStart"));
@@ -2032,9 +2652,32 @@
     return item;
   }
 
-  /** The ⋮ menu: only integrations added in the app can be deleted there. */
+  /** An integration's status line in the current language: the catalog's
+   *  wording for its detail_key (integ.detail.<key>), filled from
+   *  detail_vars, else the server's English `detail`. A value's name ends in
+   *  its unit, which the wording leaves out: ago_ms is {ago} ("5 h ago", in
+   *  ageOf's steps), time_s {time} and weight_g {weight} with one decimal,
+   *  other numbers ({every}) with up to one, text ({host}) as it is. */
+  function integDetail(i) {
+    if (!i.detail_key) return i.detail;
+    const vars = {};
+    for (const [name, x] of Object.entries(i.detail_vars || {})) {
+      if (x == null || typeof x === "object") continue;   // only numbers and text are filled in
+      vars[name.replace(/_(ms|s|g)$/, "")] = typeof x !== "number" ? String(x)
+        : name === "ago_ms" ? ageOf(x) : name === "time_s" ? secs(x) : name === "weight_g" ? grams(x)
+        : fmt.upToOne.format(x);
+    }
+    const text = serverText("integ.detail." + i.detail_key, i.detail, vars);
+    // A value the wording needs but the server did not send: English.
+    return /\{\w+\}/.test(text) ? i.detail : text;
+  }
+
+  /** The ⋮ menu: only integrations in the app can be deleted there. */
   function integActions(i) {
-    return i.source === "app" ? [[t("common.delete"), "trash", "danger", () => confirmDelete(i)]] : [];
+    const acts = [];
+    if (hasNewApi() && kindOf(i.kind)) acts.push([t("common.edit"), "edit", "", () => (i.source === "command_line" ? moveToEdit(i) : startEdit(i))]);
+    if (i.source === "app") acts.push([t("common.delete"), "trash", "danger", () => confirmDelete(i)]);
+    return acts;
   }
   function focusMenu() {
     requestAnimationFrame(() => { const b = document.querySelector(".menu button"); if (b) b.focus(); });
@@ -2052,8 +2695,43 @@
     integOpen = !integOpen; store.set("integOpen", integOpen ? "1" : "0"); menuFor = null; invalidateIntegrations();
   });
 
-  /** The word typed to confirm a delete: DELETE, in any case. */
-  const DELETE_WORDS = ["DELETE"];
+  /** Edit one from the start settings: it is moved into the app first. */
+  function moveToEdit(i) {
+    const k = kindOf(i.kind);
+    if (!i.adoptable) {
+      const noFile = S.settings && S.settings.persistent === false;
+      return openSheet({
+        returnTo: () => focusKebab(i.id),
+        title: t("integ.cmdOnly.title", { title: i.title }),
+        body: [el("p", { class: "body-text", text: t("integ.cmdOnly.text") + (noFile ? " " + t("integ.cmdOnly.noFile") : "") })],
+        actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }],
+      });
+    }
+    openSheet({
+      returnTo: () => focusKebab(i.id),
+      title: t("integ.adopt.title", { title: i.title }),
+      body: [
+        el("p", { class: "body-text", text: t(hasPassword(k) ? "integ.adopt.textPassword" : "integ.adopt.text") }),
+        el("p", { class: "body-text", text: t("integ.adopt.after") }),
+      ],
+      actions: [
+        { label: t("common.cancel"), cls: "s-plain", run: closeSheet },
+        { label: t("integ.adopt.confirm"), cls: "s-primary", run: async (btn) => {
+          btn.disabled = true;
+          try {
+            const view = await api("/api/integrations/" + encodeURIComponent(i.id) + "/adopt", { method: "POST" });
+            closeSheet();
+            await tick();
+            startEdit(((S && S.integrations) || []).find((x) => x.id === i.id) || Object.assign({}, i, view));
+          } catch (err) { sheetError(err.message); btn.disabled = false; }
+        } },
+      ],
+    });
+  }
+
+  /** The word typed to confirm a delete: DELETE or LÖSCHEN, in any case
+   *  (LOESCHEN for keyboards without umlauts). */
+  const DELETE_WORDS = ["DELETE", "LÖSCHEN", "LOESCHEN"];
   const deleteTyped = (v) => DELETE_WORDS.includes(v.trim().toUpperCase());
   function confirmDelete(i) {
     const k = kindOf(i.kind);
@@ -2065,6 +2743,7 @@
       title: t("integ.delete.title", { title: i.title }),
       body: [
         el("p", { class: "body-text", text: t(hasPassword(k) ? "integ.delete.textPassword" : "integ.delete.text") }),
+        ...(i.from_command_line ? [el("p", { class: "body-text", text: t("integ.delete.moved") })] : []),
         el("label", { class: "sheet-label" }, t("integ.delete.type"), input),
       ],
       actions: [
@@ -2085,19 +2764,29 @@
     });
   }
 
-  /** One form field from an integration's setup form. */
-  function formField(f, prefix) {
+  /** One form field from the setup form of integration kind `kindId`. */
+  function formField(kindId, f, prefix, value, secretSaved) {
     const id = prefix + f.key;
+    // Label, help and a placeholder that is a word come from the server in
+    // English, translated by the catalog where it has them (serverText).
+    const key = (part) => kindKey(kindId, "field." + f.key + "." + part);
     const input = el("input", {
       id, name: f.key, type: { email: "email", password: "password" }[f.input] || "text",
       inputmode: f.input === "number" ? "decimal" : null, autocapitalize: "off", spellcheck: "false",
-      autocomplete: f.input === "email" ? "username" : f.input === "password" ? "current-password" : "off",
+      autocomplete: f.input === "email" ? "username" : f.input === "password" ? (secretSaved ? "new-password" : "current-password") : "off",
     });
-    if (f.default) input.placeholder = f.default;
-    input.required = !!f.required;
-    const help = f.help ? el("p", { class: "help", text: f.help }) : null;
+    if (f.input === "password" && secretSaved) input.placeholder = "••••••••";
+    else if (f.default) {
+      input.dataset.stPlaceholder = key("placeholder");
+      input.dataset.stPlaceholderEn = f.default;
+      input.placeholder = serverText(key("placeholder"), f.default);
+    }
+    if (value != null) input.value = value;
+    input.required = !!f.required && !(f.input === "password" && secretSaved);
+    const help = f.input === "password" && secretSaved ? tEl("p", { class: "help" }, "integ.passwordSaved")
+      : f.help ? stEl("p", { class: "help" }, key("help"), f.help) : null;
     return el("div", { class: "form-field" },
-      el("label", { for: id }, el("span", { text: f.label }), f.required ? null : tEl("span", { class: "opt" }, "common.optional")),
+      el("label", { for: id }, stEl("span", null, key("label"), f.label), f.required ? null : tEl("span", { class: "opt" }, "common.optional")),
       el("span", { class: "field" }, input),
       help);
   }
@@ -2109,6 +2798,39 @@
     }
     return settings;
   }
+
+  async function startEdit(i) {
+    const k = kindOf(i.kind);
+    if (!k) return;
+    let saved;
+    try { saved = await api("/api/integrations/" + encodeURIComponent(i.id) + "/settings"); }
+    catch (err) {
+      return openSheet({ title: t("integ.edit.cant", { title: i.title }), body: [el("p", { class: "body-text", text: err.message })], actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }] });
+    }
+    const values = saved.settings || {};
+    const secrets = new Set(saved.secrets_set || []);
+    const fields = el("div", { class: "stack-12" }, k.fields.map((f) => formField(k.id, f, "ef-", f.input === "password" ? null : values[f.key], secrets.has(f.key))));
+    const error = el("p", { class: "hint warn", role: "alert", hidden: true });
+    const save = tEl("button", { type: "submit", class: "btn-send ok" }, "common.save");
+    const form = el("form", { class: "integ stack-12", autocomplete: "off", "aria-label": t("integ.edit.kicker") + " " + i.title },
+      el("div", { class: "integ-row" }, iconFor(i.kind), el("div", { class: "integ-name" }, tEl("p", { class: "kicker" }, "integ.edit.kicker"), el("p", { class: "integ-title", text: i.title }))),
+      fields, error,
+      el("div", { class: "actions" }, tEl("button", { type: "button", class: "btn-plain sm", onclick: stopEdit }, "common.cancel"), save));
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      save.disabled = true; error.hidden = true;
+      try {
+        await api("/api/integrations/" + encodeURIComponent(i.id), { method: "PUT", body: JSON.stringify({ settings: formValues(fields) }) });
+        stopEdit();
+        await tick();
+      } catch (err) { error.textContent = err.message; error.hidden = false; save.disabled = false; }
+    });
+    editing = i.id; editForm = form;
+    invalidateIntegrations();
+    const first = form.querySelector("input");
+    if (first) first.focus();
+  }
+  function stopEdit() { const id = editing; editing = null; editForm = null; invalidateIntegrations(); if (id) focusKebab(id); }
 
   // Add integration: pick a kind, then fill in its form.
   let addingKind = null;
@@ -2128,7 +2850,7 @@
     $("kind-list").replaceChildren(...(kinds || []).map((k) => el("li", null,
       el("button", { type: "button", onclick: () => showForm(k) },
         iconFor(k.id),
-        el("span", { class: "minw" }, el("span", { class: "kind-title", text: k.title }), el("span", { class: "kind-sum", text: k.summary })),
+        el("span", { class: "minw" }, el("span", { class: "kind-title", text: k.title }), stEl("span", { class: "kind-sum" }, kindKey(k.id, "summary"), k.summary)),
         el("span", { class: "chev", style: "display:grid" }, icon("arrow", 18, 2.2))))));
   }
   function showForm(k) {
@@ -2136,10 +2858,10 @@
     $("add-pick").hidden = true; $("add-form").hidden = false;
     iconFor(k.id, $("add-icon"));
     $("add-title").textContent = k.title;
-    $("add-summary").textContent = k.summary;
+    setServerText($("add-summary"), kindKey(k.id, "summary"), k.summary);
     $("add-error").hidden = true;
     $("add-note").hidden = kindsPersistent;
-    $("add-fields").replaceChildren(...k.fields.map((f) => formField(f, "af-")));
+    $("add-fields").replaceChildren(...k.fields.map((f) => formField(k.id, f, "af-", null, false)));
     const first = $("add-fields").querySelector("input");
     if (first) first.focus();
   }
@@ -2162,12 +2884,14 @@
   // Settings
   function renderSettings() {
     renderAppearance();
+    renderLanguage();
     const st = S.settings;
     // An older server has no settings API: only the appearance is shown.
     for (const id of ["set-window-row", "set-foot"]) $(id).hidden = !st;
-    if (!st) { $("set-host-row").hidden = true; $("set-host-form").hidden = true; return; }
+    if (!st) { $("set-host-row").hidden = true; $("set-host-form").hidden = true; $("set-update-row").hidden = true; return; }
     if ($("set-host-form").hidden) $("set-host-row").hidden = false;
     renderWindow();
+    renderUpdateSetting();
     $("set-host-value").textContent = st.grinder_host ? st.grinder_host : t("settings.hostNone");
     $("set-foot").textContent = t(st.persistent ? "settings.saved" : "settings.notPersistent");
   }
@@ -2218,7 +2942,7 @@
   function parseWindow(text) {
     let s = String(text || "").trim().toLowerCase();
     let unit = "";
-    const u = /^(.*?)\s*(min|m|sec|s)\.?$/.exec(s);
+    const u = /^(.*?)\s*(min|m|sek|sec|s)\.?$/.exec(s);
     if (u) { s = u[1]; unit = u[2].charAt(0) === "m" ? "min" : "s"; }
     let m = /^(\d{1,2}):(\d{1,2})$/.exec(s);
     if (m) return unit !== "s" && Number(m[2]) < 60 ? Number(m[1]) * 60 + Number(m[2]) : NaN;
@@ -2339,10 +3063,61 @@
     });
   }
 
+  // Language: Auto, English or Deutsch, kept per device (gbs.lang); applied at once.
+  function renderLanguage() {
+    const choice = langChoice();
+    for (const b of $("language").querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.langChoice === choice));
+  }
+  for (const b of $("language").querySelectorAll("button")) {
+    b.addEventListener("click", () => {
+      store.set("lang", b.dataset.langChoice);
+      applyLanguage();
+    });
+  }
   // Changed in another tab of this browser: follow it here too.
   window.addEventListener("storage", (e) => {
+    if (e.key === "gbs.lang") applyLanguage();
     if (e.key === "gbs.theme") renderAppearance();   // the head script applies it
   });
+  /** Switches every text and format to the chosen language without a reload. */
+  function applyLanguage() {
+    setLanguage();
+    applyStatic();
+    renderLanguage();
+    integSig = "";
+    win.msg = "";
+    setHint();
+    rebuildLogLines();
+    renderAll();
+  }
+
+  // Update check: on or off, saved on the server like the settings above.
+  function renderUpdateSetting() {
+    const on = S.settings.update_check;
+    $("set-update-row").hidden = typeof on !== "boolean";
+    for (const b of $("set-update").querySelectorAll("button")) b.setAttribute("aria-pressed", String((b.dataset.update === "on") === on));
+  }
+  let updateSaving = false;
+  for (const b of $("set-update").querySelectorAll("button")) {
+    b.addEventListener("click", async () => {
+      const on = b.dataset.update === "on";
+      if (updateSaving || !S || !S.settings || S.settings.update_check === on) return;
+      updateSaving = true;
+      $("set-update").setAttribute("aria-busy", "true");
+      $("set-update-error").hidden = true;
+      try {
+        const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ update_check: on }) });
+        if (st && "update_check" in st) S.settings = st;
+        renderSettings();
+        await tick();
+      } catch (x) {
+        $("set-update-error").textContent = t("common.notSaved", { error: x.message }); $("set-update-error").hidden = false;
+      } finally {
+        updateSaving = false;
+        $("set-update").removeAttribute("aria-busy");
+      }
+    });
+  }
 
   function hostEditor(open) {
     $("set-host-form").hidden = !open;
@@ -2367,11 +3142,34 @@
     } finally { $("set-host-save").disabled = false; }
   });
 
+  function renderVersion() {
+    const u = S.update;
+    const v = String(S.version || (u && u.current) || "");
+    const [release, build] = v.split("+");
+    $("v-installed").textContent = release ? release + (build ? " · " + build : "") : "–";
+    $("v-installed").title = v;
+    const badge = $("v-badge");
+    const on = !!(u && u.enabled);
+    const failing = on && !!u.failing;
+    // A known newer release stays news when GitHub fails later; "up to date"
+    // does not.
+    const word = !on ? null : u.available ? ["run", "version.updateAvailable"]
+      : failing ? ["none", "version.failing"] : u.latest ? ["ok", "version.upToDate"] : null;
+    badge.hidden = !word;
+    if (word) { setTone(badge, word[0]); badge.textContent = t(word[1]); }
+    $("v-latest-box").hidden = !on;
+    $("v-latest").textContent = !on ? "–" : u.latest || (failing ? "–" : t("version.notChecked"));
+    $("v-note").hidden = !on;
+    $("v-off").hidden = !(u && !u.enabled);
+    $("v-whatsnew").hidden = !(on && u.available);
+  }
+
   function renderStatus() {
     if (!S || tab !== "status") return;
     renderGrinder();
     renderIntegrations();
     renderSettings();
+    renderVersion();
   }
 
   // --- History tab -----------------------------------------------------------------
@@ -2496,6 +3294,291 @@
     foot.textContent = t(hist.persistent === false ? "history.keptMemory" : "history.kept", { n: hist.capacity || 200 });
   }
 
+  // --- Log ---------------------------------------------------------------------
+  const log = { open: false, lines: [], last: 0, state: "idle", es: null, poll: null, retry: null, connected: false, follow: true, warnOnly: false, capacity: 1000, done: null, doneTimer: null };
+  const LOG_NOTE = () => t("log.note", { n: log.capacity });
+
+  /** The server restarted (a new boot_id, or its line numbers went back): start over from its first line. */
+  function restartLog() {
+    stopLogFeed();
+    log.lines = []; log.last = 0;
+    $("log-lines").replaceChildren();
+    if (log.state === "live") { log.state = "idle"; if (logShown()) openLog(); }
+  }
+
+  /** One log line on the page: time in the language's format, level, text as the server wrote it. */
+  function lineEl(l) {
+    const d = new Date(l.ts);
+    const level = String(l.level || "INFO").toUpperCase();
+    return el("div", { class: "ll l-" + (level === "WARNING" ? "WARN" : level) },
+      el("span", { class: "t", text: isNaN(d) ? "--:--:--" : hhmmss(d) }),
+      el("span", { class: "v", text: level }),
+      el("span", { class: "x", lang: "en", text: String(l.text || "") }));
+  }
+  function rebuildLogLines() {
+    $("log-lines").replaceChildren(...log.lines.map(lineEl));
+    if (log.follow) scrollLogEnd();
+  }
+  function addLines(lines) {
+    const box = $("log-lines");
+    const frag = document.createDocumentFragment();
+    for (const l of lines) {
+      if (!l || typeof l.seq !== "number" || l.seq <= log.last) continue;
+      log.last = l.seq;
+      log.lines.push(l);
+      frag.append(lineEl(l));
+    }
+    box.append(frag);
+    const over = log.lines.length - log.capacity;
+    if (over > 0) {
+      log.lines.splice(0, over);
+      for (let i = 0; i < over && box.firstChild; i++) box.firstChild.remove();
+    }
+    if (log.follow) scrollLogEnd();
+  }
+
+  async function fetchLog() {
+    try {
+      const r = await api("/api/log?after=" + log.last);
+      if (!r || !Array.isArray(r.lines)) throw Object.assign(new Error("no log"), { status: 404 });
+      if (typeof r.capacity === "number") log.capacity = r.capacity;
+      if (typeof r.last_seq === "number" && r.last_seq < log.last) { restartLog(); return false; }
+      addLines(r.lines);
+      return true;
+    } catch (e) {
+      if (e.status === 404) { log.state = "unsupported"; stopLogFeed(); renderLog(); }
+      return false;
+    }
+  }
+
+  function stopLogFeed() {
+    if (log.es) { log.es.close(); log.es = null; }
+    if (log.poll) { clearInterval(log.poll); log.poll = null; }
+    clearTimeout(log.retry);
+    log.connected = false;
+  }
+
+  async function openLog() {
+    renderLog();
+    if (log.state !== "idle") { if (log.follow) scrollLogEnd(); return; }
+    if (!S) return;
+    if (!hasNewApi()) { log.state = "unsupported"; renderLog(); return; }
+    log.state = "live";
+    $("log-note").textContent = LOG_NOTE();
+    const ok = await fetchLog();
+    if (!ok || log.state !== "live") return;
+    renderLog();
+    if (window.EventSource) connectLog(); else startLogPolling();
+  }
+
+  // The stream first replays the kept lines after `after`, so none fall
+  // between the fetch and the stream. It is reopened by hand after an error,
+  // with the newest `after` and after a fetch that notices a server restart.
+  function connectLog() {
+    if (log.state !== "live" || log.es) return;
+    const es = new EventSource("/api/log/stream?after=" + log.last);
+    log.es = es;
+    es.addEventListener("open", () => { log.connected = true; renderLog(); });
+    es.addEventListener("log", (m) => { try { addLines([JSON.parse(m.data)]); } catch (_) {} });
+    es.addEventListener("error", () => {
+      es.close();
+      if (log.es === es) log.es = null;
+      log.connected = false;
+      renderLog();
+      clearTimeout(log.retry);
+      log.retry = setTimeout(reconnectLog, 3000);
+    });
+  }
+  async function reconnectLog() {
+    if (log.state !== "live" || log.es) return;
+    const ok = await fetchLog();
+    if (log.state !== "live" || log.es) return;   // a restart: openLog took over
+    if (ok) connectLog(); else log.retry = setTimeout(reconnectLog, 3000);
+  }
+  function startLogPolling() {
+    if (log.poll) return;
+    log.poll = setInterval(() => { if (!document.hidden && logShown()) fetchLog(); }, 2000);
+  }
+
+  /** Brings the log card's head just below the sticky header. */
+  function scrollToLog() {
+    const head = document.querySelector(".top").offsetHeight;
+    window.scrollTo({ top: $("log-card").getBoundingClientRect().top + window.scrollY - head - 8 });
+  }
+  /** Whether the log card is open on the visible Status tab. */
+  const logShown = () => tab === "status" && log.open;
+
+  function renderLog() {
+    if (tab !== "status") return;
+    $("log-toggle").setAttribute("aria-expanded", String(log.open));
+    $("log-body").hidden = !log.open;
+    if (!log.open) return;
+    const unsupported = log.state === "unsupported";
+    $("log-unsupported").hidden = !unsupported;
+    for (const id of ["log-tools", "log-box", "log-note"]) $(id).hidden = unsupported;
+    if (unsupported) return;
+    $("log-follow").setAttribute("aria-pressed", String(log.follow));
+    $("log-warn").setAttribute("aria-pressed", String(log.warnOnly));
+    $("log-lines").classList.toggle("warn-only", log.warnOnly);
+    const live = window.EventSource ? log.connected : log.state === "live" && online;
+    $("log-live-block").classList.toggle("on", log.follow && live);
+    $("log-live-text").textContent = t(!live ? "log.reconnecting" : log.follow ? "log.live" : "log.paused");
+    // A status region announces every change, so only real ones.
+    if (!log.done && $("log-note").textContent !== LOG_NOTE()) $("log-note").textContent = LOG_NOTE();
+    if (!log.done) $("log-note").classList.remove("done");
+    $("log-copy").classList.toggle("done", log.done === "copy");
+    $("log-dl").classList.toggle("done", log.done === "dl");
+  }
+
+  let logScrolling = false;
+  function scrollLogEnd() {
+    const box = $("log-box");
+    logScrolling = true;
+    box.scrollTop = box.scrollHeight;
+    requestAnimationFrame(() => { logScrolling = false; });
+  }
+  $("log-box").addEventListener("scroll", () => {
+    if (logScrolling) return;
+    const box = $("log-box");
+    const atEnd = box.scrollHeight - box.scrollTop - box.clientHeight < 8;
+    if (!atEnd && log.follow) { log.follow = false; renderLog(); }
+  }, { passive: true });
+  // The box changes height with the note below it and the screen: keep the end in view.
+  if (window.ResizeObserver) new ResizeObserver(() => { if (log.follow && logShown()) scrollLogEnd(); }).observe($("log-box"));
+  // Opened by hand, or from "Show the log" next to an error.
+  $("log-toggle").addEventListener("click", () => {
+    log.open = !log.open;
+    if (log.open) openLog(); else renderLog();
+  });
+  $("sys-log-link").addEventListener("click", (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    e.preventDefault();
+    goTab("log");
+  });
+  $("log-follow").addEventListener("click", () => {
+    log.follow = !log.follow;
+    if (log.follow) scrollLogEnd();
+    renderLog();
+  });
+  $("log-warn").addEventListener("click", () => {
+    log.warnOnly = !log.warnOnly;
+    renderLog();
+    if (log.follow) scrollLogEnd();
+  });
+
+  // Copy and Download share the export: IP addresses replaced the same way
+  // throughout, and a header line saying what it holds.
+  function scrubber() {
+    const seen = new Map();
+    const name = (ip) => {
+      const key = ip.toLowerCase();
+      if (!seen.has(key)) seen.set(key, "<ip-" + (seen.size + 1) + ">");
+      return seen.get(key);
+    };
+    // The IPv4 tail goes first, so ::ffff:192.168.1.30 is one address.
+    const V6 = /(^|[^0-9A-Za-z_:.])((?:[0-9A-Fa-f]{0,4}:){2,7}(?:\d{1,3}(?:\.\d{1,3}){3}|[0-9A-Fa-f]{1,4})?)(?=$|[^0-9A-Za-z_:])/g;
+    const V4 = /(^|[^0-9.])((?:25[0-5]|2[0-4]\d|[01]?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|[01]?\d?\d)){3})(?![0-9]|\.\d)/g;
+    return (text) => text
+      .replace(/\/\/[^\s\/@]+@/g, "//<login>@")   // user:password@ in a URL
+      .replace(V6, (all, pre, ip) => {
+        const colons = (ip.match(/:/g) || []).length;
+        const valid = /[0-9A-Fa-f]/.test(ip) && (ip.includes("::") ? !/:::/.test(ip) && ip.split("::").length === 2 : colons === 7 || (colons === 6 && /\d\.\d/.test(ip)));
+        return valid ? pre + name(ip) : all;
+      })
+      .replace(V4, (all, pre, ip) => pre + name(ip));
+  }
+  // The export is meant for bug reports: always English, ISO-like times.
+  function stamp(d) {
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate())
+      + " " + pad2(d.getHours()) + ":" + pad2(d.getMinutes()) + ":" + pad2(d.getSeconds());
+  }
+  function utcOffset(d) {
+    const m = -d.getTimezoneOffset();
+    return "UTC" + (m >= 0 ? "+" : "-") + pad2(Math.floor(Math.abs(m) / 60)) + ":" + pad2(Math.abs(m) % 60);
+  }
+  function exportText(lines, filter) {
+    const scrub = scrubber();
+    const body = lines.map((l) => {
+      const d = new Date(l.ts);
+      return (isNaN(d) ? String(l.ts) : stamp(d) + "." + String(d.getMilliseconds()).padStart(3, "0")) + " "
+        + String(l.level).padEnd(5) + " " + scrub(String(l.text || ""));
+    });
+    const first = lines.length ? new Date(lines[0].ts) : new Date();
+    const last = lines.length ? new Date(lines[lines.length - 1].ts) : new Date();
+    const head = "# gbs-anywhere " + ((S && S.version) || "") + " log · " + stamp(first) + " to " + stamp(last)
+      + " (" + utcOffset(last) + ") · " + lines.length + (lines.length === 1 ? " line" : " lines") + " · " + filter + " · IP addresses replaced";
+    return head + "\n" + body.join("\n") + "\n";
+  }
+  /** Shows `note` under the log for a moment; `kind` "copy" or "dl" also ticks that button. */
+  function logDone(kind, note) {
+    log.done = kind;
+    $("log-note").textContent = note;
+    $("log-note").classList.toggle("done", kind === "copy" || kind === "dl");
+    clearTimeout(log.doneTimer);
+    log.doneTimer = setTimeout(() => { log.done = null; renderLog(); }, 3500);
+    renderLog();
+  }
+
+  async function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+      try { await navigator.clipboard.writeText(text); return true; } catch (_) {}
+    }
+    // Plain HTTP on a LAN address: no clipboard API, so a hidden textarea.
+    const ta = el("textarea", { readonly: true, "aria-hidden": "true" });
+    ta.value = text;
+    ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;font-size:16px;";
+    document.body.append(ta);
+    const active = document.activeElement;
+    ta.focus(); ta.select();
+    try { ta.setSelectionRange(0, text.length); } catch (_) {}
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (_) {}
+    ta.remove();
+    if (active && active.focus) active.focus();
+    return ok;
+  }
+
+  $("log-copy").addEventListener("click", async () => {
+    const since = Date.now() - 60 * 60000;
+    let lines = log.lines.filter((l) => Date.parse(l.ts) >= since && (!log.warnOnly || l.level !== "INFO"));
+    if (lines.length > 500) lines = lines.slice(-500);
+    if (!lines.length) {
+      logDone("note", t(log.warnOnly ? "log.nothingWarnings" : "log.nothingLines"));
+      return;
+    }
+    const filter = log.warnOnly ? "warnings only" : "all levels";
+    const text = exportText(lines, filter);
+    const note = t(log.warnOnly ? "log.copiedWarn" : "log.copied", { n: lines.length });
+    if (await copyText(text)) { logDone("copy", note); return; }
+    // Copying is blocked: show the text to copy by hand.
+    const ta = el("textarea", { readonly: true, "aria-label": t("log.copySheet.label") });
+    ta.value = text;
+    openSheet({
+      title: t("log.copySheet.title"),
+      body: [el("p", { class: "body-text", text: t("log.copySheet.text") }), ta],
+      actions: [
+        { label: t("log.copySheet.selectAll"), cls: "s-plain", run: () => { ta.focus(); ta.select(); try { ta.setSelectionRange(0, ta.value.length); } catch (_) {} } },
+        { label: t("common.done"), cls: "s-primary", run: closeSheet },
+      ],
+      focus: ta,
+    });
+    requestAnimationFrame(() => { ta.select(); try { ta.setSelectionRange(0, ta.value.length); } catch (_) {} });
+  });
+
+  $("log-dl").addEventListener("click", () => {
+    const lines = log.lines.slice();
+    const now = new Date();
+    const name = "gbs-anywhere-log-" + now.getFullYear() + "-" + pad2(now.getMonth() + 1) + "-" + pad2(now.getDate())
+      + "-" + pad2(now.getHours()) + pad2(now.getMinutes()) + ".txt";
+    const url = URL.createObjectURL(new Blob([exportText(lines, "all levels")], { type: "text/plain;charset=utf-8" }));
+    const a = el("a", { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    logDone("dl", t("log.downloaded", { file: name, n: lines.length }));
+  });
+
   // --- Bottom sheet ------------------------------------------------------------------
   // While open, the page behind is inert, so focus stays in the sheet.
   // `returnTo` (an element or a function) gets the focus back on close.
@@ -2541,13 +3624,16 @@
   // --- Live updates --------------------------------------------------------------------
   function renderAll() {
     if (!S) { renderHeader({ sc: "ready" }); return; }
-    // Name and version at the bottom of every tab.
+    // Name and version at the bottom of every tab but Status, whose
+    // gbs-anywhere card shows them.
+    $("app-footer").hidden = tab === "status";
     const [release, build] = String(S.version || "").split("+");
     $("app-footer").textContent = "gbs-anywhere" + (release ? " " + release + (build ? " · " + build : "") : "");
     $("app-footer").title = String(S.version || "");
     renderStart();
     renderStatus();
     renderHistory();
+    renderLog();
   }
 
   async function refresh() {
@@ -2564,9 +3650,11 @@
       events = []; lastSeq = 0; seenAt.clear();
       ui.mine.clear(); ui.mineRange = null; ui.dismissed = 0; ui.planKey = null;
       kinds = null;
+      restartLog();
     }
-    // Upgraded in place: the history may be there now.
+    // Upgraded in place: the history and the log may be there now.
     if (primed && (restarted || (!hadNewApi && hasNewApi()))) {
+      if (log.state === "unsupported") { log.state = "idle"; if (logShown()) openLog(); }
       if (histState !== "ok" || restarted) { histState = "unknown"; if (hasNewApi()) loadHistory(); }
     }
     if (!kinds) loadKinds();
@@ -2602,6 +3690,8 @@
     if (!primed && caughtUp) {
       primed = true;
       if (hasNewApi()) await loadHistory(); else histState = "unsupported";
+      // Opened at #log: the card could only open now, so scroll to it now.
+      if (logShown()) openLog().then(() => { if (location.hash === "#log") scrollToLog(); });
     } else if (shotDone && hasNewApi()) loadHistory();
     else if (histState === "failed" && Date.now() - histTried > 5000) loadHistory();
     renderAll();

@@ -33,9 +33,26 @@ a minor release may change behaviour.
   `--grinder` from then on (`PUT /api/settings`, `settings` in
   `GET /api/state`). Going back to an earlier version forgets the settings
   changed in the app.
+- Integrations added in the app can be changed there; a password left empty
+  keeps the saved one. An integration set with flags can be moved into the
+  app, with all its settings, so nothing has to be typed again; its flags
+  are ignored from the next start on while it is in the app, and can be
+  removed (`GET /api/integrations/<id>/settings`,
+  `PUT /api/integrations/<id>`, `POST /api/integrations/<id>/adopt`).
 - Shot history: the last 200 shots the grinder asked for, with time, weight,
   target and how they ended, kept in `history.json` next to the settings
   file (`GET /api/history`).
+- The app can show gbs-anywhere's log, in a card at the bottom of Status
+  (also opened with **Log** next to the last error in System status): the
+  last 1,000 lines it printed (INFO and up), and new ones as they come
+  (`GET /api/log`, `GET /api/log/stream`). Copying or downloading it
+  replaces IP addresses with placeholders, so it can go into a bug report.
+- Update check: once a day gbs-anywhere asks GitHub for its latest release,
+  so the app can say when a newer one is out (`update` in `GET /api/state`).
+  GitHub sees the request like any other, including your IP address; it
+  carries nothing but the gbs-anywhere version. Turn it off under Status →
+  Settings (saved like the other settings; `update_check` in
+  `PUT /api/settings`) or with `--update-check off` (`UPDATE_CHECK=off`).
 - `grinder.wifi.pairing_id` in `GET /api/state`: the E65/E80 pairing in use;
   `grinder.wifi.unknown_pairing_id`: one typed in that the grinder did not
   take, while the app asks for the ID.
@@ -43,32 +60,53 @@ a minor release may change behaviour.
   does not answer at all (off, in standby or gone from the network), as
   opposed to answering with an error.
 - `boot_id` in `GET /api/state`: new on every start, so an app can tell that
-  event numbers started over.
+  event and log numbers started over.
 - `age_ms` on each event in `GET /api/events` and the event stream: how long
   ago it happened, so an app that catches up after a gap shows the right
   times.
+- `detail_key` and `detail_vars` on each integration in `GET /api/state`:
+  its status line as a key and values (such as `time_s`, `weight_g`), next
+  to the English `detail`. The app uses them, and its own catalog for the
+  integrations' setup forms, to show both in German.
 - A redesigned app with three tabs: Start (the three steps of a shot, with
   the step that is running or failed opened), Status (grinder, integrations,
-  settings) and History. Appearance (System, Light, Dark) can be set under
-  Status → Settings; it is kept on each device. When no shot can start (no
-  grinder connected, or the grinder blocked), System status opens by itself
-  and says why in plain words, and step 1 shows "Blocked" instead of
-  "Grind". While an integration reports the shot, the fields to type it in
-  are hidden; they come back, with a note, when every integration has failed
-  or none has reported the shot a minute after it should have ended. The
-  History tab replaces the list of this session's shots.
+  settings, version) and History. Appearance (System, Light, Dark) and
+  language (English, Deutsch; by default the device's) can be set under
+  Status → Settings; both are kept on each device. When no shot can start
+  (no grinder connected, or the grinder blocked), System status opens by
+  itself and says why in plain words, and step 1 shows "Blocked" instead of
+  "Grind". When shots still work but something needs a look (an
+  integration that is not working, or a grinder that turned a request
+  down), System status turns yellow and says so. While an integration
+  reports the shot, the fields to type it in are hidden; they come back,
+  with a note, when every integration has failed or none has reported the
+  shot a minute after it should have ended. The History tab replaces the
+  list of this session's shots.
 - Groundwork for Bluetooth scales: a `-bluetooth` image next to each tag
   (`latest-bluetooth`, `nightly-bluetooth`; from source `--features
   bluetooth`) reaches BlueZ on the host through its D-Bus
   (`-v /run/dbus:/run/dbus:ro`), and its `--bluetooth-scan` lists the
   Bluetooth devices nearby with their names and addresses. The normal image
   has no Bluetooth.
+- The image carries the licenses of the Rust crates built into it, in
+  `/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES`.
 
 ### Changed
 
+- What the machine does (grind received, brew started, shot shown to the
+  grinder) is now logged with a time and level like every other line, so it
+  also shows in the app's log. The grinder's requests behind a grind and a
+  brew start are logged at debug level only, as they say the same.
+- The La Marzocco integration's log names the machine by the last four
+  characters of its serial number, also in its errors, and gives
+  La Marzocco's error replies by their status only (the reply itself at
+  debug level). The card still shows the serial numbers in full.
 - `--grinder` refuses an address that cannot be one (for example with a
   space in it) at startup, instead of failing on every request.
 - A fractional `--brew-timeout-s` is rounded to whole seconds.
+- The La Marzocco form calls its poll setting "Check interval (seconds)" and
+  says what it does; the Half Decent Scale form asks for the scale's IP
+  address.
 - Unreleased builds are now published once a night as the `nightly` image
   tag, and only on nights when something changed. The `main` and `sha-*`
   tags are no longer updated; switch from `:main` to `:nightly`. `latest`
@@ -78,8 +116,8 @@ a minor release may change behaviour.
 
 - Requests on port 80 outside the grinder's `/api/v2/` paths, such as other
   devices on the network probing the port, no longer count as grinder
-  traffic and are logged at debug level only. The `--log` transcript still
-  records them.
+  traffic and are logged at debug level only, so they no longer fill the
+  app's log. The `--log` transcript still records them.
 
 ## [0.2.1] - 2026-10-10
 

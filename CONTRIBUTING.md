@@ -33,7 +33,10 @@ it locally, and the rules for dependencies and wording.
 Each integration is one folder under `src/integration/`; `la_marzocco/` is a
 complete example, and the rules are in the
 [`integration` module docs](src/integration/mod.rs). Test against a local fake
-of the vendor's service, not the real one.
+of the vendor's service, not the real one. Its texts are English in the code,
+with their German in the app's catalog (see AGENTS.md); `cargo test` checks
+that none is missing. If German is not your language, say so in the pull
+request and ask for help.
 
 ## License
 

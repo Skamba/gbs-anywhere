@@ -19,9 +19,12 @@ file is for agents changing the code.
   brew jobs into brews of the same machine; `control_api.rs` is the JSON API
   and page for people. Around them: `settings.rs` holds the settings people
   change in the app (shot window, grinder address, which restarts the
-  E65/E80 link) and is the only writer of the settings file; `history.rs`
-  records the shots from the machine's events; `utc.rs` formats times.
-  `tests.rs` and `wifi_grinder/tests.rs` hold the end-to-end tests.
+  E65/E80 link, update check) and is the only writer of the settings file;
+  `history.rs` records the shots from the machine's events; `logbook.rs`
+  keeps the last log lines for the app (a `tracing` layer next to the
+  console output); `update_check.rs` looks for a newer release; `utc.rs`
+  formats times. `tests.rs` and `wifi_grinder/tests.rs` hold the end-to-end
+  tests.
 - `src/integration/`: optional integrations that report shots by themselves,
   one folder each (see [Integrations](#integrations)). `mod.rs` has the
   shared rules (`Link`), `kind.rs` the setup forms and `manager.rs` the
@@ -37,7 +40,7 @@ cargo test
 cargo clippy --all-targets
 cargo fmt
 # Local run, then open http://localhost:8089/
-cargo run -- -p 8089 --control off --no-stdin --config target/dev.json
+cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-check off
 ```
 
 - `web/index.html` is compiled into the binary (`include_str!`). After
@@ -95,13 +98,30 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   integration shares: a shot counts only while the grinder waits after a knob
   press (on an E65/E80 GbS: after a Grind-by-Sync grind), and a missing
   weight falls back to the recipe weight.
-- Secrets are `Input::Password` fields. Settings never go back out through
-  the API or into logs. Keys that are not on the form, such as a test base
-  URL, stay command-line only.
+- Secrets are `Input::Password` fields. Passwords never go back out through
+  the API or into logs. The other form values come back for editing
+  (`GET /api/integrations/<id>/settings`, where `secrets_set` only names the
+  passwords that are set). Keys that are not on the form, such as a test
+  base URL, stay command-line only. Leave such a key out of `Args::settings`
+  while it has its default (as `la_marzocco` does with `base_url`): an
+  integration whose settings hold one can't be moved into the app.
 - Vendor logos are trademarks: draw a generic glyph for `icon.svg`. People
   can supply their own icons with `--icons`.
+- Texts stay English in Rust. Give each status line a key with
+  `Detail::keyed` (`<id>.<state>`) and its numbers with `Detail::var`
+  (unit in the name: `ago_ms`, `time_s`, `weight_g`); the API shows them as
+  `detail_key` and `detail_vars` next to `detail`. The German wording goes
+  into the app's catalog, `integ.detail.<key>` for status lines and
+  `kind.<id>.summary` / `kind.<id>.field.<key>.label|help|placeholder` for
+  the form. The placeholder leaves the unit out (`time_s` is `{time}`);
+  `ago_ms`, `time_s` and `weight_g` get their own format, other numbers up
+  to one decimal. Another unit or format needs a case in `integDetail()`.
+  `cargo test` checks that the form and every keyed status line of each
+  integration have their German; at run time a missing entry shows the
+  server's English. Errors and log lines stay English.
 - Test against a local fake of the vendor's service. Don't send test traffic
-  or made-up credentials to a vendor's real service.
+  or made-up credentials to a vendor's real service. The same goes for
+  GitHub in the update check: tests pass a local URL (`UpdateConfig`).
 
 ## Web app
 
@@ -109,8 +129,13 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   network that may have no internet access.
 - Colours are CSS variables on `:root`, redefined for dark mode. Use them
   instead of literal colours.
-- Every text the app writes is in the `STRINGS` catalog and goes through
-  `t()`.
+- Every text the app writes is in the `STRINGS` catalog, in `en` and `de`
+  with the same keys, and goes through `t()`. Integration texts that come
+  from the server in English (`kind.*`, `integ.detail.*`) are the
+  exception: they are only in `de`, and English shows the server's text.
+  The tests in `control_api.rs` check this: the same keys and placeholders
+  in `en` and `de`, both `.e64` and `.wifi` wordings, and every key the page
+  passes literally to `t()`/`tv()` or names in `data-i18n` is in the catalog.
 - Phone first: content at most 480 px wide, 16 px side padding, no
   horizontal scrolling.
 - Typing the time and weight by hand is the default flow and must work with no
@@ -161,3 +186,8 @@ public, such as pushing, deleting data or publishing an image.
 AGPL-3.0-or-later (`LICENSE`). Source files carry no license header. Only
 add third-party code, assets or dependencies whose license is compatible with
 the AGPL (MIT, Apache-2.0, BSD and ISC are); ask when unsure.
+
+The image ships the crates' licenses (`THIRD-PARTY-NOTICES`, made by
+cargo-about from `about.toml` and `about.hbs`). A crate under a license not
+in `accepted` there fails the image build: add the license only once it is
+known to be compatible. `cargo about generate about.hbs` checks it locally.

@@ -43,6 +43,11 @@
 //! * `run.rs`: in `run`, loop forever: connect, set the status, wait for
 //!   [`Link::grinder_brews`], measure, call [`Link::report`]; on failure set
 //!   [`Status::error`] and back off with [`Backoff`].
+//!   Status lines are English. Give each one a key with [`Detail::keyed`]
+//!   (`<id>.<state>`, e.g. `la_marzocco.last_coffee`) and its numbers with
+//!   [`Detail::var`], and the app can show it in the person's language
+//!   (`integ.detail.<key>` in its catalog); a line without a key, or one the
+//!   catalog lacks, is shown in English. Errors stay English.
 //! * Then list it here: `pub mod <id>;`, its `KIND` in [`KINDS`], and its
 //!   args in [`CliArgs`] and [`CliArgs::configured`].
 //!
@@ -243,6 +248,66 @@ impl GrinderBrews {
 // Status: how an integration is doing
 // ---------------------------------------------------------------------------
 
+/// The values a keyed status line is filled with. See [`Detail::var`].
+pub type DetailVars = serde_json::Map<String, serde_json::Value>;
+
+/// Rounded to 0.1, as status lines show times and weights. Use it for both the
+/// English text and the value, so every language shows the same number (a
+/// vendor cloud may also send float noise like 37.4000015).
+pub fn tenths(x: f64) -> f64 {
+    (x * 10.0).round() / 10.0
+}
+
+/// A status line: the English text, and optionally a key and values so the
+/// app can say it in the person's language. Plain text converts into a line
+/// without a key, which every language shows as it is.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Detail {
+    text: String,
+    key: Option<&'static str>,
+    vars: DetailVars,
+}
+
+impl Detail {
+    /// `text`, which the app may replace with its own wording for `key`:
+    /// `<integration id>.<state>`, such as `la_marzocco.last_coffee`.
+    pub fn keyed(key: &'static str, text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            key: Some(key),
+            vars: DetailVars::new(),
+        }
+    }
+
+    /// The English line.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Adds a value the app fills into its wording. Numbers are in plain
+    /// units, with the unit in the name (`ago_ms`, `time_s`, `weight_g`,
+    /// `every_s`); text goes in as it is (`host`).
+    pub fn var(mut self, name: &str, value: impl Into<serde_json::Value>) -> Self {
+        self.vars.insert(name.to_owned(), value.into());
+        self
+    }
+}
+
+impl From<&str> for Detail {
+    fn from(text: &str) -> Self {
+        text.to_owned().into()
+    }
+}
+
+impl From<String> for Detail {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            ..Self::default()
+        }
+    }
+}
+
 /// Coarse state, for a dot in the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -271,6 +336,12 @@ pub struct StatusSnapshot {
     pub subject: String,
     /// The current state in one line, e.g. `last coffee 3 min ago: 25.1 s`.
     pub detail: String,
+    /// Names `detail` for translation, e.g. `la_marzocco.last_coffee`;
+    /// `None` when the integration gives no key for it.
+    pub detail_key: Option<&'static str>,
+    /// The values the app fills into its wording for `detail_key`, as of
+    /// when `detail` was set: e.g. `{"ago_ms": 180000, "time_s": 25.1}`.
+    pub detail_vars: DetailVars,
     pub last_error: Option<String>,
     /// How long the current health has been in place.
     pub since_ms: u64,
@@ -282,7 +353,7 @@ pub struct StatusSnapshot {
 struct StatusInner {
     health: Health,
     subject: String,
-    detail: String,
+    detail: Detail,
     last_error: Option<String>,
     since: Instant,
     reports: u32,
@@ -307,7 +378,7 @@ impl Status {
             inner: Arc::new(Mutex::new(StatusInner {
                 health: Health::Starting,
                 subject: String::new(),
-                detail: String::new(),
+                detail: Detail::default(),
                 last_error: None,
                 since: Instant::now(),
                 reports: 0,
@@ -330,15 +401,17 @@ impl Status {
         self.lock().subject = subject.into();
     }
 
-    pub fn starting(&self, detail: impl Into<String>) {
+    /// The state and its line: plain English text, or a [`Detail`] with a
+    /// key the app can translate.
+    pub fn starting(&self, detail: impl Into<Detail>) {
         self.set(Health::Starting, detail.into());
     }
 
-    pub fn connected(&self, detail: impl Into<String>) {
+    pub fn connected(&self, detail: impl Into<Detail>) {
         self.set(Health::Connected, detail.into());
     }
 
-    pub fn watching(&self, detail: impl Into<String>) {
+    pub fn watching(&self, detail: impl Into<Detail>) {
         self.set(Health::Watching, detail.into());
     }
 
@@ -351,15 +424,15 @@ impl Status {
             s.since = Instant::now();
         }
         s.health = Health::Error;
-        s.detail.clone_from(&message);
+        s.detail = Detail::from(message.as_str());
         s.last_error = Some(message);
     }
 
     fn stopped(&self) {
-        self.set(Health::Stopped, "stopped".to_owned());
+        self.set(Health::Stopped, "stopped".into());
     }
 
-    fn set(&self, health: Health, detail: String) {
+    fn set(&self, health: Health, detail: Detail) {
         let mut s = self.lock();
         if s.health != health {
             s.since = Instant::now();
@@ -385,7 +458,9 @@ impl Status {
             title: self.title.to_string(),
             health: s.health,
             subject: s.subject.clone(),
-            detail: s.detail.clone(),
+            detail: s.detail.text.clone(),
+            detail_key: s.detail.key,
+            detail_vars: s.detail.vars.clone(),
             last_error: s.last_error.clone(),
             since_ms: u64::try_from(s.since.elapsed().as_millis()).unwrap_or(u64::MAX),
             reports: s.reports,
@@ -528,7 +603,42 @@ mod tests {
         assert_eq!(snap.health, Health::Connected);
         assert_eq!(snap.subject, "thing");
         assert_eq!(snap.detail, "fine");
+        assert_eq!(snap.detail_key, None);
         assert_eq!(snap.last_error, None);
+    }
+
+    #[test]
+    fn keyed_details_carry_their_values() {
+        let s = Status::new("x", "x", "X");
+        s.watching(
+            Detail::keyed("x.flowing", "flowing · 12.3 g")
+                .var("weight_g", 12.3)
+                .var("host", "192.168.1.30"),
+        );
+        let snap = s.snapshot();
+        assert_eq!(snap.health, Health::Watching);
+        assert_eq!(snap.detail, "flowing · 12.3 g", "English stays");
+        assert_eq!(snap.detail_key, Some("x.flowing"));
+        assert_eq!(snap.detail_vars["weight_g"], 12.3);
+        assert_eq!(snap.detail_vars["host"], "192.168.1.30");
+
+        // The API shows both, next to the English line.
+        let json = serde_json::to_value(&snap).unwrap();
+        assert_eq!(json["detail"], "flowing · 12.3 g");
+        assert_eq!(json["detail_key"], "x.flowing");
+        assert_eq!(json["detail_vars"]["weight_g"], 12.3);
+
+        // A plain line or an error drops the key and its values.
+        s.connected(String::from("ready"));
+        let snap = s.snapshot();
+        assert_eq!((snap.detail.as_str(), snap.detail_key), ("ready", None));
+        assert!(snap.detail_vars.is_empty());
+        s.watching(Detail::keyed("x.settling", "settling"));
+        s.error("boom");
+        let json = serde_json::to_value(s.snapshot()).unwrap();
+        assert_eq!(json["detail"], "boom");
+        assert_eq!(json["detail_key"], serde_json::Value::Null);
+        assert_eq!(json["detail_vars"], serde_json::json!({}));
     }
 
     #[test]

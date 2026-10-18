@@ -26,7 +26,8 @@ async fn start_server() -> (String, Arc<Server>) {
         finishing_hold: Duration::from_millis(300),
         ..MachineConfig::default()
     };
-    let state = Server::new(config);
+    // A log book of its own, so tests running side by side don't mix lines.
+    let state = Server::with_log(config, Arc::new(LogBook::new(logbook::CAPACITY)));
     let app = control_router(state.clone()).merge(grinder_router(state.clone()));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -284,9 +285,12 @@ async fn settings_change_in_the_app_and_are_saved() {
     assert_eq!(settings["grinder_host"], Value::Null);
     assert_eq!(
         settings["source"],
-        json!({ "shot_window_s": "default", "grinder_host": "default" })
+        json!({ "shot_window_s": "default", "grinder_host": "default", "update_check": "default" })
     );
     assert_eq!(settings["persistent"], true);
+    assert_eq!(settings["update_check"], true, "on unless turned off");
+    assert_eq!(state["update"]["enabled"], true);
+    assert_eq!(state["update"]["latest"], Value::Null);
 
     let (code, settings) = put(json!({ "shot_window_s": 120 })).await;
     assert_eq!(code, 200);
@@ -305,12 +309,20 @@ async fn settings_change_in_the_app_and_are_saved() {
         json!({ "grinder_host": "http://127.0.0.1:9" }),
         json!({ "grinder_host": "127.0.0.1\n:9" }),
         json!({ "grinder_host": "a".repeat(300) }),
+        json!({ "update_check": "off" }),
         json!({ "nope": 1 }),
     ] {
         let (code, body) = put(bad.clone()).await;
         assert_eq!(code, 400, "{bad}");
         assert!(body["error"].is_string());
     }
+
+    // The update check, turned off in the app.
+    let (code, settings) = put(json!({ "update_check": false })).await;
+    assert_eq!(code, 200);
+    assert_eq!(settings["update_check"], false);
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["update"]["enabled"], false);
 
     // An E65/E80 address starts the link (here to a closed local port), and
     // the pairing is kept where it was set up to be.
@@ -325,7 +337,7 @@ async fn settings_change_in_the_app_and_are_saved() {
     let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
         saved["settings"],
-        json!({ "shot_window_s": 120, "grinder_host": "127.0.0.1:9" })
+        json!({ "shot_window_s": 120, "grinder_host": "127.0.0.1:9", "update_check": false })
     );
 
     // No address: the link stops, and a pairing ID has nowhere to go.
@@ -399,6 +411,79 @@ async fn a_new_grinder_address_ends_the_shot_it_waited_for() {
 }
 
 #[tokio::test]
+async fn the_log_is_kept_for_the_app() {
+    let (base, x) = start_server().await;
+    // The server has a log book of its own (see `start_server`), and nothing
+    // logs into it but this test.
+    let (_, before) = call(reqwest::Method::GET, format!("{base}/api/log"), None).await;
+    let after = before["last_seq"].as_u64().unwrap();
+    assert_eq!(after, 0);
+    assert_eq!(before["capacity"], 1000);
+
+    let mut stream = reqwest::get(format!("{base}/api/log/stream?after={after}"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stream.headers()["content-type"],
+        "text/event-stream",
+        "server-sent events"
+    );
+    let first = x.log().push(tracing::Level::WARN, "routes test: first");
+    x.log().push(tracing::Level::INFO, "routes test: second");
+
+    let (code, body) = call(
+        reqwest::Method::GET,
+        format!("{base}/api/log?after={after}"),
+        None,
+    )
+    .await;
+    assert_eq!(code, 200);
+    let ours: Vec<&Value> = body["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["text"].as_str().unwrap().starts_with("routes test:"))
+        .collect();
+    assert_eq!(ours.len(), 2);
+    assert_eq!(ours[0]["seq"], first.seq);
+    assert_eq!(ours[0]["level"], "WARN");
+    assert_eq!(ours[0]["text"], "routes test: first");
+    assert!(ours[0]["ts"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(body["last_seq"], first.seq + 1);
+
+    // The stream sends the same lines as `log` events.
+    let mut text = String::new();
+    while !text.contains("routes test: second") {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), stream.chunk())
+            .await
+            .expect("a line in time")
+            .unwrap()
+            .expect("the stream stays open");
+        text.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    assert!(text.contains("event: log"), "{text}");
+    assert!(text.contains(&format!("id: {}", first.seq)), "{text}");
+    assert!(text.contains(r#""text":"routes test: first""#), "{text}");
+
+    // A browser reconnecting says what it saw last, and gets what it missed;
+    // that wins over the query of the URL it reconnects to.
+    let mut again = reqwest::Client::new()
+        .get(format!("{base}/api/log/stream?after=0"))
+        .header("last-event-id", first.seq.to_string())
+        .send()
+        .await
+        .unwrap();
+    let chunk = tokio::time::timeout(Duration::from_secs(5), again.chunk())
+        .await
+        .expect("the missed line at once")
+        .unwrap()
+        .unwrap();
+    let text = String::from_utf8_lossy(&chunk);
+    assert!(text.contains(&format!("id: {}", first.seq + 1)), "{text}");
+    assert!(!text.contains("routes test: first"), "{text}");
+}
+
+#[tokio::test]
 async fn shots_the_grinder_asked_for_go_into_the_history() {
     let (base, x) = start_server().await;
     let dir = temp_dir("history");
@@ -462,5 +547,82 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
     let saved: Value =
         serde_json::from_slice(&std::fs::read(dir.join("history.json")).unwrap()).unwrap();
     assert_eq!(saved["shots"].as_array().unwrap().len(), 2);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn integrations_are_edited_and_moved_into_the_app() {
+    let (base, x) = start_server().await;
+    let dir = temp_dir("integrations");
+    let file = SettingsFile::open(&dir.join("settings.json")).unwrap();
+    let scale = |host: &str| crate::integration::Settings::new().with("host", Some(host));
+    // A Half Decent Scale from the command line, at a local address nobody
+    // answers on.
+    let kind = &crate::integration::half_decent::KIND;
+    x.integrations()
+        .start_cli(&x, kind, &scale("127.0.0.1:9"))
+        .unwrap();
+    let url = |path: &str| format!("{base}/api/integrations/half_decent{path}");
+
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    let entry = &state["integrations"][0];
+    assert_eq!(
+        (&entry["source"], &entry["adoptable"]),
+        (&json!("command_line"), &json!(false))
+    );
+    // The status line in English, and as a key and values the app can word
+    // in its own language (connecting, or not reached at startup).
+    assert!(entry["detail"].as_str().is_some_and(|d| !d.is_empty()));
+    let key = entry["detail_key"].as_str().unwrap();
+    assert!(key.starts_with("half_decent."), "{key}");
+    assert!(entry["detail_vars"].is_object());
+    let (code, _) = call(reqwest::Method::POST, url("/adopt"), None).await;
+    assert_eq!(code, 409, "no settings file");
+
+    x.integrations()
+        .load(&x, file, crate::integration::KINDS)
+        .unwrap();
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["integrations"][0]["adoptable"], true);
+    let (code, _) = call(reqwest::Method::GET, url("/settings"), None).await;
+    assert_eq!(code, 409, "command line");
+    let edit = json!({ "settings": { "host": "127.0.0.1:10" } });
+    let (code, _) = call(reqwest::Method::PUT, url(""), Some(edit.clone())).await;
+    assert_eq!(code, 409, "command line");
+
+    let (code, view) = call(reqwest::Method::POST, url("/adopt"), None).await;
+    assert_eq!(code, 200);
+    assert_eq!(
+        (&view["id"], &view["source"], &view["adoptable"]),
+        (&json!("half_decent"), &json!("app"), &json!(false))
+    );
+    let (code, _) = call(reqwest::Method::POST, url("/adopt"), None).await;
+    assert_eq!(code, 409, "already in the app");
+
+    let (code, form) = call(reqwest::Method::GET, url("/settings"), None).await;
+    assert_eq!(code, 200);
+    assert_eq!(
+        form,
+        json!({ "kind": "half_decent", "settings": { "host": "127.0.0.1:9" }, "secrets_set": [] })
+    );
+    let (code, body) = call(reqwest::Method::PUT, url(""), Some(edit)).await;
+    assert_eq!((code, &body["id"]), (200, &json!("half_decent")));
+    let (_, form) = call(reqwest::Method::GET, url("/settings"), None).await;
+    assert_eq!(form["settings"]["host"], "127.0.0.1:10");
+    let bad = json!({ "settings": { "host": "not an address" } });
+    let (code, _) = call(reqwest::Method::PUT, url(""), Some(bad)).await;
+    assert_eq!(code, 400);
+    let unknown = format!("{base}/api/integrations/nope");
+    let (code, _) = call(reqwest::Method::PUT, unknown.clone(), Some(json!({}))).await;
+    assert_eq!(code, 404);
+    let (code, _) = call(reqwest::Method::GET, format!("{unknown}/settings"), None).await;
+    assert_eq!(code, 404);
+    let (code, _) = call(reqwest::Method::POST, format!("{unknown}/adopt"), None).await;
+    assert_eq!(code, 404);
+
+    let saved: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(saved["integrations"][0]["from_command_line"], true);
+    assert_eq!(saved["integrations"][0]["settings"]["host"], "127.0.0.1:10");
     let _ = std::fs::remove_dir_all(dir);
 }

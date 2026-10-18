@@ -90,6 +90,61 @@ impl Kind {
     pub fn field(&self, key: &str) -> Option<&Field> {
         self.fields.iter().find(|f| f.key == key)
     }
+
+    /// Whether `a` and `b` fill in the form the same way: as the
+    /// integration reads them, with a field's default for an empty one and
+    /// numbers by value. A key that is not on the form (a test server)
+    /// counts as a difference.
+    pub fn same_settings(&self, a: &Settings, b: &Settings) -> bool {
+        fn value(f: &Field, s: &Settings) -> Option<String> {
+            let v = match f.input {
+                Input::Password => s.secret(f.key),
+                _ => s.text(f.key),
+            }
+            .or(Some(f.default).filter(|d| !d.is_empty()))?;
+            // "3", "3.0" and "3,0" are the same number.
+            let n = (f.input == Input::Number)
+                .then(|| v.replace(',', ".").parse::<f64>().ok())
+                .flatten();
+            Some(n.map_or_else(|| v.to_owned(), |n| n.to_string()))
+        }
+        let on_form = |s: &Settings| s.0.keys().all(|k| self.field(k).is_some());
+        on_form(a) && on_form(b) && self.fields.iter().all(|f| value(f, a) == value(f, b))
+    }
+
+    /// The form's values as the app may see them: everything but passwords,
+    /// and which passwords have a value.
+    pub fn shown(&self, settings: &Settings) -> (BTreeMap<String, String>, Vec<String>) {
+        let mut shown = BTreeMap::new();
+        let mut secrets_set = Vec::new();
+        for f in self.fields {
+            match f.input {
+                Input::Password if settings.secret(f.key).is_some() => {
+                    secrets_set.push(f.key.to_owned());
+                }
+                Input::Password => {}
+                _ => {
+                    if let Some(v) = settings.0.get(f.key) {
+                        shown.insert(f.key.to_owned(), v.clone());
+                    }
+                }
+            }
+        }
+        (shown, secrets_set)
+    }
+
+    /// `new` as the app sent it, with each password that is missing or empty
+    /// there taking its value from `old`.
+    pub fn keep_secrets(&self, mut new: Settings, old: &Settings) -> Settings {
+        for f in self.fields.iter().filter(|f| f.input == Input::Password) {
+            if new.secret(f.key).is_none()
+                && let Some(v) = old.secret(f.key)
+            {
+                new.0.insert(f.key.to_owned(), v.to_owned());
+            }
+        }
+        new
+    }
 }
 
 /// Filled-in form values by field key. Everything is a string, as typed.
@@ -225,5 +280,43 @@ mod tests {
         let hidden = ok.with("base_url", Some("http://x"));
         assert_eq!(err(&hidden, true), "unknown setting `base_url`");
         assert!(KIND.create(&hidden, false).is_ok());
+    }
+
+    #[test]
+    fn passwords_stay_in() {
+        let saved = Settings::new()
+            .with("user", Some("me"))
+            .with("pass", Some("secret"))
+            .with("every", Some("3"));
+        let (shown, secrets_set) = KIND.shown(&saved);
+        assert_eq!(shown.get("user").map(String::as_str), Some("me"));
+        assert_eq!(shown.get("every").map(String::as_str), Some("3"));
+        assert!(!shown.contains_key("pass"), "never sent out");
+        assert_eq!(secrets_set, ["pass"]);
+        assert!(KIND.shown(&Settings::new()).1.is_empty());
+
+        // Left out or empty: the saved one. Typed: the new one.
+        let edited = Settings::new().with("user", Some("you"));
+        let merged = KIND.keep_secrets(edited.clone().with("pass", Some("")), &saved);
+        assert_eq!(merged.secret("pass"), Some("secret"));
+        assert_eq!(merged.text("user"), Some("you"));
+        assert_eq!(
+            KIND.keep_secrets(edited.clone(), &saved).secret("pass"),
+            Some("secret")
+        );
+        let typed = KIND.keep_secrets(edited.with("pass", Some("new")), &saved);
+        assert_eq!(typed.secret("pass"), Some("new"));
+
+        // Compared as read: trimmed, and empty is the default.
+        let flags = Settings::new()
+            .with("user", Some(" me "))
+            .with("every", Some("3"));
+        let app = Settings::new().with("user", Some("me"));
+        assert!(KIND.same_settings(&flags, &app));
+        assert!(!KIND.same_settings(&flags, &app.clone().with("every", Some("4"))));
+        // Numbers by value; a key that is not on the form differs.
+        assert!(KIND.same_settings(&flags, &app.clone().with("every", Some("3,0"))));
+        let test_server = flags.clone().with("base_url", Some("http://x"));
+        assert!(!KIND.same_settings(&test_server, &app));
     }
 }

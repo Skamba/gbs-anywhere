@@ -27,7 +27,7 @@ use clap::Parser;
 use gbs_anywhere::integration;
 use gbs_anywhere::protocol::machine::EventRecord;
 use gbs_anywhere::protocol::{MachineConfig, MachineEvent, ShotResult};
-use gbs_anywhere::server::{self, ServeConfig, Server, SettingsFile, Startup};
+use gbs_anywhere::server::{self, LogBook, ServeConfig, Server, SettingsFile, Startup};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -118,6 +118,16 @@ struct Args {
     )]
     bluetooth_scan: Option<u64>,
 
+    /// Look for a newer release on GitHub once a day, to show in the app (on
+    /// unless set; a choice made in the app wins).
+    #[arg(
+        long,
+        env = "UPDATE_CHECK",
+        value_parser = clap::builder::BoolishValueParser::new(),
+        value_name = "ON|OFF"
+    )]
+    update_check: Option<bool>,
+
     #[command(flatten)]
     integrations: integration::CliArgs,
 }
@@ -195,9 +205,28 @@ async fn main() -> anyhow::Result<()> {
                 .map(|c| c.with_file_name("grinder-pairing.json"))
         }),
         pairing_id: args.grinder_pairing_id,
+        update_check: args.update_check,
     };
     x.start_settings(startup, file.clone())?;
+    let data = file.as_ref().map(|f| f.data()).unwrap_or_default();
     for (kind, settings) in args.integrations.configured() {
+        if let Some(moved) = data.moved(kind.id) {
+            if kind.same_settings(&moved.settings, &settings) {
+                tracing::info!(
+                    "{}: moved into the app; its command-line settings are ignored and can be \
+                     removed",
+                    kind.title
+                );
+            } else {
+                tracing::warn!(
+                    "{}: moved into the app; its command-line settings differ from the app's \
+                     and are ignored (remove them, or delete it in the app and restart to use \
+                     them)",
+                    kind.title
+                );
+            }
+            continue;
+        }
         x.integrations().start_cli(&x, kind, &settings)?;
     }
     if let Some(file) = file {
@@ -205,6 +234,8 @@ async fn main() -> anyhow::Result<()> {
         let n = x.integrations().load(&x, file, integration::KINDS)?;
         tracing::info!("settings in {}: {n} added in the app", path.display());
     }
+    // It sends nothing while the check is off (see the settings).
+    x.start_update_check(server::UpdateConfig::default());
     if !args.no_stdin {
         println!("{HELP}");
         tokio::spawn(stdin_loop(x.clone()));
@@ -257,11 +288,12 @@ commands:  <seconds> [grams]   report the shot (e.g. `30 36`)
            set KEY=VALUE ...   change ON-state mako fields, e.g. `set TANK_LEVEL=0`
            ?                   show state      h  this help";
 
+/// Says what the machine does, in the log (and so in the app's log view).
 async fn print_events(x: Arc<Server>) {
     let mut rx = x.subscribe();
     loop {
         match rx.recv().await {
-            Ok(rec) => println!("{}", describe(&rec)),
+            Ok(rec) => tracing::info!("{}", describe(&rec)),
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
             Err(_) => return,
         }
@@ -290,12 +322,11 @@ fn describe(rec: &EventRecord) -> String {
                 .beverage_weight_g
                 .map_or(String::new(), |w| format!(", {w} g")),
         ),
-        MachineEvent::StartRequested { script_id } => {
-            format!(
-                "[{}] grinder requests brew start (ID {script_id:?})",
-                rec.seq
-            )
-        }
+        MachineEvent::StartRequested { script_id } => format!(
+            "[{}] grinder requests brew start{}",
+            rec.seq,
+            script_id.map_or(String::new(), |id| format!(" (ID {id})")),
+        ),
         MachineEvent::BrewStarted { human_action, .. } => {
             format!("[{}] >>> {human_action}", rec.seq)
         }
@@ -303,7 +334,7 @@ fn describe(rec: &EventRecord) -> String {
             result,
             in_grinder_range,
         } => format!(
-            "[{}] showing shot to grinder: {:.1} s, {:.1} ml{}",
+            "[{}] showing shot to grinder: {:.1} s, {:.1} g{}",
             rec.seq,
             result.time_ms as f64 / 1000.0,
             result.volume_ml,
@@ -386,11 +417,18 @@ fn result_msg(r: Result<(), gbs_anywhere::protocol::MachineError>) -> String {
     }
 }
 
+/// The console log, and a copy of its INFO and higher lines for the app
+/// (`GET /api/log`).
 fn init_tracing() {
+    use tracing_subscriber::prelude::*;
     use tracing_subscriber::{EnvFilter, fmt};
     let filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("gbs_anywhere=info"));
-    fmt().with_env_filter(filter).with_target(false).init();
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt::layer().with_target(false))
+        .with(server::LogLayer::new(LogBook::global()))
+        .init();
 }
 
 #[cfg(test)]
@@ -435,5 +473,24 @@ mod tests {
             assert!(parse("--finishing-hold-s", bad).is_err(), "{bad}");
             assert!(parse("--brew-timeout-s", bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn the_update_check_can_be_turned_off() {
+        let parse = |args: &[&str]| Args::try_parse_from(args).map(|a| a.update_check);
+        assert_eq!(parse(&["gbs-anywhere"]).unwrap(), None, "on unless set");
+        for (value, on) in [
+            ("off", false),
+            ("OFF", false),
+            ("on", true),
+            ("false", false),
+        ] {
+            assert_eq!(
+                parse(&["gbs-anywhere", "--update-check", value]).unwrap(),
+                Some(on),
+                "{value}"
+            );
+        }
+        assert!(parse(&["gbs-anywhere", "--update-check", "maybe"]).is_err());
     }
 }

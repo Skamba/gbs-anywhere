@@ -401,6 +401,9 @@ impl WifiGrinder {
             // never on to wherever a reply points.
             .tls_danger_accept_invalid_certs(true)
             .redirect(reqwest::redirect::Policy::none())
+            // The grinder is on the home network: a proxy set for the
+            // internet (HTTPS_PROXY, say for the update check) is not for it.
+            .no_proxy()
             // The grinder only finds the body with `Content-Length` spelled
             // this way; lower-case header names leave it reading an empty one.
             .http1_title_case_headers()
@@ -989,13 +992,7 @@ impl WifiGrinder {
         self.reached();
         let http = res.status();
         let peer = res.remote_addr();
-        let mut bytes = Vec::new();
-        while let Some(chunk) = res.chunk().await.context("reading the grinder's reply")? {
-            if bytes.len() + chunk.len() > MAX_REPLY_BYTES {
-                bail!("the grinder's reply is too large");
-            }
-            bytes.extend_from_slice(&chunk);
-        }
+        let bytes = super::read_capped(&mut res, MAX_REPLY_BYTES, "the grinder's reply").await?;
         let text = wifi::decode(&bytes);
         tracing::debug!("grinder {path} -> {http} {text}");
         let body = if text.trim().is_empty() {

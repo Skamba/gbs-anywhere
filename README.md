@@ -21,6 +21,10 @@ The two grinder families connect differently:
 Tested with the E64 WS and the E65W GbS; the other E65/E80 GbS models offer
 the same "Generic WiFi" option.
 
+**New here? Start with the [wiki](https://github.com/Skamba/gbs-anywhere/wiki):**
+setup for each grinder and integration, daily use and troubleshooting, step
+by step. This README is the reference.
+
 > Not affiliated with Mahlkönig or Hemro.
 
 ## Run it
@@ -47,8 +51,21 @@ in your router: the grinder and your phone need the computer's address (e.g.
 `192.168.1.20`). Port 80 must be free and allowed in the firewall.
 
 `latest` is the newest release; pin one with e.g. `:0.2`, or follow
-`:nightly`, built each night from `main`. The app shows its version at the
-bottom of the page; what changed is in [CHANGELOG.md](CHANGELOG.md).
+`:nightly`, built each night from `main`. The app shows its version under
+**Status** (and at the bottom of the other tabs); what changed is in
+[CHANGELOG.md](CHANGELOG.md).
+
+**Update check.** One minute after it starts, and then once a day,
+gbs-anywhere asks GitHub for its latest release, and the gbs-anywhere card
+under **Status** says when a newer one is out. GitHub sees the request like
+any other, including your IP address; it carries nothing but the
+gbs-anywhere version. Turn it off under **Status → Settings**, or with
+`--update-check off` (`UPDATE_CHECK=off` in Docker).
+
+**To update** with Docker, get the new image and re-create the container
+with the same command and volume: `docker pull ghcr.io/skamba/gbs-anywhere`,
+`docker rm -f gbs-anywhere`, then the `docker run` above. The `/data` volume
+keeps everything you set up.
 
 ## Set up the E64 WS
 
@@ -118,9 +135,9 @@ grinder on port 30001 over HTTPS.
    WiFi → Configuration** and tap **Start Pairing**. (If you enabled Generic
    WiFi after starting gbs-anywhere, give it up to a minute to notice.)
    Within a few seconds **gbs-anywhere** shows up under **Available
-   devices**, with the same code. Select it and tap **Accept Pairing**. If the
-   grinder's pairing times out first, tap **Start Pairing** again (the code
-   may change: the app always shows the current one).
+   devices**, with the same code: tap **Accept Pairing**. If the grinder's
+   pairing times out first, tap **Start Pairing** again (the code may
+   change: the app always shows the current one).
 5. The Generic WiFi entry is now called **gbs-anywhere**, and the app shows
    the grinder as **Ready** under Status. A restart needs no new pairing, and
    neither does a new address for the grinder.
@@ -147,6 +164,9 @@ WiFi → Configuration** on the grinder:
 To start over, tap **Clear Pairing** on the grinder, which also switches
 Generic WiFi off, and switch it on again. After about a minute gbs-anywhere
 asks to pair again by itself.
+
+The wiki's [E65 and E80 GbS page](https://github.com/Skamba/gbs-anywhere/wiki/E65-and-E80-GbS#if-pairing-doesnt-work)
+has these steps and other fixes.
 
 </details>
 
@@ -184,12 +204,23 @@ integrations run at once.
 
 Under **Status → Machine integrations**, tap the green **+**, pick one and
 fill in its form. Each integration gets a card showing whether it is ready
-and what it last sent; its ⋮ menu has **Delete**. Integrations added in the
-app are saved, with their passwords, in `/data` (from source: the `--config`
-file); without one they last until the next restart.
+and what it last sent; its ⋮ menu has **Edit**, and **Delete** for those
+added in the app. Integrations added in the app are saved, with their
+passwords, in `/data` (from source: the `--config` file); without one they
+last until the next restart.
+
+An integration added in the app can be changed there too. Its passwords are
+never shown again; leave a password empty to keep the saved one.
 
 Integrations can also be set with flags or environment variables. Those show
 "From the start settings" and can only be turned off by removing the flags.
+To change one in the app, choose **Edit**: with a settings file, the app
+offers to move it there, settings and password included, so there is nothing
+to type again. From the next start on its flags are ignored for as long as
+it is in the app (the log says so at each start, with a warning when they
+differ from the app's) and can be removed whenever it suits you. Deleting it
+in the app lets the flags start it again at the next start, if they are
+still set.
 
 | integration | reads | setup |
 |---|---|---|
@@ -230,8 +261,8 @@ Bluetooth. The container runs as user 65532: allow that user for
 
 ## Settings in the app
 
-Two settings can be changed under **Status → Settings**, so the command line
-can stay as it is:
+Three settings can be changed under **Status → Settings**, so the command
+line can stay as it is:
 
 - **Time to pull the shot**: how long gbs-anywhere waits for a shot's time
   and weight before it gives up on that shot (`--brew-timeout-s`, 3 minutes
@@ -240,17 +271,24 @@ can stay as it is:
   `GRINDER_HOST`), optionally with `:port`. A new address takes effect at
   once and keeps the pairing; removing it stops pairing, also when
   `GRINDER_HOST` is set and after a restart.
+- **Update check**: whether gbs-anywhere looks for a newer release once a
+  day (see [Update check](#run-it); `--update-check`, `UPDATE_CHECK`, on
+  unless set).
 
 A setting changed in the app is saved in the settings file and wins over its
 flag from then on; without a settings file it lasts until the next restart.
 To go back to the flags, stop gbs-anywhere and remove `settings` from the
 settings file (`/data/gbs-anywhere.json` in Docker).
-**Appearance** (System, Light, Dark) sits in the same card but is kept on each
-device: by default the app follows the device's light or dark mode.
+**Appearance** (System, Light, Dark) and **Language** (Auto, English,
+Deutsch) sit in the same card but are kept on each device: by default the app
+follows the device's light or dark mode and its language.
 
 The **History** tab shows the last 200 shots the grinder asked for, with
 their time, weight and target (kept in `history.json` next to the settings
-file).
+file). The **Log** card at the bottom of **Status** (also opened with **Log**
+next to the last error in System status) shows the last 1,000 lines of
+gbs-anywhere's log (INFO and up, as `docker logs` prints them by default),
+ready to copy into a bug report.
 
 ## Options
 
@@ -259,13 +297,14 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | flag | default | what |
 |---|---|---|
 | `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever); **Time to pull the shot** set in the app wins |
-| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
+| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings, integrations moved from the command line); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
 | `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
 | `-p, --ports <list>` | 80 | ports to serve on |
 | `--grinder <host>` | off | pair with this E65/E80 GbS over its "Generic WiFi" option; also `GRINDER_HOST`; an address set in the app wins |
 | `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing across restarts; also `GRINDER_PAIRING_FILE` |
 | `--grinder-pairing-id <id>` | off | the pairing ID the grinder shows, used when none is saved or the grinder refuses the saved one (the app can take it too); also `GRINDER_PAIRING_ID` |
+| `--update-check <on\|off>` | on | look for a newer release once a day (see [Update check](#run-it)); also `UPDATE_CHECK`; a choice made in the app wins |
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
 | `--hds-*` | off | Half Decent Scale, see [its README](src/integration/half_decent/README.md) |
 
@@ -281,9 +320,10 @@ e.g. `POST /api/shot/result` with `{"time_s":30,"weight_g":36}`, or follow
 `GET /api/events/stream`. All routes are listed in
 [`src/server/control_api.rs`](src/server/control_api.rs).
 
-The API has no login: anyone on your network who can open the app can add or
-remove integrations and change the settings, including the grinder address,
-as they can report shots. Passwords are never sent back.
+The API has no login: anyone on your network who can open the app can add,
+change or remove integrations, change the settings, including the grinder
+address, and read the log, as they can report shots. Passwords are never
+sent back.
 
 ## Build and contribute
 
@@ -304,3 +344,10 @@ The Bluetooth build (`-bluetooth` images) also contains
 version 2 or later (it is offered under that or the Academic Free License
 2.1). Its license and where to find its source are in
 `/usr/share/doc/gbs-anywhere/` in the image.
+
+The image also carries the licenses of the Rust crates built into it, in
+`/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES`
+(`docker cp gbs-anywhere:/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES .`
+copies it out). From source, `cargo about generate about.hbs` prints the same
+list, with [cargo-about](https://github.com/EmbarkStudios/cargo-about)
+installed.

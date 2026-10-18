@@ -3,12 +3,12 @@
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, bail};
+use anyhow::bail;
 
 use super::TITLE;
 use super::cloud::{CloudClient, LastCoffee, Thing};
 use super::config::Config;
-use crate::integration::{Backoff, BoxFuture, Integration, Link};
+use crate::integration::{Backoff, BoxFuture, Detail, Integration, Link, tenths};
 
 const MIN_BACKOFF: Duration = Duration::from_secs(5);
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
@@ -40,19 +40,26 @@ pub fn new_coffee(coffees: &[LastCoffee], after_ms: i64) -> Option<&LastCoffee> 
 async fn run(link: Link, cfg: Config) {
     let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
     loop {
-        link.status.starting("logging in");
+        link.status
+            .starting(Detail::keyed("la_marzocco.logging_in", "logging in"));
         match connect(&cfg).await {
             Ok((client, machine)) => {
                 backoff.reset();
                 link.status.subject(&machine.subject);
-                link.status.connected(idle_line(machine.last.as_ref()));
+                link.status
+                    .connected(idle_line(machine.last.as_ref(), now_ms()));
                 if let Err(e) = watch(&link, &cfg, client, machine).await {
                     tracing::warn!("{TITLE}: {e:#}");
                     link.status.error(format!("{e:#}"));
                 }
             }
             Err(e) => {
-                tracing::warn!("{TITLE}: {e:#}");
+                // A wrong or missing serial: the card lists the machines in
+                // full, the log only by their last four characters.
+                match e.downcast_ref::<MachineChoice>() {
+                    Some(choice) => tracing::warn!("{TITLE}: {}", choice.log),
+                    None => tracing::warn!("{TITLE}: {e:#}"),
+                }
                 link.status.error(format!("{e:#}"));
             }
         }
@@ -86,17 +93,21 @@ impl From<&LastCoffee> for Idle {
     }
 }
 
-/// `last coffee 3 min ago: 25.1 s, 38.0 g`, with the age as of now.
-fn idle_line(last: Option<&Idle>) -> String {
-    match last {
-        Some(c) => format!(
-            "last coffee {} ago: {:.1} s{}",
-            age(c.time_ms),
-            c.extraction_seconds,
-            c.grams.map_or(String::new(), |g| format!(", {g:.1} g"))
-        ),
-        None => "no coffee in the last 7 days".to_owned(),
-    }
+/// `last coffee 3 min ago: 25.1 s, 38.0 g`, with the age as of `now_ms`.
+fn idle_line(last: Option<&Idle>, now_ms: i64) -> Detail {
+    let Some(c) = last else {
+        return Detail::keyed("la_marzocco.no_coffee", "no coffee in the last 7 days");
+    };
+    let ago_ms = (now_ms - c.time_ms).max(0);
+    let seconds = tenths(c.extraction_seconds);
+    let time = format!("last coffee {} ago: {seconds:.1} s", age_of(ago_ms));
+    let line = match c.grams.map(tenths) {
+        Some(g) => {
+            Detail::keyed("la_marzocco.last_coffee", format!("{time}, {g:.1} g")).var("weight_g", g)
+        }
+        None => Detail::keyed("la_marzocco.last_coffee_no_weight", time),
+    };
+    line.var("ago_ms", ago_ms).var("time_s", seconds)
 }
 
 /// How often the idle line's age is refreshed.
@@ -119,20 +130,28 @@ async fn connect(cfg: &Config) -> anyhow::Result<(CloudClient, Machine)> {
                 .iter()
                 .find(|t| t.serial_number.eq_ignore_ascii_case(&sn))
                 .copied()
-                .with_context(|| {
-                    format!(
-                        "machine {sn} not on this account (found: {})",
-                        list_serials(&machines)
-                    )
+                .ok_or_else(|| {
+                    MachineChoice::new(|full| {
+                        format!(
+                            "machine {} not on this account (found: {})",
+                            show_serial(&sn, full),
+                            list_serials(&machines, full)
+                        )
+                    })
                 })?
         }
         None => match machines.as_slice() {
             [one] => one,
             [] => bail!("no coffee machine on this account"),
-            many => bail!(
-                "more than one machine on this account, set the serial number: {}",
-                list_serials(many)
-            ),
+            many => {
+                return Err(MachineChoice::new(|full| {
+                    format!(
+                        "more than one machine on this account, set the serial number: {}",
+                        list_serials(many, full)
+                    )
+                })
+                .into());
+            }
         },
     };
     let serial = machine.serial_number.clone();
@@ -140,8 +159,10 @@ async fn connect(cfg: &Config) -> anyhow::Result<(CloudClient, Machine)> {
     let last = coffees.first().map(Idle::from);
     let subject = format!("{serial} · {}", machine.model_name);
     tracing::info!(
-        "{TITLE}: connected to {subject}, {}",
-        idle_line(last.as_ref())
+        "{TITLE}: connected to {} (serial ending {}), {}",
+        machine.model_name,
+        tail(&serial),
+        idle_line(last.as_ref(), now_ms()).text()
     );
     Ok((
         client,
@@ -153,12 +174,53 @@ async fn connect(cfg: &Config) -> anyhow::Result<(CloudClient, Machine)> {
     ))
 }
 
-fn list_serials(machines: &[&Thing]) -> String {
+fn list_serials(machines: &[&Thing], full: bool) -> String {
     machines
         .iter()
-        .map(|t| format!("{} ({})", t.serial_number, t.model_name))
+        .map(|t| format!("{} ({})", show_serial(&t.serial_number, full), t.model_name))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Which machine to use is unclear. The card names the machines by their
+/// serial numbers in full, as the person needs them to pick one; the log,
+/// which may end up in a bug report, only by their last four characters.
+#[derive(Debug)]
+struct MachineChoice {
+    card: String,
+    log: String,
+}
+
+impl MachineChoice {
+    /// `text(full)` words the error with the serials in full or cut short.
+    fn new(text: impl Fn(bool) -> String) -> Self {
+        Self {
+            card: text(true),
+            log: text(false),
+        }
+    }
+}
+
+impl std::fmt::Display for MachineChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.card)
+    }
+}
+
+impl std::error::Error for MachineChoice {}
+
+/// A serial's last four characters: enough to tell machines apart.
+fn tail(serial: &str) -> &str {
+    serial.get(serial.len().saturating_sub(4)..).unwrap_or("")
+}
+
+/// A serial number in full, or as `…1234` for the log.
+fn show_serial(serial: &str, full: bool) -> String {
+    if full {
+        serial.to_owned()
+    } else {
+        format!("…{}", tail(serial))
+    }
 }
 
 fn now_ms() -> i64 {
@@ -168,11 +230,8 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn age(time_ms: i64) -> String {
-    age_of(now_ms() - time_ms)
-}
-
-/// `45 s`, `12 min`, `5 h`, `2 days`.
+/// `45 s`, `12 min`, `5 h`, `2 days`. The page words it in the same steps
+/// (`ageOf`), so German shows the same number.
 fn age_of(delta_ms: i64) -> String {
     let s = delta_ms.max(0) / 1000;
     if s < 120 {
@@ -207,7 +266,7 @@ async fn watch(
                 }
             }
             _ = refresh.tick() => {
-                link.status.connected(idle_line(idle.as_ref()));
+                link.status.connected(idle_line(idle.as_ref(), now_ms()));
                 continue;
             }
         }
@@ -222,8 +281,12 @@ async fn watch(
         }
         let poll_s = cfg.poll.as_secs();
         tracing::info!("{TITLE}: grinder is waiting, watching the coffee log every {poll_s} s");
-        let waiting = format!("grinder is waiting · checking the coffee log every {poll_s} s");
-        link.status.watching(&waiting);
+        let waiting = Detail::keyed(
+            "la_marzocco.watching",
+            format!("grinder is waiting · checking the coffee log every {poll_s} s"),
+        )
+        .var("every_s", poll_s);
+        link.status.watching(waiting.clone());
         let mut errors = 0u32;
         loop {
             tokio::time::sleep(cfg.poll).await;
@@ -236,7 +299,7 @@ async fn watch(
                     if errors > 0 {
                         // Back from a failed poll: still watching this brew.
                         errors = 0;
-                        link.status.watching(&waiting);
+                        link.status.watching(waiting.clone());
                     }
                     l
                 }
@@ -275,13 +338,14 @@ async fn watch(
             idle = Some(Idle::from(c));
             break;
         }
-        link.status.connected(idle_line(idle.as_ref()));
+        link.status.connected(idle_line(idle.as_ref(), now_ms()));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::integration::Status;
     use serde_json::json;
 
     #[test]
@@ -292,13 +356,48 @@ mod tests {
         assert_eq!(age_of(47 * 3_600_000), "47 h");
         assert_eq!(age_of(3 * 86_400_000 + 5), "3 days");
         assert_eq!(age_of(-5), "0 s");
-        let line = idle_line(Some(&Idle {
-            time_ms: now_ms() - 90_000,
-            extraction_seconds: 25.1,
-            grams: Some(38.0),
-        }));
-        assert_eq!(line, "last coffee 90 s ago: 25.1 s, 38.0 g");
-        assert_eq!(idle_line(None), "no coffee in the last 7 days");
+    }
+
+    #[test]
+    fn status_lines_carry_a_key_and_their_numbers() {
+        let now = 1_790_536_239_820;
+        let status = Status::new("la_marzocco", "la_marzocco", TITLE);
+        let shown = |line: Detail| {
+            status.connected(line);
+            status.snapshot()
+        };
+
+        let coffee = Idle {
+            time_ms: now - 5 * 3_600_000,
+            extraction_seconds: 28.491_999,
+            grams: Some(40.900_001),
+        };
+        let snap = shown(idle_line(Some(&coffee), now));
+        assert_eq!(snap.detail, "last coffee 5 h ago: 28.5 s, 40.9 g");
+        assert_eq!(snap.detail_key, Some("la_marzocco.last_coffee"));
+        assert_eq!(
+            serde_json::Value::Object(snap.detail_vars),
+            json!({"ago_ms": 18_000_000, "time_s": 28.5, "weight_g": 40.9})
+        );
+
+        // No Connected Scale: no weight.
+        let no_scale = Idle {
+            time_ms: now - 90_000,
+            grams: None,
+            ..coffee
+        };
+        let snap = shown(idle_line(Some(&no_scale), now));
+        assert_eq!(snap.detail, "last coffee 90 s ago: 28.5 s");
+        assert_eq!(snap.detail_key, Some("la_marzocco.last_coffee_no_weight"));
+        assert_eq!(
+            serde_json::Value::Object(snap.detail_vars),
+            json!({"ago_ms": 90_000, "time_s": 28.5})
+        );
+
+        let snap = shown(idle_line(None, now));
+        assert_eq!(snap.detail, "no coffee in the last 7 days");
+        assert_eq!(snap.detail_key, Some("la_marzocco.no_coffee"));
+        assert!(snap.detail_vars.is_empty());
     }
 
     #[test]
@@ -331,5 +430,20 @@ mod tests {
         // Only an invalid one is new: skipped.
         let only_invalid = vec![list[2].clone()];
         assert_eq!(new_coffee(&only_invalid, 0), None);
+    }
+
+    #[test]
+    fn the_log_gets_only_the_serials_last_digits() {
+        let things: Vec<Thing> = serde_json::from_value(json!([
+            {"serialNumber": "MI000012", "modelName": "Linea Mini R"},
+            {"serialNumber": "GS000034", "modelName": "GS3"},
+        ]))
+        .unwrap();
+        let machines: Vec<&Thing> = things.iter().collect();
+        let e = anyhow::Error::from(MachineChoice::new(|full| list_serials(&machines, full)));
+        assert_eq!(format!("{e:#}"), "MI000012 (Linea Mini R), GS000034 (GS3)");
+        let choice = e.downcast_ref::<MachineChoice>().unwrap();
+        assert_eq!(choice.log, "…0012 (Linea Mini R), …0034 (GS3)");
+        assert_eq!(show_serial("AB", false), "…AB");
     }
 }
