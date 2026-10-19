@@ -28,7 +28,8 @@ async fn start_server() -> (String, Arc<Server>) {
     };
     // A log book of its own, so tests running side by side don't mix lines.
     let state = Server::with_log(config, Arc::new(LogBook::new(logbook::CAPACITY)));
-    let app = control_router(state.clone()).merge(grinder_router(state.clone()));
+    let app = control_router(state.clone(), AllowedHosts::default())
+        .merge(grinder_router(state.clone(), false));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     spawn_server(listener, app, addr);
@@ -93,6 +94,33 @@ async fn call(method: reqwest::Method, url: String, body: Option<Value>) -> (u16
     }
     let res = req.send().await.unwrap();
     (res.status().as_u16(), res.json().await.unwrap())
+}
+
+/// Sends `request` exactly as written and returns the status of the reply,
+/// for requests no HTTP client would send.
+async fn raw_status(base: &str, request: &str) -> u16 {
+    use tokio::io::AsyncReadExt;
+    let mut conn = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
+        .await
+        .unwrap();
+    conn.write_all(request.as_bytes()).await.unwrap();
+    // Only the status line: the server may close the connection on what it
+    // has not read.
+    let mut reply = Vec::new();
+    let mut buf = [0; 1024];
+    while !reply.windows(2).any(|w| w == b"\r\n") {
+        let read = tokio::time::timeout(Duration::from_secs(5), conn.read(&mut buf));
+        match read.await.expect("a reply in time") {
+            Ok(0) | Err(_) => break,
+            Ok(n) => reply.extend_from_slice(&buf[..n]),
+        }
+    }
+    let reply = String::from_utf8_lossy(&reply);
+    reply
+        .split(' ')
+        .nth(1)
+        .and_then(|code| code.parse().ok())
+        .unwrap_or_else(|| panic!("not an HTTP reply: {reply:?}"))
 }
 
 #[tokio::test]
@@ -625,4 +653,214 @@ async fn integrations_are_edited_and_moved_into_the_app() {
     assert_eq!(saved["integrations"][0]["from_command_line"], true);
     assert_eq!(saved["integrations"][0]["settings"]["host"], "127.0.0.1:10");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn web_pages_cannot_act_as_the_grinder() {
+    let base = start().await;
+    let http = reqwest::Client::new();
+    // A page on another site, posting a start request as a CORS simple
+    // request (no preflight), and reading a poll reply.
+    let res = http
+        .post(format!("{base}{PATH_SCRIPTS_EXECUTE}"))
+        .header("origin", "https://evil.example")
+        .header("content-type", "text/plain")
+        .body(r#"{"ID":9}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+    assert!(res.headers().get("access-control-allow-origin").is_none());
+    // A read by fetch() from another site carries `Origin`; over HTTPS
+    // every request also carries `Sec-Fetch-Site`.
+    for (name, value) in [
+        ("origin", "https://evil.example"),
+        ("sec-fetch-site", "cross-site"),
+    ] {
+        let res = http
+            .get(format!("{base}{PATH_MAKO}"))
+            .header(name, value)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 403, "{name}");
+    }
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_ne!(state["phase"]["phase"], "brewing");
+    assert_eq!(
+        state["grinder"]["requests"], 0,
+        "not counted as the grinder"
+    );
+
+    // The grinder sends neither header, and nor does a page's plain read
+    // over HTTP (an image, say): it is answered, but with no CORS header,
+    // so another site can't see the reply.
+    let res = http.get(format!("{base}{PATH_MAKO}")).send().await.unwrap();
+    assert_eq!(res.status(), 200);
+    assert!(res.headers().get("access-control-allow-origin").is_none());
+
+    // A body far bigger than any of the grinder's is refused.
+    let big = format!(
+        r#"{{"SYNC_BEVERAGE_WEIGHT":36,"pad":"{}"}}"#,
+        "x".repeat(8 * 1024)
+    );
+    let res = http
+        .post(format!("{base}{PATH_BREWRATIO}"))
+        .body(big)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 413);
+}
+
+#[tokio::test]
+async fn the_app_answers_home_names_only_and_refuses_other_sites() {
+    let base = start().await;
+    let http = reqwest::Client::new();
+    let get_state = |host: &'static str| {
+        http.get(format!("{base}/api/state"))
+            .header("host", host)
+            .send()
+    };
+    // DNS rebinding: a page on its own, public name.
+    assert_eq!(get_state("attacker.example").await.unwrap().status(), 421);
+    assert_eq!(get_state("gbs.fritz.box").await.unwrap().status(), 200);
+    assert_eq!(get_state("kitchen-pi").await.unwrap().status(), 200);
+    assert_eq!(get_state("").await.unwrap().status(), 421, "an empty Host");
+
+    // Every route of the app, the page and the event stream included.
+    for path in [
+        "/",
+        "/icons/la_marzocco.svg",
+        "/favicon.ico",
+        "/api/state",
+        "/api/history",
+        "/api/events",
+        "/api/events/stream",
+        "/api/log",
+        "/api/log/stream",
+        "/api/integrations/kinds",
+        "/api/integrations/x/settings",
+    ] {
+        let res = http
+            .get(format!("{base}{path}"))
+            .header("host", "attacker.example")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 421, "{path}");
+    }
+    for (method, path) in [
+        (reqwest::Method::PUT, "/api/settings"),
+        (reqwest::Method::POST, "/api/shot/result"),
+        (reqwest::Method::POST, "/api/shot/abort"),
+        (reqwest::Method::POST, "/api/integrations"),
+        (reqwest::Method::PUT, "/api/integrations/x"),
+        (reqwest::Method::DELETE, "/api/integrations/x"),
+        (reqwest::Method::POST, "/api/integrations/x/adopt"),
+        (reqwest::Method::POST, "/api/machine"),
+        (reqwest::Method::POST, "/api/grinder/pairing"),
+        (reqwest::Method::PUT, "/api/overrides"),
+    ] {
+        let res = http
+            .request(method.clone(), format!("{base}{path}"))
+            .header("origin", "https://evil.example")
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 403, "{method} {path}");
+    }
+
+    // CSRF: a body-less POST from another site.
+    let res = http
+        .post(format!("{base}/api/shot/start"))
+        .header("origin", "https://evil.example")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 403);
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_ne!(state["phase"]["phase"], "brewing");
+
+    // The app's own page, same origin, still works.
+    let res = http
+        .post(format!("{base}/api/shot/start"))
+        .header("origin", base.as_str())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
+}
+
+#[tokio::test]
+async fn without_a_host_header_the_host_in_the_uri_is_checked() {
+    // HTTP/2 names the host only in the URI; an HTTP/1.1 request in absolute
+    // form without a Host header arrives the same way.
+    let base = start().await;
+    let start_shot = |origin: &str| {
+        format!(
+            "POST http://192.168.1.20/api/shot/start HTTP/1.1\r\norigin: {origin}\r\n\
+             content-length: 0\r\nconnection: close\r\n\r\n"
+        )
+    };
+    assert_eq!(
+        raw_status(&base, &start_shot("https://evil.example")).await,
+        403
+    );
+    assert_eq!(
+        raw_status(&base, &start_shot("http://192.168.1.20:8080")).await,
+        403,
+        "another site on the same computer"
+    );
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_ne!(state["phase"]["phase"], "brewing");
+    assert_eq!(
+        raw_status(&base, &start_shot("http://192.168.1.20")).await,
+        200
+    );
+    let rebound = "GET http://attacker.example/api/state HTTP/1.1\r\nconnection: close\r\n\r\n";
+    assert_eq!(raw_status(&base, rebound).await, 421);
+}
+
+#[tokio::test]
+async fn a_broken_body_is_not_taken_for_a_large_one() {
+    let base = start().await;
+    let post = |body: &str| {
+        format!(
+            "POST {PATH_BREWRATIO} HTTP/1.1\r\nhost: 127.0.0.1\r\n\
+             transfer-encoding: chunked\r\nconnection: close\r\n\r\n{body}"
+        )
+    };
+    assert_eq!(
+        raw_status(&base, &post("not a chunk size\r\n\r\n")).await,
+        400
+    );
+    // Too large is too large, also in chunks.
+    let big = "x".repeat(5000);
+    let chunked = format!("{:x}\r\n{big}\r\n0\r\n\r\n", big.len());
+    assert_eq!(raw_status(&base, &post(&chunked)).await, 413);
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(
+        state["grinder"]["requests"], 0,
+        "not counted as the grinder"
+    );
+}
+
+#[tokio::test]
+async fn browser_headers_can_be_let_through_to_the_grinder_routes() {
+    // `--accept-browser-headers`, in case a grinder ever sends them.
+    let state = Server::new(MachineConfig::default());
+    let app = grinder_router(state, true);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    spawn_server(listener, app, addr);
+    let res = reqwest::Client::new()
+        .get(format!("http://{addr}{PATH_MAKO}"))
+        .header("origin", "null")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), 200);
 }

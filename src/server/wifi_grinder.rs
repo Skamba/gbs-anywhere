@@ -302,7 +302,8 @@ impl Pairing {
         let mut tmp = path.as_os_str().to_owned();
         tmp.push(".tmp");
         let tmp = PathBuf::from(tmp);
-        std::fs::write(&tmp, json).with_context(|| format!("writing {}", tmp.display()))?;
+        crate::server::settings::write_private(&tmp, &json)
+            .with_context(|| format!("writing {}", tmp.display()))?;
         std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
     }
 }

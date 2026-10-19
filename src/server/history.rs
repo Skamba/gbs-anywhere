@@ -7,7 +7,7 @@
 //! started by hand (a flush) is not a shot and is left out.
 
 use std::collections::VecDeque;
-use std::io::{Read, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Instant, SystemTime};
@@ -19,7 +19,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use crate::protocol::machine::{ABORTED_BY_USER, EventRecord, REPLACED_BY_NEWER_GRIND};
 use crate::protocol::{GrindResult, MachineEvent};
 use crate::server::Server;
-use crate::server::settings::GRINDER_CHANGED;
+use crate::server::settings::{GRINDER_CHANGED, make_private, write_private};
 
 /// Shots kept.
 pub const CAPACITY: usize = 200;
@@ -93,6 +93,7 @@ impl History {
     /// new one is started; if it cannot be set aside or written, the history
     /// is kept in memory only.
     fn use_file(&self, path: &Path) -> anyhow::Result<()> {
+        make_private(path);
         let loaded = match read_file(path)? {
             Ok(shots) => shots,
             Err(why) => {
@@ -207,20 +208,7 @@ fn save(path: &Path, file: &HistoryFile) -> anyhow::Result<()> {
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    let write = |bytes: &[u8]| -> std::io::Result<()> {
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
-        // Owner only, like the settings file: it shows when someone is home.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            opts.mode(0o600);
-        }
-        let mut f = opts.open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()
-    };
-    write(&json).with_context(|| format!("writing {}", tmp.display()))?;
+    write_private(&tmp, &json).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
 }
 
