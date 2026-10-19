@@ -15,14 +15,22 @@ cloud**, then enter your La Marzocco Home e-mail address and password. Add the
 machine's serial number (e.g. `MI000000`) if the account has more than one
 machine.
 
-Or on the command line / in Docker:
+Setting it up in the app is the better way: the password is then kept in
+the settings file on the `/data` volume, readable by its owner only, rather
+than in the container's environment, which `docker inspect` shows.
+Or on the command line / in Docker, with the `docker run` from
+[Run it](../../../README.md#run-it):
 
 ```sh
-docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
+docker run -d --name gbs-anywhere --restart unless-stopped \
+  -p 80:80 -v gbs-anywhere:/data \
   -e LM_USERNAME=you@example.com \
   -e LM_PASSWORD='your La Marzocco Home password' \
-  ghcr.io/skamba/gbs-anywhere
+  ghcr.io/skamba/gbs-anywhere:nightly
 ```
+
+An integration set up this way can be moved into the app later, with all
+its settings.
 
 | setting | flag | env | default |
 |---|---|---|---|

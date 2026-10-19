@@ -20,11 +20,14 @@ cup. Nothing needs to be typed, and the Decent app keeps working alongside.
    Scale**, and enter that address, e.g. `192.168.1.40`. Outside Docker the
    scale's own name `hds.local` usually works too; inside Docker, use the IP.
 
-Or on the command line / in Docker:
+Or on the command line / in Docker, with the `docker run` from
+[Run it](../../../README.md#run-it) (adding it in the app is simpler, and an
+integration set up this way can be moved there later):
 
 ```sh
-docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
-  -e HDS_HOST=192.168.1.40 ghcr.io/skamba/gbs-anywhere
+docker run -d --name gbs-anywhere --restart unless-stopped \
+  -p 80:80 -v gbs-anywhere:/data \
+  -e HDS_HOST=192.168.1.40 ghcr.io/skamba/gbs-anywhere:nightly
 ```
 
 | setting | flag | env | default |
