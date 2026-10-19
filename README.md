@@ -194,6 +194,9 @@ it. The grinder waits for it up to the shot window (3 minutes unless changed
 in the app's settings or with `--brew-timeout-s`); if you grind again first,
 the shot counts for the newer grind.
 
+The grinder adjusts only from a shot within 15 s of the recipe's **Brew
+Time** (for 28 s: over 13 s, up to 43 s), and not from an aborted shot.
+
 **On an ESP32-S3 instead of a computer**
 
 [gbs-anywhere-esp32](https://github.com/zpmdd/gbs-anywhere-esp32) is a

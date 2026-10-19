@@ -23,7 +23,7 @@ pub mod wire;
 
 pub use grinder::{BrewState, GrinderEvent, GrinderModel};
 pub use machine::{
-    AbortCause, Machine, MachineConfig, MachineError, MachineEvent, Phase, ShotResult,
+    AbortCause, GrinderRange, Machine, MachineConfig, MachineError, MachineEvent, Phase, ShotResult,
 };
 pub use wire::{
     GrindBlocked, GrindResult, GrinderRequest, MachineIdentity, MachineStatus, MakoState, StartBrew,
@@ -43,15 +43,20 @@ pub const START_BREW_SCRIPT_ID: i64 = 9;
 /// `ACTIVE SERVING`, at most this many times.
 pub const START_BREW_MAX_SENDS: u32 = 3;
 
-/// The grinder does not adjust from a shot of 10 s or less
+/// The E64 WS does not adjust from a shot of 10 s or less
 /// (`REAL_EXTRACTION_TIME_MS <= 10000`) and leaves it to the person to grind
-/// finer. The E64 WS still takes the result, so [`GrinderModel`] counts it
-/// as accepted; the E65/E80 applies the 10 s minimum too.
+/// finer. It still takes the result, so [`GrinderModel`] counts it as
+/// accepted. An E65/E80 GbS goes by the target time instead
+/// ([`MAX_OFF_TARGET_MS`]).
 pub const MIN_EXTRACTION_TIME_MS: u32 = 10_000;
 
 /// The E64 WS skips a shot with `REAL_EXTRACTION_TIME_MS > 80000` (see
-/// [`GrinderModel`]); the app assumes the same for the E65/E80.
+/// [`GrinderModel`]).
 pub const MAX_EXTRACTION_TIME_MS: u32 = 80_000;
+
+/// An E65/E80 GbS adjusts only from a shot within 15 s of its brew job's
+/// target time ([`GrinderRange::around`]).
+pub const MAX_OFF_TARGET_MS: u32 = 15_000;
 
 /// `MA_EXTRACTION_STATUS` value that means "user abort": the brew goes to
 /// `Aborted` instead of `Finishing` and the result is skipped.
