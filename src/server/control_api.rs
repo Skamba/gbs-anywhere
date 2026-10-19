@@ -13,10 +13,10 @@
 //! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes one added in the app and restarts it; a password left out or empty stays |
 //! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
-//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first; `capacity` (200); `persistent`: whether they survive a restart |
+//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first, each not a success with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart |
 //! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (INFO and up) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
 //! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`); `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
-//! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened |
+//! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened; `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the brew as a user abort (grinder skips it) |
@@ -676,6 +676,46 @@ mod tests {
         assert!(used.len() > 100, "the page's keys were found");
         let unknown: Vec<_> = used.iter().filter(|k| !known(k)).collect();
         assert!(unknown.is_empty(), "keys not in the catalog: {unknown:?}");
+    }
+
+    #[test]
+    fn the_page_knows_every_abort_cause() {
+        use crate::protocol::AbortCause;
+        // The page's `CAUSES` table, one `    <code>: { … },` line per cause.
+        let start = PAGE
+            .find("\n  const CAUSES = {\n")
+            .expect("the CAUSES table");
+        let table = &PAGE[start..];
+        let table = &table[..table.find("\n  };").expect("end of CAUSES")];
+        let rows: BTreeMap<_, _> = table
+            .lines()
+            .filter_map(|line| line.strip_prefix("    ")?.split_once(": {"))
+            .collect();
+        let en = catalog("en");
+        let mut codes = BTreeSet::new();
+        for cause in AbortCause::ALL {
+            let code = serde_json::to_value(cause).unwrap();
+            let code = code.as_str().unwrap().to_owned();
+            let row = rows
+                .get(code.as_str())
+                .unwrap_or_else(|| panic!("{code} is not in CAUSES"));
+            let on_purpose = format!("onPurpose: {}", cause.on_purpose());
+            assert!(row.contains(&on_purpose), "{code}: not {on_purpose}");
+            // A timeout's texts say how long it waited, and the history's
+            // own cause never reaches the Start tab.
+            if cause != AbortCause::ShotTimedOut {
+                assert!(row.contains("title: \""), "{code}: no history title");
+                if cause != AbortCause::ShotEndMissed {
+                    assert!(row.contains("text: \""), "{code}: no Start tab text");
+                }
+            }
+            for key in row.split('"').skip(1).step_by(2) {
+                assert!(en.contains_key(key), "{code}: {key} is not in the catalog");
+            }
+            codes.insert(code);
+        }
+        let stale: Vec<_> = rows.keys().filter(|k| !codes.contains(**k)).collect();
+        assert!(stale.is_empty(), "not a cause: {stale:?}");
     }
 
     #[test]

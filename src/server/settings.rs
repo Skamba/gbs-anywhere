@@ -20,15 +20,12 @@ use serde_json::{Map, Value, json};
 use tokio::task::AbortHandle;
 
 use crate::integration::Settings;
+use crate::protocol::AbortCause;
 use crate::server::wifi_grinder::grinder_address;
 use crate::server::{Server, WifiConfig, WifiGrinder};
 
 /// The machine's brew timeout unless set (`--brew-timeout-s`).
 pub const DEFAULT_SHOT_WINDOW_S: u32 = 180;
-
-/// [`crate::protocol::MachineEvent::ShotAborted`] reason when the grinder's
-/// address changes while it waits for a shot.
-pub const GRINDER_CHANGED: &str = "the grinder address changed";
 
 // ---------------------------------------------------------------------------
 // The settings file
@@ -597,7 +594,7 @@ impl Server {
         self.detach_wifi();
         self.with(|m, now| {
             if m.brewing_for_brew_job(now) {
-                let _ = m.give_up(now, GRINDER_CHANGED);
+                let _ = m.give_up(now, AbortCause::GrinderAddressChanged);
             }
         });
     }

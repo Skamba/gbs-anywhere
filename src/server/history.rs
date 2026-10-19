@@ -13,13 +13,13 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::{Instant, SystemTime};
 
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::broadcast::{self, error::RecvError};
 
-use crate::protocol::machine::{ABORTED_BY_USER, EventRecord, REPLACED_BY_NEWER_GRIND};
-use crate::protocol::{GrindResult, MachineEvent};
+use crate::protocol::machine::EventRecord;
+use crate::protocol::{AbortCause, GrindResult, MachineEvent};
 use crate::server::Server;
-use crate::server::settings::{GRINDER_CHANGED, make_private, write_private};
+use crate::server::settings::{make_private, write_private};
 
 /// Shots kept.
 pub const CAPACITY: usize = 200;
@@ -27,24 +27,29 @@ pub const CAPACITY: usize = 200;
 /// Far more than [`CAPACITY`] shots take: a bigger file is not a history.
 const MAX_FILE_BYTES: u64 = 4 << 20;
 
-/// Why a brew still open when the grinder asked for the next one is listed
-/// as an error (its end was missed).
-const NO_END: &str = "the next brew started before this one ended";
-
-/// Abort reasons that were someone's choice rather than a failure.
-const ON_PURPOSE: [&str; 3] = [ABORTED_BY_USER, REPLACED_BY_NEWER_GRIND, GRINDER_CHANGED];
-
 /// How a shot ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ShotKind {
     /// Measured and sent to the grinder.
     Success,
-    /// Ended on purpose: aborted by a person, replaced by a newer grind, or
-    /// the grinder address changed.
+    /// Ended on purpose ([`AbortCause::on_purpose`]): aborted by a person,
+    /// replaced by a newer grind, or the grinder address changed.
     Aborted,
-    /// Nothing came in time, or the grinder stopped waiting.
+    /// Nothing came in time, the grinder stopped waiting, or the end was
+    /// missed.
     Error,
+}
+
+impl ShotKind {
+    /// How a shot that ended for `cause` is listed.
+    fn of(cause: AbortCause) -> Self {
+        if cause.on_purpose() {
+            Self::Aborted
+        } else {
+            Self::Error
+        }
+    }
 }
 
 /// One shot in the history.
@@ -61,8 +66,30 @@ pub struct Shot {
     /// What the grinder aims for, when it said.
     pub target_time_s: Option<f64>,
     pub target_weight_g: Option<f64>,
-    /// Why it was not a success.
+    /// Why it was not a success, in words.
     pub reason: Option<String>,
+    /// The same as a fixed code, for the app to match on. Older files have
+    /// none and get it from `reason` when read.
+    #[serde(default, deserialize_with = "known_cause")]
+    pub cause: Option<AbortCause>,
+}
+
+/// A cause this version does not know (written by a newer one) reads as
+/// none, so the shot is kept with its `reason`. `use_file` writes the file
+/// back at once, so after going back to an older version such a code is
+/// saved as `null`, and after the next upgrade it comes back only if
+/// [`cause_of`] still knows the shot's words: `cause_of` and the old words
+/// stay for good.
+fn known_cause<'de, D: Deserializer<'de>>(d: D) -> Result<Option<AbortCause>, D::Error> {
+    let code = Option::<serde_json::Value>::deserialize(d)?;
+    Ok(code.and_then(|c| serde_json::from_value(c).ok()))
+}
+
+/// The cause of a shot saved before `cause` was kept, from its `reason`.
+/// So far each reason is worded as [`AbortCause::text`] words it; if one is
+/// reworded, its old words go here (the tests list them).
+fn cause_of(reason: &str) -> Option<AbortCause> {
+    AbortCause::ALL.into_iter().find(|c| c.text() == reason)
 }
 
 /// The shots, and the file they are kept in.
@@ -190,7 +217,13 @@ fn read_file(path: &Path) -> anyhow::Result<Result<VecDeque<Shot>, String>> {
     let shots: VecDeque<Shot> = raw
         .shots
         .into_iter()
-        .filter_map(|v| serde_json::from_value(v).ok())
+        .filter_map(|v| serde_json::from_value::<Shot>(v).ok())
+        .map(|mut shot| {
+            if shot.cause.is_none() {
+                shot.cause = shot.reason.as_deref().and_then(cause_of);
+            }
+            shot
+        })
         .collect();
     if shots.len() < total {
         tracing::warn!(
@@ -265,8 +298,8 @@ impl Recorder {
                 ..
             } => {
                 let missed = self.open.take().map(|open| {
-                    let reason = Some(NO_END.to_owned());
-                    shot(&open, at, ShotKind::Error, None, None, reason)
+                    let cause = AbortCause::ShotEndMissed;
+                    shot(&open, at, ShotKind::of(cause), None, None, Some(cause))
                 });
                 self.open = requested_by_grinder.then(|| Open {
                     at,
@@ -285,27 +318,25 @@ impl Recorder {
                     None,
                 ))
             }
-            MachineEvent::ShotAborted { reason } => {
+            MachineEvent::ShotAborted { cause, .. } => {
                 let open = self.open.take()?;
-                let kind = if ON_PURPOSE.contains(reason) {
-                    ShotKind::Aborted
-                } else {
-                    ShotKind::Error
-                };
-                Some(shot(&open, at, kind, None, None, Some(reason.to_string())))
+                let kind = ShotKind::of(*cause);
+                Some(shot(&open, at, kind, None, None, Some(*cause)))
             }
             MachineEvent::StartRequested { .. } | MachineEvent::Ready => None,
         }
     }
 }
 
+/// A shot that ended at `ended`; one that ended for a `cause` also gets its
+/// words as `reason`.
 fn shot(
     open: &Open,
     ended: SystemTime,
     kind: ShotKind,
     time_s: Option<f64>,
     weight_g: Option<f64>,
-    reason: Option<String>,
+    cause: Option<AbortCause>,
 ) -> Shot {
     Shot {
         id: uuid::Uuid::new_v4().simple().to_string(),
@@ -316,7 +347,8 @@ fn shot(
         weight_g,
         target_time_s: open.target.time_s,
         target_weight_g: open.target.weight_g,
-        reason,
+        reason: cause.map(|c| c.text().to_owned()),
+        cause,
     }
 }
 
@@ -374,6 +406,7 @@ async fn record(server: Arc<Server>, mut events: broadcast::Receiver<EventRecord
 mod tests {
     use super::*;
     use crate::protocol::ShotResult;
+    use serde_json::Value;
     use std::time::{Duration, UNIX_EPOCH};
 
     fn grind(weight: f64) -> GrindResult {
@@ -424,7 +457,7 @@ mod tests {
             (shot.at.as_str(), shot.ended_at.as_str()),
             ("2026-10-11T12:00:00Z", "2026-10-11T12:00:40Z")
         );
-        assert_eq!(shot.reason, None);
+        assert_eq!((shot.reason, shot.cause), (None, None));
 
         // A flush started by hand is no shot.
         assert_eq!(r.observe(&started(false), at(60)), None);
@@ -441,42 +474,39 @@ mod tests {
             at(110),
         );
         r.observe(&started(true), at(110));
-        let reason = ABORTED_BY_USER;
-        let shot = r
-            .observe(&MachineEvent::ShotAborted { reason }, at(120))
-            .unwrap();
+        let abort = MachineEvent::shot_aborted(AbortCause::ShotAbortedByUser);
+        let shot = r.observe(&abort, at(120)).unwrap();
         assert_eq!(shot.kind, ShotKind::Aborted);
         assert_eq!((shot.time_s, shot.target_time_s), (None, None));
         assert_eq!(shot.target_weight_g, Some(36.0));
         assert_eq!(shot.reason.as_deref(), Some("aborted by user"));
+        assert_eq!(shot.cause, Some(AbortCause::ShotAbortedByUser));
 
         // A knob press without a new grind: the target is not known.
         assert_eq!(r.observe(&started(true), at(200)), None);
-        let reason = "no result reported in time";
-        let shot = r
-            .observe(&MachineEvent::ShotAborted { reason }, at(380))
-            .unwrap();
+        let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
+        let shot = r.observe(&timeout, at(380)).unwrap();
         assert_eq!(shot.kind, ShotKind::Error);
         assert_eq!(shot.target_weight_g, None);
     }
 
     #[test]
-    fn abort_reasons_are_sorted() {
-        for (reason, kind) in [
-            (ABORTED_BY_USER, ShotKind::Aborted),
-            (REPLACED_BY_NEWER_GRIND, ShotKind::Aborted),
-            ("no result reported in time", ShotKind::Error),
-            (
-                "the grinder stopped waiting before the shot came",
-                ShotKind::Error,
-            ),
-            ("the grinder refused the job", ShotKind::Error),
-            (GRINDER_CHANGED, ShotKind::Aborted),
+    fn abort_causes_are_sorted() {
+        for (cause, kind) in [
+            (AbortCause::ShotAbortedByUser, ShotKind::Aborted),
+            (AbortCause::GrinderShotReplaced, ShotKind::Aborted),
+            (AbortCause::GrinderAddressChanged, ShotKind::Aborted),
+            (AbortCause::ShotTimedOut, ShotKind::Error),
+            (AbortCause::GrinderShotDropped, ShotKind::Error),
+            (AbortCause::GrinderShotRefused, ShotKind::Error),
+            (AbortCause::GrinderUnpaired, ShotKind::Error),
         ] {
             let mut r = Recorder::default();
             r.observe(&started(true), at(0));
-            let shot = r.observe(&MachineEvent::ShotAborted { reason }, at(1));
-            assert_eq!(shot.unwrap().kind, kind, "{reason}");
+            let shot = r.observe(&MachineEvent::shot_aborted(cause), at(1));
+            let shot = shot.unwrap();
+            assert_eq!((shot.kind, shot.cause), (kind, Some(cause)));
+            assert_eq!(shot.reason.as_deref(), Some(cause.text()));
         }
     }
 
@@ -486,7 +516,11 @@ mod tests {
         r.observe(&started(true), at(0));
         let missed = r.observe(&started(true), at(100)).unwrap();
         assert_eq!(missed.kind, ShotKind::Error);
-        assert_eq!(missed.reason.as_deref(), Some(NO_END));
+        assert_eq!(missed.cause, Some(AbortCause::ShotEndMissed));
+        assert_eq!(
+            missed.reason.as_deref(),
+            Some("the next brew started before this one ended")
+        );
         assert_eq!(
             r.observe(&reported(25_000, 36.0), at(130)).unwrap().kind,
             ShotKind::Success
@@ -578,6 +612,77 @@ mod tests {
         assert_eq!(h.list().len(), 1);
         assert_eq!(h.list()[0].time_s, Some(28.0));
         assert!(!dir.join("history.json.bad").exists(), "not set aside");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn older_shots_get_their_cause_from_the_reason() {
+        let dir =
+            std::env::temp_dir().join(format!("gbs-anywhere-history-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        // The reasons as saved before `cause` was kept: these words stay.
+        let older = [
+            ("aborted by user", Some("shot_aborted_by_user")),
+            (
+                "a newer Grind-by-Sync grind replaced it",
+                Some("grinder_shot_replaced"),
+            ),
+            (
+                "the grinder address changed",
+                Some("grinder_address_changed"),
+            ),
+            ("no result reported in time", Some("shot_timed_out")),
+            (
+                "the grinder stopped waiting before the shot came",
+                Some("grinder_shot_dropped"),
+            ),
+            ("the grinder refused the job", Some("grinder_shot_refused")),
+            (
+                "the grinder no longer knows this gbs-anywhere",
+                Some("grinder_unpaired"),
+            ),
+            (
+                "the next brew started before this one ended",
+                Some("shot_end_missed"),
+            ),
+            ("a reason this version does not know", None),
+        ];
+        let open = Open {
+            at: at(0),
+            target: Target::default(),
+        };
+        let mut shots: Vec<_> = older
+            .iter()
+            .map(|(reason, _)| {
+                let mut v =
+                    serde_json::to_value(shot(&open, at(1), ShotKind::Error, None, None, None))
+                        .unwrap();
+                v.as_object_mut().unwrap().remove("cause");
+                v["reason"] = (*reason).into();
+                v
+            })
+            .collect();
+        // A cause from a newer version reads as none: the shot stays, and
+        // its reason gives it a cause this version knows.
+        let mut newer = shots[0].clone();
+        newer["cause"] = "a_cause_added_later".into();
+        shots.push(newer);
+        std::fs::write(&path, serde_json::json!({ "shots": shots }).to_string()).unwrap();
+
+        let h = History::default();
+        h.use_file(&path).unwrap();
+        let causes: Vec<_> = h
+            .list()
+            .iter()
+            .map(|s| s.cause.map(|c| serde_json::to_value(c).unwrap()))
+            .collect();
+        let mut expected: Vec<_> = older.iter().map(|(_, c)| c.map(Value::from)).collect();
+        expected.push(Some("shot_aborted_by_user".into()));
+        assert_eq!(causes, expected);
+        // Written back with them, so the words no longer matter.
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["shots"][3]["cause"], "shot_timed_out");
         let _ = std::fs::remove_dir_all(dir);
     }
 

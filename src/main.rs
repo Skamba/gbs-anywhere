@@ -325,7 +325,7 @@ fn describe(rec: &EventRecord) -> String {
                 "  (over 80 s: the grinder will reject it)"
             }
         ),
-        MachineEvent::ShotAborted { reason } => format!("[{}] brew aborted: {reason}", rec.seq),
+        MachineEvent::ShotAborted { reason, .. } => format!("[{}] brew aborted: {reason}", rec.seq),
         MachineEvent::Ready => format!("[{}] machine back to ON", rec.seq),
     }
 }

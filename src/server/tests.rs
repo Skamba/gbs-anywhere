@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::protocol::{
-    BrewState, GrinderEvent, GrinderModel, MachineStatus, MakoState, PATH_BREWRATIO, PATH_MACHINE,
-    PATH_MAKO, PATH_SCRIPTS_EXECUTE, START_BREW_SCRIPT_ID,
+    AbortCause, BrewState, GrinderEvent, GrinderModel, MachineStatus, MakoState, PATH_BREWRATIO,
+    PATH_MACHINE, PATH_MAKO, PATH_SCRIPTS_EXECUTE, START_BREW_SCRIPT_ID,
 };
 
 /// Serves both routers on one port, like the binary with the app on the
@@ -233,6 +233,31 @@ async fn events_say_how_long_ago_they_happened() {
 }
 
 #[tokio::test]
+async fn an_abort_says_why_over_the_api() {
+    let base = start().await;
+    let post = reqwest::Method::POST;
+    call(post.clone(), format!("{base}/api/shot/start"), None).await;
+    let (code, _) = call(post, format!("{base}/api/shot/abort"), None).await;
+    assert_eq!(code, 200);
+    let (_, events) = call(
+        reqwest::Method::GET,
+        format!("{base}/api/events?after=0"),
+        None,
+    )
+    .await;
+    let aborted = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["kind"] == "shot_aborted")
+        .expect("a shot_aborted event");
+    assert_eq!(
+        (&aborted["cause"], &aborted["reason"]),
+        (&json!("shot_aborted_by_user"), &json!("aborted by user"))
+    );
+}
+
+#[tokio::test]
 async fn each_start_has_its_own_boot_id() {
     let (a, b) = (start().await, start().await);
     let boot_id = |state: &Value| state["boot_id"].as_str().unwrap().to_owned();
@@ -405,9 +430,9 @@ async fn a_new_grinder_address_ends_the_shot_it_waited_for() {
         x.with(|m, _| {
             m.events_after(0).any(|e| {
                 e.event
-                    == crate::protocol::MachineEvent::ShotAborted {
-                        reason: settings::GRINDER_CHANGED,
-                    }
+                    == crate::protocol::MachineEvent::shot_aborted(
+                        AbortCause::GrinderAddressChanged,
+                    )
             })
         })
     };
@@ -559,6 +584,7 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
     let shots = body["shots"].as_array().unwrap();
     assert_eq!(shots[0]["kind"], "aborted", "newest first");
     assert_eq!(shots[0]["reason"], "aborted by user");
+    assert_eq!(shots[0]["cause"], "shot_aborted_by_user");
     assert_eq!(shots[0]["time_s"], Value::Null);
     let shot = &shots[1];
     assert_eq!(shot["kind"], "success");
@@ -568,7 +594,10 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
     );
     assert_eq!(shot["target_weight_g"], 36.0);
     assert_eq!(shot["target_time_s"], Value::Null, "the E64 WS sends none");
-    assert_eq!(shot["reason"], Value::Null);
+    assert_eq!(
+        (&shot["reason"], &shot["cause"]),
+        (&Value::Null, &Value::Null)
+    );
     assert!(shot["id"].as_str().is_some_and(|id| !id.is_empty()));
     assert!(shot["at"].as_str().unwrap().ends_with('Z'));
     assert!(shot["ended_at"].as_str().unwrap() >= shot["at"].as_str().unwrap());

@@ -22,7 +22,9 @@ pub mod wifi;
 pub mod wire;
 
 pub use grinder::{BrewState, GrinderEvent, GrinderModel};
-pub use machine::{Machine, MachineConfig, MachineError, MachineEvent, Phase, ShotResult};
+pub use machine::{
+    AbortCause, Machine, MachineConfig, MachineError, MachineEvent, Phase, ShotResult,
+};
 pub use wire::{
     GrindBlocked, GrindResult, GrinderRequest, MachineIdentity, MachineStatus, MakoState, StartBrew,
 };

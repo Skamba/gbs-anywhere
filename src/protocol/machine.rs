@@ -22,7 +22,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{
@@ -126,13 +126,9 @@ pub enum Phase {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum MachineEvent {
     /// The grinder posted `/api/v2/brewratio` after a grind.
-    GrindResult {
-        result: GrindResult,
-    },
+    GrindResult { result: GrindResult },
     /// The grinder asked the machine to start a brew.
-    StartRequested {
-        script_id: Option<i64>,
-    },
+    StartRequested { script_id: Option<i64> },
     /// An E65/E80 grinder finished a Grind-by-Sync grind and waits for its
     /// shot: the grind result and the start request in one.
     BrewJob {
@@ -149,11 +145,103 @@ pub enum MachineEvent {
         result: ShotResult,
         in_grinder_range: bool,
     },
+    /// The brew ended without a result; the grinder skips it. Made with
+    /// [`MachineEvent::shot_aborted`].
     ShotAborted {
+        /// Why, in English words ([`AbortCause::text`]), as apps from before
+        /// `cause` read it.
         reason: &'static str,
+        /// Why, as a fixed code for apps to match on.
+        cause: AbortCause,
     },
     /// Back to `ON`.
     Ready,
+}
+
+impl MachineEvent {
+    /// The event for a brew that ended for `cause`, with its words as `reason`.
+    pub fn shot_aborted(cause: AbortCause) -> Self {
+        Self::ShotAborted {
+            reason: cause.text(),
+            cause,
+        }
+    }
+}
+
+/// Why a brew ended without a result, as a fixed code (`cause` next to the
+/// English `reason` in the API and the shot history). Apps match on the code,
+/// so the words can change without turning a stop made on purpose into an
+/// error. Codes read `<group>_<object>_<what happened>`: the group is `shot`
+/// or `grinder` (the grinder or the link to it), and the object is left out
+/// when the group itself is meant. A shot includes the grinder's request for
+/// one (an E65/E80 brew job).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AbortCause {
+    /// A person aborted it (`POST /api/shot/abort`).
+    ShotAbortedByUser,
+    /// An E65/E80 grinder asked for a newer shot (a new brew job) before this
+    /// one came: that grind is the shot now.
+    GrinderShotReplaced,
+    /// The grinder's address changed while it waited for the shot.
+    GrinderAddressChanged,
+    /// No result came within the shot window.
+    ShotTimedOut,
+    /// The E65/E80 grinder dropped the shot it asked for (its brew job): it
+    /// stopped waiting for it.
+    GrinderShotDropped,
+    /// The E65/E80 grinder refused to hand the shot it asked for (its brew
+    /// job) to this gbs-anywhere.
+    GrinderShotRefused,
+    /// The E65/E80 grinder no longer knows this gbs-anywhere (its pairing was
+    /// cleared there).
+    GrinderUnpaired,
+    /// Not sent by the machine: the shot history's name for a brew still open
+    /// when the grinder asked for the next one (its end was missed).
+    ShotEndMissed,
+}
+
+impl AbortCause {
+    /// Every cause, one entry per variant.
+    pub const ALL: [Self; 8] = [
+        Self::ShotAbortedByUser,
+        Self::GrinderShotReplaced,
+        Self::GrinderAddressChanged,
+        Self::ShotTimedOut,
+        Self::GrinderShotDropped,
+        Self::GrinderShotRefused,
+        Self::GrinderUnpaired,
+        Self::ShotEndMissed,
+    ];
+
+    /// In English words, for logs and the `reason` next to `cause`.
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::ShotAbortedByUser => "aborted by user",
+            Self::GrinderShotReplaced => "a newer Grind-by-Sync grind replaced it",
+            Self::GrinderAddressChanged => "the grinder address changed",
+            Self::ShotTimedOut => "no result reported in time",
+            Self::GrinderShotDropped => "the grinder stopped waiting before the shot came",
+            Self::GrinderShotRefused => "the grinder refused the job",
+            Self::GrinderUnpaired => "the grinder no longer knows this gbs-anywhere",
+            Self::ShotEndMissed => "the next brew started before this one ended",
+        }
+    }
+
+    /// Whether someone chose to end the brew (aborted), rather than it
+    /// failing (an error).
+    pub fn on_purpose(self) -> bool {
+        match self {
+            Self::ShotAbortedByUser => true,
+            Self::GrinderShotReplaced => true,
+            Self::GrinderAddressChanged => true,
+            Self::ShotTimedOut => false,
+            Self::GrinderShotDropped => false,
+            Self::GrinderShotRefused => false,
+            Self::GrinderUnpaired => false,
+            Self::ShotEndMissed => false,
+        }
+    }
 }
 
 /// A recorded event with a sequence number (monotonic, starts at 1).
@@ -191,13 +279,6 @@ impl std::fmt::Display for MachineError {
 impl std::error::Error for MachineError {}
 
 const EVENT_CAP: usize = 500;
-
-/// [`MachineEvent::ShotAborted`] reason when a person aborts the brew.
-pub const ABORTED_BY_USER: &str = "aborted by user";
-
-/// [`MachineEvent::ShotAborted`] reason when an E65/E80 grinder hands out a
-/// newer brew job before the shot came.
-pub const REPLACED_BY_NEWER_GRIND: &str = "a newer Grind-by-Sync grind replaced it";
 
 /// The machine. See the module docs for the state walk.
 #[derive(Debug, Clone)]
@@ -376,18 +457,18 @@ impl Machine {
         let Phase::Brewing { since, .. } = self.phase else {
             return Err(MachineError::NotBrewing);
         };
-        self.abort_brew(now, since, ABORTED_BY_USER);
+        self.abort_brew(now, since, AbortCause::ShotAbortedByUser);
         Ok(())
     }
 
-    /// Ends the brew because the grinder stopped waiting for it, like
-    /// [`Machine::abort`] but with `reason` in the event.
-    pub fn give_up(&mut self, now: Instant, reason: &'static str) -> Result<(), MachineError> {
+    /// Ends the brew for `cause` (say, the grinder stopped waiting for it),
+    /// like [`Machine::abort`] but with that cause in the event.
+    pub fn give_up(&mut self, now: Instant, cause: AbortCause) -> Result<(), MachineError> {
         self.tick(now);
         let Phase::Brewing { since, .. } = self.phase else {
             return Err(MachineError::NotBrewing);
         };
-        self.abort_brew(now, since, reason);
+        self.abort_brew(now, since, cause);
         Ok(())
     }
 
@@ -399,7 +480,7 @@ impl Machine {
                 if let Some(limit) = self.config.brew_timeout
                     && now.saturating_duration_since(since) >= limit
                 {
-                    self.abort_brew(now, since, "no result reported in time");
+                    self.abort_brew(now, since, AbortCause::ShotTimedOut);
                 }
             }
             Phase::Finishing { until, .. } if now >= until => {
@@ -477,13 +558,13 @@ impl Machine {
         );
     }
 
-    fn abort_brew(&mut self, now: Instant, since: Instant, reason: &'static str) {
+    fn abort_brew(&mut self, now: Instant, since: Instant, cause: AbortCause) {
         self.phase = Phase::Finishing {
             until: now + self.config.finishing_hold,
             result: ShotResult::new(now.saturating_duration_since(since), 0.0),
             aborted: true,
         };
-        self.push(now, MachineEvent::ShotAborted { reason });
+        self.push(now, MachineEvent::shot_aborted(cause));
     }
 
     fn push(&mut self, at: Instant, event: MachineEvent) {
@@ -625,10 +706,64 @@ mod tests {
             m.phase(late),
             Phase::Finishing { aborted: true, .. }
         ));
-        assert!(
-            m.events_after(0)
-                .any(|e| matches!(e.event, MachineEvent::ShotAborted { .. }))
+        assert!(m.events_after(0).any(|e| e.event
+            == MachineEvent::ShotAborted {
+                reason: "no result reported in time",
+                cause: AbortCause::ShotTimedOut,
+            }));
+    }
+
+    #[test]
+    fn an_abort_says_why_in_words_and_as_a_code() {
+        let t0 = Instant::now();
+        let mut m = Machine::new(MachineConfig::default());
+        m.on_start_request(t0, Some(9));
+        m.abort(t0 + POLL).unwrap();
+        let aborted = m.events_after(0).last().unwrap();
+        assert_eq!(
+            serde_json::to_value(aborted).unwrap(),
+            serde_json::json!({
+                "seq": 3,
+                "kind": "shot_aborted",
+                "reason": "aborted by user",
+                "cause": "shot_aborted_by_user",
+            })
         );
+        // Each cause has its own words: the history finds the cause of a shot
+        // saved before `cause` by them.
+        let texts: std::collections::BTreeSet<_> =
+            AbortCause::ALL.iter().map(|c| c.text()).collect();
+        assert_eq!(texts.len(), AbortCause::ALL.len());
+    }
+
+    #[test]
+    fn every_cause_is_in_all() {
+        use AbortCause::*;
+        let every = [
+            ShotAbortedByUser,
+            GrinderShotReplaced,
+            GrinderAddressChanged,
+            ShotTimedOut,
+            GrinderShotDropped,
+            GrinderShotRefused,
+            GrinderUnpaired,
+            ShotEndMissed,
+        ];
+        for cause in every {
+            // No wildcard: a new cause stops this from compiling. Add it here,
+            // to `every` above and to `AbortCause::ALL`.
+            match cause {
+                ShotAbortedByUser
+                | GrinderShotReplaced
+                | GrinderAddressChanged
+                | ShotTimedOut
+                | GrinderShotDropped
+                | GrinderShotRefused
+                | GrinderUnpaired
+                | ShotEndMissed => {}
+            }
+        }
+        assert_eq!(AbortCause::ALL, every);
     }
 
     #[test]
@@ -647,7 +782,7 @@ mod tests {
         assert_eq!(m.recipe_weight_g(), Some(40.0));
         assert!(m.brewing_for_brew_job(t0));
         assert!(!m.on_brew_job(t0, job, None), "one brew at a time");
-        m.give_up(t0, "the grinder stopped waiting").unwrap();
+        m.give_up(t0, AbortCause::GrinderShotDropped).unwrap();
         assert!(!m.brewing_for_brew_job(t0), "over");
         let mut knob = Machine::new(MachineConfig::default());
         knob.on_start_request(t0, Some(9));
@@ -655,7 +790,8 @@ mod tests {
         assert!(m.events_after(0).any(|e| matches!(
             e.event,
             MachineEvent::ShotAborted {
-                reason: "the grinder stopped waiting"
+                cause: AbortCause::GrinderShotDropped,
+                ..
             }
         )));
     }
