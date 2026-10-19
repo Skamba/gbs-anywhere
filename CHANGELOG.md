@@ -160,6 +160,9 @@ a minor release may change behaviour.
   devices on the network probing the port, no longer count as grinder
   traffic and are logged at debug level only, so they no longer fill the
   app's log. The `--log` transcript still records them.
+- A coffee log that the La Marzocco cloud sends with its list as `null`, or
+  without the list, now counts as empty, instead of logging a warning about
+  an unexpected shape and showing that error on the integration's card.
 
 ## [0.2.1] - 2026-10-10
 
