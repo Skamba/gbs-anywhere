@@ -153,7 +153,8 @@ impl Integrations {
         let status = Status::new(id, kind.id, kind.title);
         let task = spawn(server, integration, status.clone());
         tracing::info!(
-            "{}: enabled, shots are reported automatically after a knob press",
+            "{}: enabled, shots are reported automatically after a knob press (on an \
+             E65/E80 GbS: after a Grind-by-Sync grind)",
             kind.title
         );
         entries.push(Entry {

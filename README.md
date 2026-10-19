@@ -189,7 +189,10 @@ WiFi → Configuration** on the grinder:
   **Diagnosis**, after the serial number. `GRINDER_PAIRING_ID` sets it from
   the command line, unchecked.)
 - **Start Pairing and no gbs-anywhere entry:** the pairing was lost. Switch
-  Generic WiFi on again if needed, then pair once more.
+  the grinder off and on (also when it has just restarted by itself),
+  switch Generic WiFi on again if needed, then pair once more. If the
+  pairing still doesn't stick, switch the grinder off and on right before
+  you start pairing.
 
 To start over, tap **Clear Pairing** on the grinder, which also switches
 Generic WiFi off, and switch it on again. After about a minute gbs-anywhere

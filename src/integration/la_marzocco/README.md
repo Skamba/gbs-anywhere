@@ -48,7 +48,8 @@ The first coffee logged after the knob press is the shot: its extraction time
 and its weight go to the grinder. Without a scale reading it uses the recipe
 weight the grinder sent. The log says which.
 
-- **Only after a knob press.** Coffees made while the grinder is not waiting
+- **Only while the grinder waits for the shot,** after a knob press (on an
+  E65/E80 GbS: after the Grind-by-Sync grind). Coffees made at other times
   are never reported.
 - **A few seconds late.** The machine uploads the coffee when the shot ends;
   expect the grinder to react some seconds after the pump stops.
