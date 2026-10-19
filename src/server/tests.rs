@@ -166,6 +166,22 @@ async fn grinder_accepts_a_shot_entered_in_the_app() {
     assert_eq!(state["last_shot"]["volume_ml"], 36.0, "the recipe weight");
 }
 
+/// The app is one HTML document with its styles, script and texts inline,
+/// so a phone needs nothing more, also on a network without internet.
+#[tokio::test]
+async fn the_app_comes_in_one_response() {
+    let base = start().await;
+    let res = reqwest::get(format!("{base}/")).await.unwrap();
+    assert_eq!(res.status(), 200);
+    let kind = res.headers()[reqwest::header::CONTENT_TYPE]
+        .to_str()
+        .unwrap();
+    assert_eq!(kind, "text/html; charset=utf-8");
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(res.headers()["referrer-policy"], "no-referrer");
+    assert_eq!(res.text().await.unwrap(), control_api::page());
+}
+
 #[tokio::test]
 async fn browser_icon_requests_are_not_grinder_traffic() {
     let base = start().await;

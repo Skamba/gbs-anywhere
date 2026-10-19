@@ -26,7 +26,7 @@
 //! | PUT/DELETE | `/api/overrides` | raw keys forced into every mako reply |
 
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use crate::protocol::machine::EventRecord;
@@ -51,6 +51,9 @@ use crate::server::{Server, SettingsChange, history};
 /// The app's routes, answering only to home-network host names (`hosts`
 /// adds more) and refusing writes from other sites.
 pub fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::Router {
+    // The page is built now, so a broken template fails when the server
+    // starts, not on someone's first visit.
+    page();
     axum::Router::new()
         .route("/", get(app_page))
         .route("/icons/{name}", get(icon))
@@ -128,8 +131,64 @@ async fn app_page() -> impl IntoResponse {
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (header::REFERRER_POLICY, "no-referrer"),
         ],
-        axum::response::Html(include_str!("../../web/index.html")),
+        axum::response::Html(page()),
     )
+}
+
+// The app page as a template: `index.html` names where the styles and the
+// script go, and `app.js` where the texts go. `page()` fills them in, so the
+// page comes in one response with everything inline.
+const PAGE_HTML: &str = include_str!("../../web/index.html");
+const PAGE_CSS: &str = include_str!("../../web/app.css");
+const PAGE_JS: &str = include_str!("../../web/app.js");
+const CSS_SLOT: &str = "/* web/app.css */";
+const JS_SLOT: &str = "/* web/app.js */";
+const STRINGS_SLOT: &str = "/* web/strings/<lang>.json */";
+
+/// The app's languages and their texts; the page takes its list from these.
+/// What else a new language needs is under "Web app" in AGENTS.md.
+const LANGS: &[(&str, &str)] = &[
+    ("en", include_str!("../../web/strings/en.json")),
+    ("de", include_str!("../../web/strings/de.json")),
+];
+
+/// The page with its slots filled, built once.
+pub(super) fn page() -> &'static str {
+    static PAGE: LazyLock<String> = LazyLock::new(|| {
+        // `STRINGS` in app.js: {"en": {…}, "de": {…}}.
+        let strings = LANGS
+            .iter()
+            .map(|(lang, json)| format!("{}: {}", json!(lang), script_safe(json.trim())))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        let script = fill(PAGE_JS.trim_end(), &[(STRINGS_SLOT, strings.as_str())]);
+        let styles = PAGE_CSS.trim_end();
+        fill(PAGE_HTML, &[(CSS_SLOT, styles), (JS_SLOT, script.as_str())])
+    });
+    &PAGE
+}
+
+/// `template` with each slot replaced by its text, in order; what is filled
+/// in is not searched again.
+fn fill(template: &str, slots: &[(&str, &str)]) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    for (slot, text) in slots {
+        let (before, after) = rest
+            .split_once(slot)
+            .unwrap_or_else(|| panic!("the app page has no {slot}"));
+        out.push_str(before);
+        out.push_str(text);
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// JSON to put inside a `<script>` element: `</` as `<\/` and `<!--` as
+/// `<\u0021--`, so no text can end the element early. Still the same JSON.
+fn script_safe(json: &str) -> String {
+    json.replace("</", "<\\/").replace("<!--", "<\\u0021--")
 }
 
 /// Browsers ask for these by themselves; not answered here, they would reach
@@ -537,45 +596,77 @@ fn error(code: StatusCode, msg: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    //! The app's texts (the `STRINGS` catalog in web/index.html), checked
-    //! without a JavaScript engine: every English text is also German, with
-    //! the same placeholders, and every key the page uses exists.
+    //! The app page and its texts (`web/strings/<lang>.json`), checked
+    //! without a JavaScript engine: every English text is in every language,
+    //! with the same placeholders, every key the page uses exists, and the
+    //! page comes with its styles, script and texts filled in.
 
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
 
-    const PAGE: &str = include_str!("../../web/index.html");
+    use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
+    use serde_json::Value;
 
-    /// One language's entries: the `"key": value` lines of `    <lang>: {`,
-    /// each on one line.
-    fn catalog(lang: &str) -> BTreeMap<&'static str, &'static str> {
-        let lines = entries(lang);
-        let map: BTreeMap<_, _> = lines.iter().copied().collect();
-        assert_eq!(map.len(), lines.len(), "a key twice in {lang}");
+    use super::{
+        CSS_SLOT, JS_SLOT, LANGS, PAGE_CSS, PAGE_HTML, PAGE_JS, STRINGS_SLOT, page, script_safe,
+    };
+
+    /// One language's texts by key: a text, or a plural
+    /// (`{"one": …, "other": …}`).
+    fn catalog(lang: &str) -> BTreeMap<String, Value> {
+        let (_, json) = LANGS
+            .iter()
+            .find(|(l, _)| *l == lang)
+            .unwrap_or_else(|| panic!("no {lang} catalog"));
+        let Entries(entries) =
+            serde_json::from_str(json).unwrap_or_else(|e| panic!("web/strings/{lang}.json: {e}"));
+        let count = entries.len();
+        let map: BTreeMap<_, _> = entries.into_iter().collect();
+        assert_eq!(map.len(), count, "a key twice in {lang}");
         map
     }
 
-    fn entries(lang: &str) -> Vec<(&'static str, &'static str)> {
-        let start = PAGE
-            .find(&format!("\n    {lang}: {{"))
-            .unwrap_or_else(|| panic!("no {lang} catalog"));
-        let body = &PAGE[start + 1..];
-        let end = body.find("\n    }").expect("end of the catalog");
-        body[..end]
-            .lines()
-            .skip(1)
-            .filter_map(|line| {
-                let (key, value) = line.strip_prefix("      \"")?.split_once("\":")?;
-                Some((key, value.trim()))
-            })
-            .collect()
+    /// The languages besides English.
+    fn translations() -> impl Iterator<Item = &'static str> {
+        LANGS
+            .iter()
+            .map(|(lang, _)| *lang)
+            .filter(|lang| *lang != "en")
+    }
+
+    /// A JSON object's entries in file order, a key that comes twice kept
+    /// twice (a map would keep only the last).
+    struct Entries(Vec<(String, Value)>);
+
+    impl<'de> Deserialize<'de> for Entries {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct Each;
+            impl<'de> Visitor<'de> for Each {
+                type Value = Entries;
+                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str("an object of texts")
+                }
+                fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Entries, A::Error> {
+                    let mut entries = Vec::new();
+                    while let Some(entry) = map.next_entry()? {
+                        entries.push(entry);
+                    }
+                    Ok(Entries(entries))
+                }
+            }
+            d.deserialize_map(Each)
+        }
     }
 
     /// The `{name}` placeholders in a value (all forms of a plural).
-    fn placeholders(value: &str) -> BTreeSet<&str> {
-        value
-            .split('{')
-            .skip(1)
+    fn placeholders(value: &Value) -> BTreeSet<&str> {
+        let texts: Vec<&str> = match value {
+            Value::Object(forms) => forms.values().filter_map(Value::as_str).collect(),
+            other => other.as_str().into_iter().collect(),
+        };
+        texts
+            .into_iter()
+            .flat_map(|text| text.split('{').skip(1))
             .filter_map(|rest| rest.split_once('}').map(|(name, _)| name))
             .filter(|name| {
                 !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -583,22 +674,55 @@ mod tests {
             .collect()
     }
 
-    /// Texts an integration sends in English: only in `de`.
+    /// Texts an integration sends in English: not in `en`.
     fn from_server(key: &str) -> bool {
         key.starts_with("kind.") || key.starts_with("integ.detail.")
     }
 
     #[test]
-    fn every_english_text_is_also_german() {
-        let (en, de) = (catalog("en"), catalog("de"));
+    fn every_english_text_is_in_every_language() {
+        let en = catalog("en");
         assert!(en.len() > 100, "the catalog was found");
-        let missing: Vec<_> = en.keys().filter(|k| !de.contains_key(*k)).collect();
-        assert!(missing.is_empty(), "missing in de: {missing:?}");
-        let extra: Vec<_> = de
-            .keys()
-            .filter(|k| !en.contains_key(*k) && !from_server(k))
-            .collect();
-        assert!(extra.is_empty(), "only in de: {extra:?}");
+        assert!(translations().any(|lang| lang == "de"), "German is there");
+        for lang in translations() {
+            let other = catalog(lang);
+            let missing: Vec<_> = en.keys().filter(|k| !other.contains_key(*k)).collect();
+            assert!(missing.is_empty(), "missing in {lang}: {missing:?}");
+            let extra: Vec<_> = other
+                .keys()
+                .filter(|k| !en.contains_key(*k) && !from_server(k))
+                .collect();
+            assert!(extra.is_empty(), "only in {lang}: {extra:?}");
+        }
+    }
+
+    #[test]
+    fn every_entry_is_a_dotted_key_and_a_text() {
+        // t() picks a plural's form by the language's plural rules, else
+        // `other`; serverText() takes only a text.
+        const FORMS: [&str; 6] = ["zero", "one", "two", "few", "many", "other"];
+        for (lang, _) in LANGS {
+            for (key, value) in catalog(lang) {
+                // What the key scan below reads; and a key such as
+                // `__proto__` would mean something else in the page's script.
+                let dotted = key.starts_with(|c: char| c.is_ascii_alphabetic())
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+                assert!(dotted, "{lang} {key:?}: not a dotted key");
+                match &value {
+                    Value::String(_) => {}
+                    Value::Object(forms) if !from_server(&key) => {
+                        assert!(forms.contains_key("other"), "{lang} {key}: no `other`");
+                        for (form, text) in forms {
+                            assert!(FORMS.contains(&form.as_str()), "{lang} {key}: {form}?");
+                            assert!(text.is_string(), "{lang} {key}.{form}: not a text");
+                        }
+                    }
+                    _ => panic!("{lang} {key}: not a text (or, as the app's own, a plural)"),
+                }
+            }
+        }
     }
 
     #[test]
@@ -617,15 +741,18 @@ mod tests {
     }
 
     #[test]
-    fn german_texts_keep_the_placeholders() {
-        let (en, de) = (catalog("en"), catalog("de"));
-        for (key, value) in &en {
-            let Some(german) = de.get(key) else { continue };
-            assert_eq!(
-                placeholders(value),
-                placeholders(german),
-                "placeholders of {key}"
-            );
+    fn translations_keep_the_placeholders() {
+        let en = catalog("en");
+        for lang in translations() {
+            let other = catalog(lang);
+            for (key, value) in &en {
+                let Some(text) = other.get(key) else { continue };
+                assert_eq!(
+                    placeholders(value),
+                    placeholders(text),
+                    "placeholders of {key} in {lang}"
+                );
+            }
         }
     }
 
@@ -644,8 +771,8 @@ mod tests {
                 en.keys().any(|k| k.starts_with(&prefix))
             }
         };
-        let script = &PAGE[PAGE.rfind("<script>").expect("the app's script")..];
-        let markup = &PAGE[PAGE.find("<body").expect("body")..PAGE.rfind("<script>").unwrap()];
+        let script = PAGE_JS;
+        let markup = &PAGE_HTML[PAGE_HTML.find("<body").expect("body")..];
         let mut used = BTreeSet::new();
         // t("…") and tv("…") with a literal key.
         for call in ["t(\"", "tv(\""] {
@@ -687,11 +814,11 @@ mod tests {
     #[test]
     fn the_page_knows_every_abort_cause() {
         use crate::protocol::AbortCause;
-        // The page's `CAUSES` table, one `    <code>: { … },` line per cause.
-        let start = PAGE
+        // The script's `CAUSES` table, one `    <code>: { … },` line per cause.
+        let start = PAGE_JS
             .find("\n  const CAUSES = {\n")
             .expect("the CAUSES table");
-        let table = &PAGE[start..];
+        let table = &PAGE_JS[start..];
         let table = &table[..table.find("\n  };").expect("end of CAUSES")];
         let rows: BTreeMap<_, _> = table
             .lines()
@@ -740,7 +867,7 @@ mod tests {
             let code = serde_json::to_value(kind).unwrap();
             let code = code.as_str().unwrap();
             assert!(
-                PAGE.contains(&format!("\n  .k-{code} {{")),
+                PAGE_CSS.contains(&format!("\n.k-{code} {{")),
                 "no .k-{code} colours"
             );
             let key = format!("history.kind.{code}");
@@ -801,9 +928,83 @@ mod tests {
         let field_of = |k: &str| k.strip_suffix(".placeholder").map(|f| format!("{f}.label"));
         let unused: Vec<_> = de
             .keys()
-            .filter(|k| from_server(k) && !wanted.contains(**k))
+            .filter(|k| from_server(k) && !wanted.contains(k.as_str()))
             .filter(|k| field_of(k).is_none_or(|label| !wanted.contains(&label)))
             .collect();
         assert!(unused.is_empty(), "German for nothing: {unused:?}");
+    }
+
+    #[test]
+    fn the_page_comes_with_its_styles_script_and_texts() {
+        let slots = [
+            ("index.html", PAGE_HTML, CSS_SLOT),
+            ("index.html", PAGE_HTML, JS_SLOT),
+            ("app.js", PAGE_JS, STRINGS_SLOT),
+        ];
+        for (file, text, slot) in slots {
+            assert_eq!(text.matches(slot).count(), 1, "{slot} in {file}");
+        }
+        assert!(PAGE_HTML.find(CSS_SLOT) < PAGE_HTML.find(JS_SLOT));
+        let langs: BTreeSet<_> = LANGS.iter().map(|(lang, _)| lang).collect();
+        assert_eq!(langs.len(), LANGS.len(), "a language twice in LANGS");
+        // Nothing in them ends their element early.
+        assert!(!PAGE_CSS.to_ascii_lowercase().contains("</style"));
+        let js = PAGE_JS.to_ascii_lowercase();
+        assert!(!js.contains("</script") && !js.contains("<!--"));
+
+        let page = page();
+        for (_, _, slot) in slots {
+            assert!(!page.contains(slot), "{slot} left in the page");
+        }
+        let css = format!("<style>\n{}\n</style>", PAGE_CSS.trim_end());
+        assert!(page.contains(&css), "the styles");
+        let (head, tail) = PAGE_JS.split_once(STRINGS_SLOT).unwrap();
+        assert!(page.contains(&format!("<script>\n{head}")), "the script");
+        assert!(page.contains(&format!("{}\n</script>", tail.trim_end())));
+        for (lang, json) in LANGS {
+            let texts = format!("\"{lang}\": {}", script_safe(json.trim()));
+            assert!(page.contains(&texts), "the {lang} texts");
+        }
+        // One document, with nothing more to load.
+        assert!(page.starts_with("<!doctype html>") && page.ends_with("</html>\n"));
+        assert_eq!(page.matches("<style>").count(), 1);
+        assert!(!page.contains("<script src") && !page.contains("rel=\"stylesheet\""));
+        // And with the texts in, still only the theme script's and the app
+        // script's end, and the styles' end.
+        let lower = page.to_ascii_lowercase();
+        assert_eq!(
+            lower.matches("</script").count(),
+            2,
+            "</script> in the page"
+        );
+        assert_eq!(lower.matches("</style").count(), 1, "</style> in the page");
+        let at = page.find(&format!("<script>\n{head}")).unwrap();
+        assert!(!page[at..].contains("<!--"), "<!-- in the app's script");
+    }
+
+    #[test]
+    fn every_language_has_its_button() {
+        // Status → Settings → Language: Auto, and a button per language.
+        let attr = "data-lang-choice=\"";
+        let buttons: BTreeSet<&str> = PAGE_HTML
+            .match_indices(attr)
+            .filter_map(|(i, _)| PAGE_HTML[i + attr.len()..].split_once('"'))
+            .map(|(code, _)| code)
+            .filter(|code| *code != "auto")
+            .collect();
+        let langs: BTreeSet<&str> = LANGS.iter().map(|(lang, _)| *lang).collect();
+        assert_eq!(buttons, langs, "the language buttons and LANGS");
+    }
+
+    #[test]
+    fn texts_cannot_end_the_script_early() {
+        let json = r#"{"a": "</script><!-- b"}"#;
+        let safe = script_safe(json);
+        assert_eq!(safe, r#"{"a": "<\/script><\u0021-- b"}"#);
+        let (a, b): (Value, Value) = (
+            serde_json::from_str(json).unwrap(),
+            serde_json::from_str(&safe).unwrap(),
+        );
+        assert_eq!(a, b, "still the same JSON");
     }
 }
