@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "gbs-anywhere",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "--", "-p", "8089", "--control", "off", "--no-stdin", "--config", "target/dev.json", "--update-check", "off"],
+      "port": 8089
+    }
+  ]
+}

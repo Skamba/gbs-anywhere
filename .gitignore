@@ -12,6 +12,7 @@ logs/
 .env.*
 CLAUDE.local.md
 .claude/settings.local.json
+.claude/worktrees/
 .vscode/
 .idea/
 *.swp

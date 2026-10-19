@@ -16,8 +16,13 @@ file is for agents changing the code.
   reads the machine's replies (`GrinderModel`, used in tests).
 - `src/server/`: axum. `grinder_api.rs` is what the E64 WS calls
   (`/api/v2/*`); `wifi_grinder.rs` pairs with an E65/E80 GbS and turns its
-  brew jobs into brews of the same machine; `control_api.rs` is the JSON API
-  and page for people. Around them: `settings.rs` holds the settings people
+  brew jobs into shots of the same machine; `control_api.rs` is the JSON API
+  and page for people. `browser.rs` keeps web pages out: the app answers
+  only to home-network host names, refuses writes from other sites, and the
+  grinder API refuses requests with browser headers. Every control route
+  gets these checks through `route_layer`, so a new route needs nothing
+  extra. `mod.rs` builds the server and its listeners. Around them:
+  `settings.rs` holds the settings people
   change in the app (shot window, grinder address, which restarts the
   E65/E80 link, update check) and is the only writer of the settings file;
   `history.rs` records the shots from the machine's events; `logbook.rs`
@@ -32,9 +37,11 @@ file is for agents changing the code.
 - `web/`: the phone app, one page with no build step. `index.html` holds the
   markup and the small script that sets the theme before the first paint,
   `app.css` the styles, `app.js` the app's script, and `strings/<lang>.json`
-  its texts, one file per language. `control_api.rs` fills them into
-  `index.html` once at startup, so the page still comes in one response.
-- `src/main.rs`: flags and startup only.
+  its texts, one file per language. At startup `control_api.rs` fills the
+  texts and the version (`PAGE_VERSION`) into `app.js`, then the styles and
+  the script into `index.html`, so the page still comes in one response.
+- `src/main.rs`: flags and startup only. `src/lib.rs`: the crate root and
+  `version()`.
 
 ## Commands
 
@@ -53,13 +60,17 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
 - Port 80, the default, is what a real grinder uses. Use another port when 80
   is taken. Keep local settings files under `target/` (git-ignored), because
   they hold passwords.
+- `.claude/launch.json` starts the same local run for an agent's browser
+  preview. Project skills in `.claude/skills/`: `/check-page` walks through
+  the page checks below, `/release X.Y.Z` the release steps.
 - Docker is not needed for development; CI builds the image.
 
 ## Done means
 
-- `cargo fmt --check`, `cargo clippy --all-targets` (no warnings) and
-  `cargo test` pass. CI (`.github/workflows/ci.yml`) runs the same checks on
-  every push and pull request.
+- These pass, as CI (`.github/workflows/ci.yml`) runs them on every push and
+  pull request: `cargo fmt --all --check`,
+  `cargo clippy --all-targets --locked -- -D warnings` and
+  `cargo test --locked`.
 - For page changes, open the page at phone width (about 390 px) in light and
   dark mode and look at the result. There is no JavaScript test suite, so
   also check by hand what reviews keep finding:
@@ -83,7 +94,9 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
 ## Code conventions
 
 - Rust 2024; the minimum Rust version is `rust-version` in Cargo.toml.
-  `unsafe` is forbidden by a lint.
+  CI builds with the latest stable only, so nothing checks it: don't use
+  std or language features newer than that version. `unsafe` is forbidden
+  by a lint.
 - Match the surrounding code: short doc comments saying what and why,
   `anyhow` with `.context(...)` for errors people will read, and messages in
   plain sentences.
@@ -102,12 +115,49 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
   HTTP with `GrinderModel` playing the grinder; extend it when what the
   grinder sees changes.
 
+## API and saved files
+
+- The control API's names follow the rules at the top of
+  `src/server/control_api.rs`: snake_case; an event or cause is
+  `<group>_<object>_<past participle>` (`grinder_shot_requested`,
+  `shot_aborted`); a state is one word (`running`, `connected`); units are
+  in the name (`_ms` measured, `_s` set by people, `_g`); a point in time
+  ends in `_at`, an age in `age_ms`. `reason`, `detail` and `error` are
+  English for people; codes go in `cause`, `kind`, `state`, `phase` and
+  `code`, and every error has a `code`. The route table there is the API
+  reference (README links to it): change it with the route.
+- Renaming or dropping a name in the API, a flag or a saved file is a
+  breaking change: list it under `### Changed (breaking)` in CHANGELOG.md,
+  old name next to new. Keep old input working where that is cheap, with
+  serde or clap `alias` (as `--brew-timeout-s`).
+- The settings file, `history.json` and the E65/E80 pairing file carry no
+  version. A newer build reads an older file through `#[serde(default)]` on
+  new fields and `serde(alias)` on old names; an older build reading a newer
+  file keeps settings keys it doesn't know (`other`) and drops a shot it
+  can't read, not the whole history. Add a test that loads the file as an
+  older version wrote it.
+- `AbortCause::text` is saved too: older history entries get their `cause`
+  back from it (`cause_of` in `history.rs`). Rewording one means adding its
+  old words there.
+- A new `AbortCause` needs its row in `CAUSES` in `app.js`; a new
+  `ShotOutcome` a `.k-<code>` rule in `app.css` and `history.kind.<code>` in
+  the catalogs. Tests in `control_api.rs` check both.
+- Lengths are measured on `Instant`. The wall clock only dates things, and
+  may be unset (1970) or jump.
+- The page ships with its server, so it has no branches for older servers.
+  The one exception is reading `version` in `refresh()`: when it changes,
+  the page reloads to get the new server's page.
+- Anything a request or a peer can make the server keep (log lines, refused
+  hosts, shots) has a size limit. A log line never offers a ready-made flag
+  for a value someone else chose, such as a refused host name.
+
 ## Integrations
 
 Each integration is a folder `src/integration/<id>/` with `mod.rs`
 (`pub static KIND: Kind`), `config.rs` (the form's `FIELDS`, a typed config,
 and a clap `Args` with `#[group(id = "<id>")]`), `run.rs` (implements
-`Integration`), `icon.svg` and `README.md`. Register it in
+`Integration`), `icon.svg` and `README.md`, plus more files as it needs them
+(`la_marzocco/cloud.rs`, `half_decent/shot.rs`). Register it in
 `src/integration/mod.rs` in four places: `pub mod`, `KINDS`, a `CliArgs`
 field and its line in `CliArgs::configured`.
 The module docs there are the full spec; `la_marzocco/` is the worked example.
@@ -152,6 +202,8 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
 - Every text the app writes is in the catalogs in `web/strings/` (`STRINGS`
   in the script), in `en.json` and `de.json` with the same keys, and goes
   through `t()`. A plural is an object of forms, `{"one": …, "other": …}`.
+  Where the E64 WS and an E65/E80 need different words, `tv(key)` picks
+  `<key>.e64` or `<key>.wifi` for the grinder in use; give both.
   Integration texts that come from the server in English (`kind.*`,
   `integ.detail.*`) are the exception: they are only in `de.json`, and
   English shows the server's text. The tests in `control_api.rs` read the
