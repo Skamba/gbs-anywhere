@@ -15,7 +15,7 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80 with its `state`), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and the grinder's `grinder_message`), and `shot_range`: the shot times the grinder adjusts from, over `min_ms` and up to `max_ms` (10 000 and 80 000), as `in_grinder_range` checks them. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, `finishing_hold_ms`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq` |
+//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80 with its `state`), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and the grinder's `grinder_message`), and `shot_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, `finishing_hold_ms`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq` |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them; they win over flags from then on. `null` goes back to the start setting (the flag or environment variable, else the default); `"grinder_host":""` removes the address (without a start address, the same as `null`). Replies with the settings as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
@@ -23,27 +23,24 @@
 //! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes one added in the app and restarts it; a password left out or empty stays |
 //! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app; replies `{"id":…}`, as adding and changing do |
-//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first: how each ended as `outcome` (`succeeded`, `aborted` or `failed`), `started_at` and `ended_at` (UTC, whole seconds; `ended_at` as the clock read when the shot ended, `started_at` counted back from it by the shot's length on a clock that does not jump), `time_ms` and `weight_g` of each that succeeded, with `in_grinder_range` as on `shot_reported` (none on shots saved by earlier builds), `target_time_ms` and `target_weight_g` when the grinder said, each other with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart (false while saving fails) |
+//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first: how each ended as `outcome` (`succeeded`, `aborted` or `failed`), `started_at` and `ended_at` (UTC, whole seconds; `ended_at` as the clock read when the shot ended, `started_at` counted back from it by the shot's length on a clock that does not jump), `time_ms` and `weight_g` of each that succeeded, with `in_grinder_range` as on `shot_reported` (`null` when the shot's window was not known, see `grinder.shot_range`, and on shots saved by earlier builds), `target_time_ms` and `target_weight_g` when the grinder said, each other with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart (false while saving fails) |
 //! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (`at`, `level`: `info`, `warn` or `error`, `text`) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
 //! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`); `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
-//! | GET | `/api/events?after=N` | events with `seq > N`, each with its `kind`: `grinder_grind_finished` (`result`: the grind's `target_weight_g`, `filter`, `raw`), `grinder_shot_requested` (an E64 WS's `script_id`, an E65/E80's `target_time_ms`), `shot_started`, `shot_reported` (`result`: `time_ms`, `weight_g`; `in_grinder_range`: whether the grinder adjusts from its time, see `grinder.shot_range`), `shot_aborted` and `shot_finished`; `age_ms` says how long ago each happened. `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
+//! | GET | `/api/events?after=N` | events with `seq > N`, each with its `kind`: `grinder_grind_finished` (`result`: the grind's `target_weight_g`, `filter`, `raw`), `grinder_shot_requested` (an E64 WS's `script_id`, an E65/E80's `target_time_ms`), `shot_started`, `shot_reported` (`result`: `time_ms`, `weight_g`; `in_grinder_range`: whether the grinder adjusts from its time, by the window of the grinder's request, see `grinder.shot_range`, or `null` when that is not known), `shot_aborted` and `shot_finished`; `age_ms` says how long ago each happened. `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events named by `kind` |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` (or `time_ms`) — ends the shot with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the shot as a user abort (grinder skips it) |
 //! | POST | `/api/shot/start` | starts a shot without a grinder request (an E64 WS sees a flush; an E65/E80 nothing) |
-
 //! | POST | `/api/machine` | patch the `ON`-state mako fields, e.g. `{"TANK_LEVEL":0}` |
 //! | POST | `/api/grinder/pairing` | `{"pairing_id":1234}` — the pairing ID an E65/E80 grinder shows, only while the link asks for it |
 //! | PUT/DELETE | `/api/overrides` | raw keys forced into every mako reply |
 
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use crate::protocol::machine::EventRecord;
-use crate::protocol::{
-    MAX_EXTRACTION_TIME_MS, MIN_EXTRACTION_TIME_MS, MachineError, MakoState, ShotResult,
-};
+use crate::protocol::{MachineError, MakoState, ShotResult};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -62,6 +59,9 @@ use crate::server::{Server, SettingsChange, history};
 /// The app's routes, answering only to home-network host names (`hosts`
 /// adds more) and refusing writes from other sites.
 pub fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::Router {
+    // The page is built now, so a broken template fails when the server
+    // starts, not on someone's first visit.
+    page();
     axum::Router::new()
         .route("/", get(app_page))
         .route("/icons/{name}", get(icon))
@@ -118,10 +118,7 @@ pub fn state_json(x: &Server) -> Value {
                 "wifi": link.wifi,
                 "last_grind": m.last_grind(),
                 "grind_blocked": blocked,
-                "shot_range": {
-                    "min_ms": MIN_EXTRACTION_TIME_MS,
-                    "max_ms": MAX_EXTRACTION_TIME_MS,
-                },
+                "shot_range": m.grinder_range(),
             },
             "machine": {
                 "mako": m.mako_json(now),
@@ -146,8 +143,74 @@ async fn app_page() -> impl IntoResponse {
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
             (header::REFERRER_POLICY, "no-referrer"),
         ],
-        axum::response::Html(include_str!("../../web/index.html")),
+        axum::response::Html(page()),
     )
+}
+
+// The app page as a template: `index.html` names where the styles and the
+// script go, and `app.js` where the texts and the version go. `page()` fills
+// them in, so the page comes in one response with everything inline.
+const PAGE_HTML: &str = include_str!("../../web/index.html");
+const PAGE_CSS: &str = include_str!("../../web/app.css");
+const PAGE_JS: &str = include_str!("../../web/app.js");
+const CSS_SLOT: &str = "/* web/app.css */";
+const JS_SLOT: &str = "/* web/app.js */";
+const STRINGS_SLOT: &str = "/* web/strings/<lang>.json */";
+/// `PAGE_VERSION` in app.js: the version the page comes with, so a page from
+/// the browser's cache can tell that another version answers.
+const VERSION_SLOT: &str = "/* version */";
+
+/// The app's languages and their texts; the page takes its list from these.
+/// What else a new language needs is under "Web app" in AGENTS.md.
+const LANGS: &[(&str, &str)] = &[
+    ("en", include_str!("../../web/strings/en.json")),
+    ("de", include_str!("../../web/strings/de.json")),
+];
+
+/// The page with its slots filled, built once.
+pub(super) fn page() -> &'static str {
+    static PAGE: LazyLock<String> = LazyLock::new(|| {
+        // `STRINGS` in app.js: {"en": {…}, "de": {…}}.
+        let strings = LANGS
+            .iter()
+            .map(|(lang, json)| format!("{}: {}", json!(lang), script_safe(json.trim())))
+            .collect::<Vec<_>>()
+            .join(",\n");
+        let version = script_safe(&json!(crate::version()).to_string());
+        let script = fill(
+            PAGE_JS.trim_end(),
+            &[
+                (STRINGS_SLOT, strings.as_str()),
+                (VERSION_SLOT, version.as_str()),
+            ],
+        );
+        let styles = PAGE_CSS.trim_end();
+        fill(PAGE_HTML, &[(CSS_SLOT, styles), (JS_SLOT, script.as_str())])
+    });
+    &PAGE
+}
+
+/// `template` with each slot replaced by its text, in order; what is filled
+/// in is not searched again.
+fn fill(template: &str, slots: &[(&str, &str)]) -> String {
+    let mut out = String::new();
+    let mut rest = template;
+    for (slot, text) in slots {
+        let (before, after) = rest
+            .split_once(slot)
+            .unwrap_or_else(|| panic!("the app page has no {slot}"));
+        out.push_str(before);
+        out.push_str(text);
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
+/// JSON to put inside a `<script>` element: `</` as `<\/` and `<!--` as
+/// `<\u0021--`, so no text can end the element early. Still the same JSON.
+fn script_safe(json: &str) -> String {
+    json.replace("</", "<\\/").replace("<!--", "<\\u0021--")
 }
 
 /// Browsers ask for these by themselves; not answered here, they would reach
@@ -563,45 +626,78 @@ fn error(status: StatusCode, code: &str, msg: &str) -> Response {
 
 #[cfg(test)]
 mod tests {
-    //! The app's texts (the `STRINGS` catalog in web/index.html), checked
-    //! without a JavaScript engine: every English text is also German, with
-    //! the same placeholders, and every key the page uses exists.
+    //! The app page and its texts (`web/strings/<lang>.json`), checked
+    //! without a JavaScript engine: every English text is in every language,
+    //! with the same placeholders, every key the page uses exists, and the
+    //! page comes with its styles, script, texts and version filled in.
 
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
 
-    const PAGE: &str = include_str!("../../web/index.html");
+    use serde::de::{Deserialize, Deserializer, MapAccess, Visitor};
+    use serde_json::Value;
 
-    /// One language's entries: the `"key": value` lines of `    <lang>: {`,
-    /// each on one line.
-    fn catalog(lang: &str) -> BTreeMap<&'static str, &'static str> {
-        let lines = entries(lang);
-        let map: BTreeMap<_, _> = lines.iter().copied().collect();
-        assert_eq!(map.len(), lines.len(), "a key twice in {lang}");
+    use super::{
+        CSS_SLOT, JS_SLOT, LANGS, PAGE_CSS, PAGE_HTML, PAGE_JS, STRINGS_SLOT, VERSION_SLOT, page,
+        script_safe,
+    };
+
+    /// One language's texts by key: a text, or a plural
+    /// (`{"one": …, "other": …}`).
+    fn catalog(lang: &str) -> BTreeMap<String, Value> {
+        let (_, json) = LANGS
+            .iter()
+            .find(|(l, _)| *l == lang)
+            .unwrap_or_else(|| panic!("no {lang} catalog"));
+        let Entries(entries) =
+            serde_json::from_str(json).unwrap_or_else(|e| panic!("web/strings/{lang}.json: {e}"));
+        let count = entries.len();
+        let map: BTreeMap<_, _> = entries.into_iter().collect();
+        assert_eq!(map.len(), count, "a key twice in {lang}");
         map
     }
 
-    fn entries(lang: &str) -> Vec<(&'static str, &'static str)> {
-        let start = PAGE
-            .find(&format!("\n    {lang}: {{"))
-            .unwrap_or_else(|| panic!("no {lang} catalog"));
-        let body = &PAGE[start + 1..];
-        let end = body.find("\n    }").expect("end of the catalog");
-        body[..end]
-            .lines()
-            .skip(1)
-            .filter_map(|line| {
-                let (key, value) = line.strip_prefix("      \"")?.split_once("\":")?;
-                Some((key, value.trim()))
-            })
-            .collect()
+    /// The languages besides English.
+    fn translations() -> impl Iterator<Item = &'static str> {
+        LANGS
+            .iter()
+            .map(|(lang, _)| *lang)
+            .filter(|lang| *lang != "en")
+    }
+
+    /// A JSON object's entries in file order, a key that comes twice kept
+    /// twice (a map would keep only the last).
+    struct Entries(Vec<(String, Value)>);
+
+    impl<'de> Deserialize<'de> for Entries {
+        fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            struct Each;
+            impl<'de> Visitor<'de> for Each {
+                type Value = Entries;
+                fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                    f.write_str("an object of texts")
+                }
+                fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Entries, A::Error> {
+                    let mut entries = Vec::new();
+                    while let Some(entry) = map.next_entry()? {
+                        entries.push(entry);
+                    }
+                    Ok(Entries(entries))
+                }
+            }
+            d.deserialize_map(Each)
+        }
     }
 
     /// The `{name}` placeholders in a value (all forms of a plural).
-    fn placeholders(value: &str) -> BTreeSet<&str> {
-        value
-            .split('{')
-            .skip(1)
+    fn placeholders(value: &Value) -> BTreeSet<&str> {
+        let texts: Vec<&str> = match value {
+            Value::Object(forms) => forms.values().filter_map(Value::as_str).collect(),
+            other => other.as_str().into_iter().collect(),
+        };
+        texts
+            .into_iter()
+            .flat_map(|text| text.split('{').skip(1))
             .filter_map(|rest| rest.split_once('}').map(|(name, _)| name))
             .filter(|name| {
                 !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -609,22 +705,55 @@ mod tests {
             .collect()
     }
 
-    /// Texts an integration sends in English: only in `de`.
+    /// Texts an integration sends in English: not in `en`.
     fn from_server(key: &str) -> bool {
         key.starts_with("kind.") || key.starts_with("integ.detail.")
     }
 
     #[test]
-    fn every_english_text_is_also_german() {
-        let (en, de) = (catalog("en"), catalog("de"));
+    fn every_english_text_is_in_every_language() {
+        let en = catalog("en");
         assert!(en.len() > 100, "the catalog was found");
-        let missing: Vec<_> = en.keys().filter(|k| !de.contains_key(*k)).collect();
-        assert!(missing.is_empty(), "missing in de: {missing:?}");
-        let extra: Vec<_> = de
-            .keys()
-            .filter(|k| !en.contains_key(*k) && !from_server(k))
-            .collect();
-        assert!(extra.is_empty(), "only in de: {extra:?}");
+        assert!(translations().any(|lang| lang == "de"), "German is there");
+        for lang in translations() {
+            let other = catalog(lang);
+            let missing: Vec<_> = en.keys().filter(|k| !other.contains_key(*k)).collect();
+            assert!(missing.is_empty(), "missing in {lang}: {missing:?}");
+            let extra: Vec<_> = other
+                .keys()
+                .filter(|k| !en.contains_key(*k) && !from_server(k))
+                .collect();
+            assert!(extra.is_empty(), "only in {lang}: {extra:?}");
+        }
+    }
+
+    #[test]
+    fn every_entry_is_a_dotted_key_and_a_text() {
+        // t() picks a plural's form by the language's plural rules, else
+        // `other`; serverText() takes only a text.
+        const FORMS: [&str; 6] = ["zero", "one", "two", "few", "many", "other"];
+        for (lang, _) in LANGS {
+            for (key, value) in catalog(lang) {
+                // What the key scan below reads; and a key such as
+                // `__proto__` would mean something else in the page's script.
+                let dotted = key.starts_with(|c: char| c.is_ascii_alphabetic())
+                    && key
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+                assert!(dotted, "{lang} {key:?}: not a dotted key");
+                match &value {
+                    Value::String(_) => {}
+                    Value::Object(forms) if !from_server(&key) => {
+                        assert!(forms.contains_key("other"), "{lang} {key}: no `other`");
+                        for (form, text) in forms {
+                            assert!(FORMS.contains(&form.as_str()), "{lang} {key}: {form}?");
+                            assert!(text.is_string(), "{lang} {key}.{form}: not a text");
+                        }
+                    }
+                    _ => panic!("{lang} {key}: not a text (or, as the app's own, a plural)"),
+                }
+            }
+        }
     }
 
     #[test]
@@ -643,15 +772,18 @@ mod tests {
     }
 
     #[test]
-    fn german_texts_keep_the_placeholders() {
-        let (en, de) = (catalog("en"), catalog("de"));
-        for (key, value) in &en {
-            let Some(german) = de.get(key) else { continue };
-            assert_eq!(
-                placeholders(value),
-                placeholders(german),
-                "placeholders of {key}"
-            );
+    fn translations_keep_the_placeholders() {
+        let en = catalog("en");
+        for lang in translations() {
+            let other = catalog(lang);
+            for (key, value) in &en {
+                let Some(text) = other.get(key) else { continue };
+                assert_eq!(
+                    placeholders(value),
+                    placeholders(text),
+                    "placeholders of {key} in {lang}"
+                );
+            }
         }
     }
 
@@ -670,8 +802,8 @@ mod tests {
                 en.keys().any(|k| k.starts_with(&prefix))
             }
         };
-        let script = &PAGE[PAGE.rfind("<script>").expect("the app's script")..];
-        let markup = &PAGE[PAGE.find("<body").expect("body")..PAGE.rfind("<script>").unwrap()];
+        let script = PAGE_JS;
+        let markup = &PAGE_HTML[PAGE_HTML.find("<body").expect("body")..];
         let mut used = BTreeSet::new();
         // t("…") and tv("…") with a literal key.
         for call in ["t(\"", "tv(\""] {
@@ -713,11 +845,11 @@ mod tests {
     #[test]
     fn the_page_knows_every_abort_cause() {
         use crate::protocol::AbortCause;
-        // The page's `CAUSES` table, one `    <code>: { … },` line per cause.
-        let start = PAGE
+        // The script's `CAUSES` table, one `    <code>: { … },` line per cause.
+        let start = PAGE_JS
             .find("\n  const CAUSES = {\n")
             .expect("the CAUSES table");
-        let table = &PAGE[start..];
+        let table = &PAGE_JS[start..];
         let table = &table[..table.find("\n  };").expect("end of CAUSES")];
         let rows: BTreeMap<_, _> = table
             .lines()
@@ -770,7 +902,7 @@ mod tests {
             let code = serde_json::to_value(kind).unwrap();
             let code = code.as_str().unwrap();
             assert!(
-                PAGE.contains(&format!("\n  .k-{code} {{")),
+                PAGE_CSS.contains(&format!("\n.k-{code} {{")),
                 "no .k-{code} colours"
             );
             let key = format!("history.kind.{code}");
@@ -831,9 +963,90 @@ mod tests {
         let field_of = |k: &str| k.strip_suffix(".placeholder").map(|f| format!("{f}.label"));
         let unused: Vec<_> = de
             .keys()
-            .filter(|k| from_server(k) && !wanted.contains(**k))
+            .filter(|k| from_server(k) && !wanted.contains(k.as_str()))
             .filter(|k| field_of(k).is_none_or(|label| !wanted.contains(&label)))
             .collect();
         assert!(unused.is_empty(), "German for nothing: {unused:?}");
+    }
+
+    #[test]
+    fn the_page_comes_with_its_styles_script_and_texts() {
+        let slots = [
+            ("index.html", PAGE_HTML, CSS_SLOT),
+            ("index.html", PAGE_HTML, JS_SLOT),
+            ("app.js", PAGE_JS, STRINGS_SLOT),
+            ("app.js", PAGE_JS, VERSION_SLOT),
+        ];
+        for (file, text, slot) in slots {
+            assert_eq!(text.matches(slot).count(), 1, "{slot} in {file}");
+        }
+        assert!(PAGE_HTML.find(CSS_SLOT) < PAGE_HTML.find(JS_SLOT));
+        assert!(PAGE_JS.find(STRINGS_SLOT) < PAGE_JS.find(VERSION_SLOT));
+        let langs: BTreeSet<_> = LANGS.iter().map(|(lang, _)| lang).collect();
+        assert_eq!(langs.len(), LANGS.len(), "a language twice in LANGS");
+        // Nothing in them ends their element early.
+        assert!(!PAGE_CSS.to_ascii_lowercase().contains("</style"));
+        let js = PAGE_JS.to_ascii_lowercase();
+        assert!(!js.contains("</script") && !js.contains("<!--"));
+
+        let page = page();
+        for (_, _, slot) in slots {
+            assert!(!page.contains(slot), "{slot} left in the page");
+        }
+        let css = format!("<style>\n{}\n</style>", PAGE_CSS.trim_end());
+        assert!(page.contains(&css), "the styles");
+        let (head, rest) = PAGE_JS.split_once(STRINGS_SLOT).unwrap();
+        let (middle, tail) = rest.split_once(VERSION_SLOT).unwrap();
+        assert!(page.contains(&format!("<script>\n{head}")), "the script");
+        // The version the page comes with, as a JSON string.
+        let version = serde_json::to_string(crate::version()).unwrap();
+        let script_end = format!("{middle}{version}{}\n</script>", tail.trim_end());
+        assert!(page.contains(&script_end), "the rest of the script");
+        assert!(page.contains(&format!("const PAGE_VERSION = {version};")));
+        for (lang, json) in LANGS {
+            let texts = format!("\"{lang}\": {}", script_safe(json.trim()));
+            assert!(page.contains(&texts), "the {lang} texts");
+        }
+        // One document, with nothing more to load.
+        assert!(page.starts_with("<!doctype html>") && page.ends_with("</html>\n"));
+        assert_eq!(page.matches("<style>").count(), 1);
+        assert!(!page.contains("<script src") && !page.contains("rel=\"stylesheet\""));
+        // And with the texts in, still only the theme script's and the app
+        // script's end, and the styles' end.
+        let lower = page.to_ascii_lowercase();
+        assert_eq!(
+            lower.matches("</script").count(),
+            2,
+            "</script> in the page"
+        );
+        assert_eq!(lower.matches("</style").count(), 1, "</style> in the page");
+        let at = page.find(&format!("<script>\n{head}")).unwrap();
+        assert!(!page[at..].contains("<!--"), "<!-- in the app's script");
+    }
+
+    #[test]
+    fn every_language_has_its_button() {
+        // Status → Settings → Language: Auto, and a button per language.
+        let attr = "data-lang-choice=\"";
+        let buttons: BTreeSet<&str> = PAGE_HTML
+            .match_indices(attr)
+            .filter_map(|(i, _)| PAGE_HTML[i + attr.len()..].split_once('"'))
+            .map(|(code, _)| code)
+            .filter(|code| *code != "auto")
+            .collect();
+        let langs: BTreeSet<&str> = LANGS.iter().map(|(lang, _)| *lang).collect();
+        assert_eq!(buttons, langs, "the language buttons and LANGS");
+    }
+
+    #[test]
+    fn texts_cannot_end_the_script_early() {
+        let json = r#"{"a": "</script><!-- b"}"#;
+        let safe = script_safe(json);
+        assert_eq!(safe, r#"{"a": "<\/script><\u0021-- b"}"#);
+        let (a, b): (Value, Value) = (
+            serde_json::from_str(json).unwrap(),
+            serde_json::from_str(&safe).unwrap(),
+        );
+        assert_eq!(a, b, "still the same JSON");
     }
 }

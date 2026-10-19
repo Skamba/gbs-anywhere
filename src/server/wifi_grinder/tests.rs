@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use tokio::net::TcpListener;
 
 use super::*;
-use crate::protocol::{MachineConfig, MachineError, Phase, ShotResult};
+use crate::protocol::{GrinderRange, MachineConfig, MachineError, Phase, ShotResult};
 use crate::server::wait_for;
 
 /// The pairing ID the fake hands out.
@@ -594,6 +594,39 @@ async fn the_app_sees_a_grinder_that_does_not_answer_until_it_does() {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     wait_for("paired", || paired(&server)).await;
     assert!(!wifi(&server).unreachable);
+}
+
+#[tokio::test]
+async fn the_jobs_target_time_sets_the_shot_window() {
+    let (server, fake) = start(Fake::default(), None, None).await;
+    wait_for("pairing", || paired(&server)).await;
+    // `in_grinder_range` of the last shot reported.
+    let last_verdict = || {
+        server.with(|m, _| {
+            m.events_after(0)
+                .filter_map(|e| match e.event {
+                    MachineEvent::ShotReported {
+                        in_grinder_range, ..
+                    } => Some(in_grinder_range),
+                    _ => None,
+                })
+                .last()
+        })
+    };
+
+    // A 20 s target: within 15 s of it, but over 10 s.
+    let mut timed = job("g-1", 40_000);
+    timed["durationExpectedMs"] = json!(20_000);
+    fake.lock().unwrap().jobs.push(timed);
+    wait_for("the brew", || brewing(&server)).await;
+    let window = GrinderRange {
+        min_ms: 10_000,
+        max_ms: 35_000,
+    };
+    assert_eq!(server.with(|m, _| m.grinder_range()), Some(window));
+    // Within the E64 WS's 80 s, but more than 15 s over this target.
+    report(&server, 36.0, 40.0);
+    assert_eq!(last_verdict(), Some(Some(false)));
 }
 
 #[tokio::test]

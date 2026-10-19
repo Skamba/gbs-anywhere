@@ -212,6 +212,25 @@ fn default_true() -> bool {
     true
 }
 
+/// The coffees in a `LAST_COFFEE` reply, newest first. The cloud now and
+/// then sends `null` in place of the list, so a list that is `null` or left
+/// out means no coffees. A reply without an `output` object, or anything
+/// else in place of the list, is still an error, so a change of format
+/// does not go unnoticed.
+pub fn parse_last_coffees(v: &Value) -> anyhow::Result<Vec<LastCoffee>> {
+    let Some(output) = v.get("output").and_then(Value::as_object) else {
+        bail!("LAST_COFFEE: unexpected shape: no output object");
+    };
+    let mut list = match output.get("lastCoffees") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(raw) => {
+            Vec::<LastCoffee>::deserialize(raw).context("LAST_COFFEE: unexpected shape")?
+        }
+    };
+    list.sort_by_key(|c| std::cmp::Reverse(c.time));
+    Ok(list)
+}
+
 /// A machine on the account.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -379,10 +398,7 @@ impl CloudClient {
                 "coffee log",
             )
             .await?;
-        let mut list: Vec<LastCoffee> = serde_json::from_value(v["output"]["lastCoffees"].clone())
-            .context("LAST_COFFEE: unexpected shape")?;
-        list.sort_by_key(|c| std::cmp::Reverse(c.time));
-        Ok(list)
+        parse_last_coffees(&v)
     }
 }
 
@@ -495,5 +511,50 @@ mod tests {
             .unwrap();
         assert_eq!(get("X-Nonce"), "6f1d2c3b-4a59-4e6f-9a8b-7c6d5e4f3a2b");
         assert_eq!(get("X-Timestamp"), "1790000000000");
+    }
+
+    /// A list in `output` that is `null` or missing is no coffees, not an
+    /// error; any other shape still is.
+    #[test]
+    fn a_null_coffee_list_reads_as_no_coffees() {
+        for none in [
+            json!({"output": {"lastCoffees": null}}),
+            json!({"output": {}}),
+        ] {
+            let list = parse_last_coffees(&none).unwrap();
+            assert!(list.is_empty(), "{none}");
+        }
+        for wrong in [
+            json!({"output": {"lastCoffees": {}}}),
+            json!({"output": {"lastCoffees": "none"}}),
+            json!({"output": {"lastCoffees": [null]}}),
+            json!({"output": {"lastCoffees": [{"extractionSeconds": 25.0}]}}),
+            json!({"output": null}),
+            json!({}),
+            json!({"output": []}),
+            json!({"output": [null]}),
+            json!({"output": 0}),
+            json!([{"output": {}}]),
+            json!([]),
+            json!(null),
+        ] {
+            let e = parse_last_coffees(&wrong).unwrap_err();
+            assert!(
+                format!("{e:#}").starts_with("LAST_COFFEE: unexpected shape: "),
+                "{wrong}: {e:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn coffees_come_newest_first() {
+        let list = parse_last_coffees(&json!({"output": {"lastCoffees": [
+            {"time": 1, "extractionSeconds": 20.0},
+            {"time": 3, "extractionSeconds": 22.0},
+            {"time": 2, "extractionSeconds": 21.0},
+        ]}}))
+        .unwrap();
+        let times: Vec<i64> = list.iter().map(|c| c.time).collect();
+        assert_eq!(times, [3, 2, 1]);
     }
 }

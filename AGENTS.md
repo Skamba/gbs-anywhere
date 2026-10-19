@@ -29,7 +29,11 @@ file is for agents changing the code.
   one folder each (see [Integrations](#integrations)). `mod.rs` has the
   shared rules (`Link`), `kind.rs` the setup forms and `manager.rs` the
   running integrations, saved through `server/settings.rs`.
-- `web/index.html`: the whole phone app (HTML, CSS, JS), no build step.
+- `web/`: the phone app, one page with no build step. `index.html` holds the
+  markup and the small script that sets the theme before the first paint,
+  `app.css` the styles, `app.js` the app's script, and `strings/<lang>.json`
+  its texts, one file per language. `control_api.rs` fills them into
+  `index.html` once at startup, so the page still comes in one response.
 - `src/main.rs`: flags and startup only.
 
 ## Commands
@@ -43,8 +47,8 @@ cargo fmt
 cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-check off
 ```
 
-- `web/index.html` is compiled into the binary (`include_str!`). After
-  editing it, rebuild and restart the server; refreshing the browser alone
+- The files in `web/` are compiled into the binary (`include_str!`). After
+  editing one, rebuild and restart the server; refreshing the browser alone
   shows the old page.
 - Port 80, the default, is what a real grinder uses. Use another port when 80
   is taken. Keep local settings files under `target/` (git-ignored), because
@@ -125,7 +129,7 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   `Detail::keyed` (`<id>.<state>`) and its numbers with `Detail::var`
   (unit in the name: `ago_ms`, `time_s`, `weight_g`); the API shows them as
   `detail_key` and `detail_vars` next to `detail`. The German wording goes
-  into the app's catalog, `integ.detail.<key>` for status lines and
+  into `web/strings/de.json`, `integ.detail.<key>` for status lines and
   `kind.<id>.summary` / `kind.<id>.field.<key>.label|help|placeholder` for
   the form. The placeholder leaves the unit out (`time_s` is `{time}`);
   `ago_ms`, `time_s` and `weight_g` get their own format, other numbers up
@@ -139,17 +143,24 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
 
 ## Web app
 
-- One file, no framework, no requests to other hosts: it is served on a home
-  network that may have no internet access.
+- One page, no framework, no build step, no requests to other hosts: it is
+  served on a home network that may have no internet access. The server
+  fills the styles, the script and the texts into the page (see
+  [Layout](#layout)), so it still comes in one response.
 - Colours are CSS variables on `:root`, redefined for dark mode. Use them
   instead of literal colours.
-- Every text the app writes is in the `STRINGS` catalog, in `en` and `de`
-  with the same keys, and goes through `t()`. Integration texts that come
-  from the server in English (`kind.*`, `integ.detail.*`) are the
-  exception: they are only in `de`, and English shows the server's text.
-  The tests in `control_api.rs` check this: the same keys and placeholders
-  in `en` and `de`, both `.e64` and `.wifi` wordings, and every key the page
-  passes literally to `t()`/`tv()` or names in `data-i18n` is in the catalog.
+- Every text the app writes is in the catalogs in `web/strings/` (`STRINGS`
+  in the script), in `en.json` and `de.json` with the same keys, and goes
+  through `t()`. A plural is an object of forms, `{"one": …, "other": …}`.
+  Integration texts that come from the server in English (`kind.*`,
+  `integ.detail.*`) are the exception: they are only in `de.json`, and
+  English shows the server's text. The tests in `control_api.rs` read the
+  catalogs as JSON and check this: the same keys and placeholders in every
+  language, both `.e64` and `.wifi` wordings, and every key the page passes
+  literally to `t()`/`tv()` or names in `data-i18n` is in the catalog.
+- A new language is a file in `web/strings/`, its line in `LANGS` in
+  `control_api.rs` (the page takes its list from there), its button under
+  Status → Settings → Language, and its fallback locale in `setLanguage()`.
 - Phone first: content at most 480 px wide, 16 px side padding, no
   horizontal scrolling.
 - Typing the time and weight by hand is the default flow and must work with no

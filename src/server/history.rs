@@ -71,8 +71,9 @@ pub struct Shot {
     /// Only for a success.
     pub time_ms: Option<u32>,
     pub weight_g: Option<f64>,
-    /// Only for a success: whether the grinder adjusts from its time
-    /// ([`ShotResult::in_grinder_range`]). Older files have none.
+    /// Only for a success: whether the grinder adjusts from its time, as on
+    /// its `shot_reported` event. None when the shot's window is not known
+    /// (an E65/E80 brew job without a target time); older files have none.
     pub in_grinder_range: Option<bool>,
     /// What the grinder aims for, when it said.
     pub target_time_ms: Option<u32>,
@@ -347,7 +348,7 @@ enum End {
     /// With a shot result, and whether the grinder adjusts from its time.
     Shot {
         result: ShotResult,
-        in_grinder_range: bool,
+        in_grinder_range: Option<bool>,
     },
     /// Without one, for this cause.
     Aborted(AbortCause),
@@ -430,12 +431,7 @@ fn shot(open: &Open, ended: Instant, wall: SystemTime, end: End) -> Shot {
         End::Shot {
             result,
             in_grinder_range,
-        } => (
-            ShotOutcome::Succeeded,
-            Some(result),
-            Some(in_grinder_range),
-            None,
-        ),
+        } => (ShotOutcome::Succeeded, Some(result), in_grinder_range, None),
         End::Aborted(cause) => (ShotOutcome::of(cause), None, None, Some(cause)),
     };
     Shot {
@@ -507,6 +503,7 @@ async fn record(server: Arc<Server>, mut events: broadcast::Receiver<EventRecord
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::protocol::GrinderRange;
     use serde_json::{Value, json};
     use std::sync::LazyLock;
     use std::time::UNIX_EPOCH;
@@ -545,12 +542,12 @@ mod tests {
         shot(&open(), at(secs), wall(at(secs)), end)
     }
 
-    /// A shot of `secs` seconds and 36 g.
+    /// A shot of `secs` seconds and 36 g, after an E64 WS knob press.
     fn success(secs: u64) -> End {
         let result = ShotResult::new(Duration::from_secs(secs), 36.0);
         End::Shot {
             result,
-            in_grinder_range: result.in_grinder_range(),
+            in_grinder_range: Some(GrinderRange::E64.contains(result.time_ms)),
         }
     }
 
@@ -570,11 +567,12 @@ mod tests {
         }
     }
 
+    /// A shot of `ms` and `grams`, checked against the E64 WS's window.
     fn reported(ms: u32, grams: f64) -> MachineEvent {
         let result = ShotResult::new(Duration::from_millis(ms.into()), grams);
         MachineEvent::ShotReported {
             result,
-            in_grinder_range: result.in_grinder_range(),
+            in_grinder_range: Some(GrinderRange::E64.contains(result.time_ms)),
         }
     }
 

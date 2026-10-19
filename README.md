@@ -77,7 +77,8 @@ if `HTTPS_PROXY` is set; the link to an E65/E80 grinder never does.
 **To update** with Docker, get the new image and re-create the container
 with the same command and volume: `docker pull ghcr.io/skamba/gbs-anywhere`,
 `docker rm -f gbs-anywhere`, then the `docker run` above. The `/data` volume
-keeps everything you set up.
+keeps everything you set up, and an app left open reloads itself once the
+new version answers and nothing is being typed in it.
 
 ## Set up the E64 WS
 
@@ -193,6 +194,10 @@ shot is coming. Pull the shot and enter its time and weight in the app
 it. The grinder waits for it up to the shot window (3 minutes unless changed
 in the app's settings or with `--shot-window-s`); if you grind again first,
 the shot counts for the newer grind.
+
+The grinder adjusts only from a shot over 10 s and within 15 s of the
+recipe's **Brew Time** (for 28 s: over 13 s, up to 43 s; for 20 s: over
+10 s, up to 35 s), and not from an aborted shot.
 
 **On an ESP32-S3 instead of a computer**
 

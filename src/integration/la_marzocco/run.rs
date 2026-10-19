@@ -346,6 +346,7 @@ async fn watch(
 mod tests {
     use super::*;
     use crate::integration::Status;
+    use crate::integration::la_marzocco::cloud::parse_last_coffees;
     use serde_json::json;
 
     #[test]
@@ -411,9 +412,7 @@ mod tests {
             {"time": 1790535000000i64, "extractionSeconds": 3.0, "valid": false,
              "invalidReason": "TooShort"}
         ]}});
-        let mut list: Vec<LastCoffee> =
-            serde_json::from_value(raw["output"]["lastCoffees"].clone()).unwrap();
-        list.sort_by_key(|c| std::cmp::Reverse(c.time));
+        let list = parse_last_coffees(&raw).unwrap();
         assert_eq!(list[0].dose_value, Some(37.9));
         assert!((list[0].extraction_seconds - 22.092).abs() < 1e-3);
         assert!(!list[2].valid);

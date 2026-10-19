@@ -208,6 +208,22 @@ async fn a_weight_sent_as_volume_ml_still_counts() {
     assert_eq!(state["shot"]["last"]["weight_g"], 38.5);
 }
 
+/// The app is one HTML document with its styles, script and texts inline,
+/// so a phone needs nothing more, also on a network without internet.
+#[tokio::test]
+async fn the_app_comes_in_one_response() {
+    let base = start().await;
+    let res = reqwest::get(format!("{base}/")).await.unwrap();
+    assert_eq!(res.status(), 200);
+    let kind = res.headers()[reqwest::header::CONTENT_TYPE]
+        .to_str()
+        .unwrap();
+    assert_eq!(kind, "text/html; charset=utf-8");
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+    assert_eq!(res.headers()["referrer-policy"], "no-referrer");
+    assert_eq!(res.text().await.unwrap(), control_api::page());
+}
+
 #[tokio::test]
 async fn browser_icon_requests_are_not_grinder_traffic() {
     let base = start().await;
@@ -768,6 +784,16 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// `grinder.shot_range` in `GET /api/state`, which is always there (`null`
+/// when not known).
+async fn grinder_range(base: &str) -> Value {
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    state["grinder"]
+        .get("shot_range")
+        .cloned()
+        .expect("shot_range")
+}
+
 #[tokio::test]
 async fn the_state_comes_in_groups() {
     let base = start().await;
@@ -787,10 +813,10 @@ async fn the_state_comes_in_groups() {
 
     assert_eq!(state["shot"]["phase"], "ready");
     assert_eq!(state["shot"]["last"], Value::Null);
-    // Which shot times the grinder adjusts from.
     assert_eq!(
         state["grinder"]["shot_range"],
-        json!({ "min_ms": 10_000, "max_ms": 80_000 })
+        Value::Null,
+        "no request yet"
     );
     assert_eq!(state["grinder"]["last_grind"], Value::Null);
     assert_eq!(state["grinder"]["grind_blocked"], Value::Null);
@@ -816,6 +842,81 @@ async fn the_state_comes_in_groups() {
         (&json!("running"), &json!(false))
     );
     assert_eq!(state["grinder"]["grind_blocked"]["cause"], "shot_running");
+}
+
+#[tokio::test]
+async fn the_state_says_which_shot_times_the_grinder_takes() {
+    let (base, x) = start_server().await;
+    assert_eq!(grinder_range(&base).await, Value::Null, "no request yet");
+
+    let grinder = Grinder::new(&base);
+    grinder
+        .post(PATH_SCRIPTS_EXECUTE, json!({ "ID": START_BREW_SCRIPT_ID }))
+        .await;
+    assert_eq!(
+        grinder_range(&base).await,
+        json!({ "min_ms": 10_000, "max_ms": 80_000 }),
+        "the E64 WS's"
+    );
+    x.with(|m, now| m.abort(now)).unwrap();
+
+    // An E65/E80 brew job's: within 15 s of its target time.
+    let job = crate::protocol::GrindResult::parse(br#"{"SYNC_BEVERAGE_WEIGHT":40}"#).unwrap();
+    wait_for("ready again", || {
+        x.with(|m, now| m.on_brew_job(now, job.clone(), Some(28_000)))
+    })
+    .await;
+    assert_eq!(
+        grinder_range(&base).await,
+        json!({ "min_ms": 13_000, "max_ms": 43_000 })
+    );
+}
+
+#[tokio::test]
+async fn an_e65_shot_counts_within_15_s_of_its_target_time() {
+    let (base, x) = start_server().await;
+    x.record_history(None).unwrap();
+    let job = crate::protocol::GrindResult::parse(br#"{"SYNC_BEVERAGE_WEIGHT":40}"#).unwrap();
+
+    // A target time, a shot that long, and whether the grinder adjusts from
+    // it.
+    for (n, (target_ms, time_ms, adjusts)) in [
+        (Some(28_000), 13_000, json!(false)),
+        (Some(24_000), 11_000, json!(true)),
+        (None, 50_000, Value::Null),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        wait_for("ready for the next job", || {
+            x.with(|m, now| m.on_brew_job(now, job.clone(), target_ms))
+        })
+        .await;
+        let shot = json!({ "time_ms": time_ms, "weight_g": 40 });
+        let (code, _) = call(
+            reqwest::Method::POST,
+            format!("{base}/api/shot/result"),
+            Some(shot),
+        )
+        .await;
+        assert_eq!(code, 200);
+        wait_for("the shot", || x.history().list().len() == n + 1).await;
+
+        let (_, events) = call(reqwest::Method::GET, format!("{base}/api/events"), None).await;
+        let reported = events
+            .as_array()
+            .unwrap()
+            .iter()
+            .rfind(|e| e["kind"] == "shot_reported")
+            .unwrap();
+        // There as `null` when the window is not known, not left out.
+        let adjusts = Some(&adjusts);
+        assert_eq!(reported.get("in_grinder_range"), adjusts, "{time_ms} ms");
+        let (_, history) = call(reqwest::Method::GET, format!("{base}/api/history"), None).await;
+        let newest = &history["shots"][0];
+        assert_eq!(newest["outcome"], "succeeded");
+        assert_eq!(newest.get("in_grinder_range"), adjusts, "{time_ms} ms");
+    }
 }
 
 #[tokio::test]

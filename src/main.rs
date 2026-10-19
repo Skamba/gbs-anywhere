@@ -315,10 +315,10 @@ fn describe(rec: &EventRecord) -> String {
             rec.seq,
             result.time_ms as f64 / 1000.0,
             result.weight_g,
-            if *in_grinder_range {
-                ""
+            if *in_grinder_range == Some(false) {
+                "  (too short or too long: the grinder will ignore it)"
             } else {
-                "  (10 s or less, or over 80 s: the grinder will ignore it)"
+                ""
             }
         ),
         MachineEvent::ShotAborted { reason, .. } => format!("[{}] shot aborted: {reason}", rec.seq),

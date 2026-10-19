@@ -46,8 +46,8 @@
 //!   Status lines are English. Give each one a key with [`Detail::keyed`]
 //!   (`<id>.<state>`, e.g. `la_marzocco.last_coffee`) and its numbers with
 //!   [`Detail::var`], and the app can show it in the person's language
-//!   (`integ.detail.<key>` in its catalog); a line without a key, or one the
-//!   catalog lacks, is shown in English. Errors stay English.
+//!   (`integ.detail.<key>` in `web/strings/<lang>.json`); a line without a
+//!   key, or one the catalog lacks, is shown in English. Errors stay English.
 //! * Then list it here: `pub mod <id>;`, its `KIND` in [`KINDS`], and its
 //!   args in [`CliArgs`] and [`CliArgs::configured`].
 //!

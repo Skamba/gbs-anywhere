@@ -76,15 +76,21 @@ a minor release may change behaviour.
   dated before 2026 are listed last, under "Unknown day". When the file can
   no longer be saved, the app says the history is kept in memory for now.
 - `grinder.shot_range` in `GET /api/state`: the shot times the grinder
-  adjusts from (over 10 s, up to 80 s); and `in_grinder_range` on each shot
-  in `GET /api/history` that succeeded: whether the grinder adjusted from it.
+  adjusts from for its current or last request. For the E64 WS that is
+  over 10 s and up to 80 s; for an E65/E80 GbS, within 15 s of the brew
+  job's target time and over 10 s (for a 28 s recipe: over 13 s, up to 43 s); `null`
+  while it is not known. And `in_grinder_range` on each shot in
+  `GET /api/history` that succeeded: whether the grinder adjusted from it,
+  by that shot's window.
   The History tab shows a shot the grinder ignored with a grey **Ignored**
-  badge instead of a green **Success**.
+  badge instead of a green **Success**, and the app's hint while you type
+  the time follows the same window.
 - The app can show gbs-anywhere's log, in a card at the bottom of Status
   (also opened with **Log** next to the last error in System status): the
   last 1,000 lines it printed (INFO and up), and new ones as they come
   (`GET /api/log`, `GET /api/log/stream`). Copying or downloading it
-  replaces IP addresses with placeholders, so it can go into a bug report.
+  replaces IP addresses and passwords in addresses with placeholders, so it
+  can go into a bug report.
 - Update check: once a day gbs-anywhere asks GitHub for its latest release,
   so the app can say when a newer one is out (`update` in `GET /api/state`).
   GitHub sees the request like any other, including your IP address; it
@@ -124,7 +130,9 @@ a minor release may change behaviour.
   reports the shot, the fields to type it in are hidden; they come back,
   with a note, when every integration has failed or none has reported the
   shot a minute after it should have ended. The History tab replaces the
-  list of this session's shots.
+  list of this session's shots. An app left open reloads itself when
+  gbs-anywhere is updated (once nothing is being typed in it), so it always
+  matches the server.
 - The image carries the licenses of the Rust crates built into it, in
   `/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES`.
 
@@ -199,7 +207,8 @@ reads `shot.last.weight_g`. One that only reacts to `shot_reported` and
   space in it) at startup, instead of failing on every request.
 - A fractional `--shot-window-s` is rounded to whole seconds.
 - `in_grinder_range` on `shot_reported` events is now also false for a
-  shot of 10 s or less, which the grinder does not adjust from either.
+  shot of 10 s or less, which the E64 WS does not adjust from either (for
+  an E65/E80 GbS, see `grinder.shot_range` above).
 - The La Marzocco form calls its poll setting "Check interval (seconds)" and
   says what it does; the Half Decent Scale form asks for the scale's IP
   address.
@@ -214,6 +223,9 @@ reads `shot.last.weight_g`. One that only reacts to `shot_reported` and
   devices on the network probing the port, no longer count as grinder
   traffic and are logged at debug level only, so they no longer fill the
   app's log. The `--log` transcript still records them.
+- A coffee log that the La Marzocco cloud sends with its list as `null`, or
+  without the list, now counts as empty, instead of logging a warning about
+  an unexpected shape and showing that error on the integration's card.
 
 ## [0.2.1] - 2026-10-10
 
