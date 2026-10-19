@@ -32,7 +32,7 @@ async fn start_server() -> (String, Arc<Server>) {
         .merge(grinder_router(state.clone(), false));
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    spawn_server(listener, app, addr);
+    spawn_server(listener, app, addr, &state);
     (format!("http://{addr}"), state)
 }
 
@@ -1255,10 +1255,10 @@ async fn a_broken_body_is_not_taken_for_a_large_one() {
 async fn browser_headers_can_be_let_through_to_the_grinder_routes() {
     // `--accept-browser-headers`, in case a grinder ever sends them.
     let state = Server::new(MachineConfig::default());
-    let app = grinder_router(state, true);
+    let app = grinder_router(state.clone(), true);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    spawn_server(listener, app, addr);
+    spawn_server(listener, app, addr, &state);
     let res = reqwest::Client::new()
         .get(format!("http://{addr}{PATH_MAKO}"))
         .header("origin", "null")
@@ -1266,4 +1266,62 @@ async fn browser_headers_can_be_let_through_to_the_grinder_routes() {
         .await
         .unwrap();
     assert_eq!(res.status(), 200);
+}
+
+#[tokio::test]
+async fn stopping_ends_the_live_streams_and_the_server() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let state = Server::with_log(
+        MachineConfig::default(),
+        Arc::new(LogBook::new(logbook::CAPACITY)),
+    );
+    // A port that was free a moment ago.
+    let addr = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let cfg = ServeConfig {
+        grinder: vec![addr],
+        control: None,
+        app_on_grinder_ports: true,
+        allowed_hosts: AllowedHosts::default(),
+        accept_browser_headers: false,
+    };
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let served = tokio::spawn(serve(state.clone(), cfg, async {
+        let _ = stopped.await;
+    }));
+    let base = format!("http://{addr}");
+    let mut streams = Vec::new();
+    for path in ["/api/events/stream", "/api/log/stream"] {
+        let mut res = None;
+        for _ in 0..250 {
+            if let Ok(r) = reqwest::get(format!("{base}{path}")).await {
+                res = Some(r);
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let res = res.expect("the server is up");
+        assert_eq!(res.status(), 200, "{path}");
+        streams.push(res);
+    }
+
+    let asked = Instant::now();
+    stop.send(()).unwrap();
+    for mut stream in streams {
+        let ended = async { while let Ok(Some(_)) = stream.chunk().await {} };
+        tokio::time::timeout(Duration::from_secs(2), ended)
+            .await
+            .expect("the stream ends");
+    }
+    let served = tokio::time::timeout(Duration::from_secs(2), served)
+        .await
+        .expect("serve returns");
+    served.unwrap().unwrap();
+    assert!(
+        asked.elapsed() < STOP_GRACE,
+        "without waiting out the grace"
+    );
+    assert!(reqwest::get(format!("{base}/api/state")).await.is_err());
 }

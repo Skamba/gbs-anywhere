@@ -23,7 +23,7 @@ use tokio::task::AbortHandle;
 
 use crate::integration::Settings;
 use crate::protocol::AbortCause;
-use crate::server::wifi_grinder::grinder_address;
+use crate::server::wifi_grinder::{PairingLock, grinder_address};
 use crate::server::{Server, WifiConfig, WifiGrinder};
 
 /// The shot window unless set (`--shot-window-s`).
@@ -120,12 +120,7 @@ impl SettingsFile {
         let mut next = data.clone();
         change(&mut next);
         let json = serde_json::to_vec_pretty(&next)?;
-        let mut tmp = self.path.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = PathBuf::from(tmp);
-        write_private(&tmp, &json).with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, &self.path)
-            .with_context(|| format!("writing {}", self.path.display()))?;
+        save_private(&self.path, &json)?;
         *data = next;
         Ok(())
     }
@@ -163,6 +158,32 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     }
     f.write_all(bytes)?;
     f.sync_all()
+}
+
+/// Replaces the file at `path` with `bytes`, readable by the owner only
+/// ([`write_private`]). It is written next to it as `<path>.tmp` and renamed
+/// into place, so a crash never leaves half a file; on unix the directory is
+/// synced too, so the rename outlasts a power cut. The `.tmp` name is fixed,
+/// so each file needs a single writer.
+pub(crate) fn save_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    write_private(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        // Best effort: some file systems (network shares) cannot sync a
+        // directory, and the file itself is written by now.
+        let dir = match path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => dir,
+            _ => Path::new("."),
+        };
+        if let Err(e) = std::fs::File::open(dir).and_then(|d| d.sync_all()) {
+            tracing::debug!("{}: cannot sync its directory: {e}", path.display());
+        }
+    }
+    Ok(())
 }
 
 /// Makes a file [`write_private`] keeps readable by its owner only if others
@@ -514,11 +535,11 @@ impl Live {
     }
 
     /// The link for `host`, ready to run; loads (or makes) the pairing.
-    fn prepare_link(&self, host: &str) -> anyhow::Result<WifiGrinder> {
+    fn prepare_link(&self, host: &str, lock: PairingLock) -> anyhow::Result<WifiGrinder> {
         let mut cfg = WifiConfig::from_host(host)?;
         cfg.pairing_file = self.startup.pairing_file.clone();
         cfg.pairing_id = self.startup.pairing_id;
-        WifiGrinder::new(cfg)
+        WifiGrinder::new(cfg, lock)
     }
 }
 
@@ -569,7 +590,8 @@ impl Server {
             }
         }
         if let Some(host) = host {
-            let link = live.prepare_link(&host).with_context(|| match from {
+            let lock = self.pairing_lock.clone();
+            let link = live.prepare_link(&host, lock).with_context(|| match from {
                 SettingSource::App => "the grinder address set in the app".to_owned(),
                 _ => "--grinder".to_owned(),
             })?;
@@ -618,8 +640,10 @@ impl Server {
         let (new_host, host_from) = grinder_host(&live.startup, &app);
         let relink = old_host != new_host;
         let link = match &new_host {
+            // The old link still runs here, and keeps the pairing file until
+            // its task has ended (see `PairingLock`).
             Some(host) if relink => Some(
-                live.prepare_link(host)
+                live.prepare_link(host, self.pairing_lock.clone())
                     .map_err(|e| SettingsError::Grinder(format!("{e:#}")))?,
             ),
             _ => None,
@@ -684,10 +708,15 @@ impl Server {
             "grinder: pairing over Generic WiFi with {}",
             link.base_url()
         );
+        // Taken here, under the settings lock, rather than in the task: an
+        // older link that is still finishing a step can then never take over
+        // again, so only this one reports and gets the pairing IDs typed in
+        // the app.
+        let (owner, ids) = self.attach_wifi();
         // Shown until the link reports for itself, so the app never sees an
         // address without a link.
-        self.show_wifi(link.connecting());
-        let task = tokio::spawn(link.run(self.clone())).abort_handle();
+        self.set_wifi(owner, link.connecting());
+        let task = tokio::spawn(link.run(self.clone(), owner, ids)).abort_handle();
         live.link = Some(RunningLink { task });
     }
 
@@ -699,7 +728,8 @@ impl Server {
             return;
         };
         // The task ends at its next await; if it is in the middle of a step
-        // right now, what it still reports is ignored once detached.
+        // right now, what it still reports is ignored once detached, and the
+        // next link waits for it to end before it touches the pairing file.
         old.task.abort();
         self.detach_wifi();
         self.with(|m, now| {

@@ -29,7 +29,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::broadcast::{self, error::RecvError};
-use tokio::sync::mpsc;
+use tokio::sync::{OwnedMutexGuard, mpsc};
 use tokio::time::MissedTickBehavior;
 
 use crate::integration::Backoff;
@@ -268,6 +268,13 @@ impl PairingIdRefusal {
     }
 }
 
+/// Held by the link that may write the pairing file, for as long as its
+/// task lives. A replaced link is aborted, which only ends it at its next
+/// await, and it may be saving the pairing right then: the next link waits
+/// for it before it loads the pairing, so it starts from what the old one
+/// saved and the file always has one writer.
+pub type PairingLock = Arc<tokio::sync::Mutex<()>>;
+
 /// What survives a restart.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Pairing {
@@ -304,18 +311,23 @@ impl Pairing {
         }
     }
 
+    /// The pairing in `cfg`'s file, and the command line's pairing ID when
+    /// it is another one, to fall back on.
+    fn open(cfg: &WifiConfig) -> anyhow::Result<(Self, Option<u32>)> {
+        let mut pairing = Self::load(cfg.pairing_file.as_deref())?;
+        let mut spare_id = cfg.pairing_id.filter(|id| pairing.pairing_id != Some(*id));
+        if pairing.pairing_id.is_none() {
+            pairing.pairing_id = spare_id.take();
+        }
+        Ok((pairing, spare_id))
+    }
+
     fn save(&self, path: Option<&Path>) -> anyhow::Result<()> {
         let Some(path) = path else {
             return Ok(());
         };
         let json = serde_json::to_vec_pretty(self)?;
-        // Write next to it and rename, so a crash never leaves half a file.
-        let mut tmp = path.as_os_str().to_owned();
-        tmp.push(".tmp");
-        let tmp = PathBuf::from(tmp);
-        crate::server::settings::write_private(&tmp, &json)
-            .with_context(|| format!("writing {}", tmp.display()))?;
-        std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
+        crate::server::settings::save_private(path, &json)
     }
 }
 
@@ -389,6 +401,10 @@ pub struct WifiGrinder {
     /// Which link this is to the server: what an older link that was
     /// replaced (new grinder address) still reports is ignored.
     owner: u64,
+    /// Who may write the pairing file (see [`PairingLock`]).
+    lock: PairingLock,
+    /// Held while this link may write it.
+    holding: Option<OwnedMutexGuard<()>>,
     /// The grinder could not be reached last time (it is off or in standby):
     /// further failures are not logged until it answers again, and the app
     /// says so (`WifiLink::unreachable`).
@@ -397,16 +413,18 @@ pub struct WifiGrinder {
 
 impl WifiGrinder {
     /// Loads the pairing (or makes a device id) and saves it right away, so an
-    /// unwritable file fails at startup rather than after pairing.
-    pub fn new(cfg: WifiConfig) -> anyhow::Result<Self> {
+    /// unwritable file fails at startup rather than after pairing. While
+    /// another link still holds the file (it is being replaced), the pairing
+    /// is only read here, and loaded and saved again once that link has
+    /// ended (see [`PairingLock`]).
+    pub fn new(cfg: WifiConfig, lock: PairingLock) -> anyhow::Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let file = cfg.pairing_file.as_deref();
-        let mut pairing = Pairing::load(file)?;
-        let mut spare_id = cfg.pairing_id.filter(|id| pairing.pairing_id != Some(*id));
-        if pairing.pairing_id.is_none() {
-            pairing.pairing_id = spare_id.take();
+        // Taken before the read: a link that ends in between may have saved.
+        let holding = lock.clone().try_lock_owned().ok();
+        let (pairing, spare_id) = Pairing::open(&cfg)?;
+        if holding.is_some() {
+            pairing.save(cfg.pairing_file.as_deref())?;
         }
-        pairing.save(file)?;
         let http = reqwest::Client::builder()
             // The grinder's certificate is self-signed and names no host, so it
             // cannot be checked. Requests only go to the configured address,
@@ -439,7 +457,15 @@ impl WifiGrinder {
             problem: None,
             unreachable: false,
             owner: 0,
+            lock,
+            holding,
         })
+    }
+
+    /// Loads the pairing again and saves it, as [`WifiGrinder::new`] does.
+    fn reopen_pairing(&mut self) -> anyhow::Result<()> {
+        (self.pairing, self.spare_id) = Pairing::open(&self.cfg)?;
+        self.pairing.save(self.cfg.pairing_file.as_deref())
     }
 
     /// Where the grinder is, as requests go to it.
@@ -449,15 +475,30 @@ impl WifiGrinder {
 
     /// Runs until the process ends or the link is replaced: pairs when
     /// needed, then serves the grinder's jobs, retrying with backoff on
-    /// errors.
-    pub async fn run(mut self, server: Arc<Server>) {
-        // Room for one: only the latest typed ID matters.
-        let (tx, mut ids) = mpsc::channel(1);
-        self.owner = server.attach_wifi(tx);
+    /// errors. `owner` and `ids` come from attaching it to the server
+    /// (`Server::attach_wifi`).
+    pub(super) async fn run(
+        mut self,
+        server: Arc<Server>,
+        owner: u64,
+        mut ids: mpsc::Receiver<u32>,
+    ) {
+        self.owner = owner;
+        let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
+        if self.holding.is_none() {
+            // The link this one replaces may still be saving the pairing:
+            // start from what it saved, once it has ended.
+            self.holding = Some(self.lock.clone().lock_owned().await);
+            while let Err(e) = self.reopen_pairing() {
+                tracing::warn!("grinder: {e:#}");
+                self.status(&server, WifiState::Failing, None, format!("{e:#}"));
+                backoff.wait().await;
+            }
+            backoff.reset();
+        }
         // One subscription for the whole run, so a shot reported while a
         // request is being retried is still answered.
         let mut events = server.subscribe();
-        let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
         self.status(&server, WifiState::Connecting, None, "connecting");
         loop {
             let outcome = match self.pairing.pairing_id {
@@ -774,11 +815,11 @@ impl WifiGrinder {
                 // brew ends here, and its event answers this job as cancelled.
                 // If someone reported or aborted it a moment ago, that event
                 // answers it instead; only a brew already over leaves it.
-                let over = server.with(|m, now| {
+                let over = server.with_wifi(self.owner, |m, now| {
                     m.give_up(now, AbortCause::GrinderShotReplaced).is_err()
                         && m.phase(now) == Phase::Ready
                 });
-                if over {
+                if over == Some(true) {
                     self.current = None;
                 }
             } else if waiting {
@@ -823,12 +864,12 @@ impl WifiGrinder {
             return;
         };
         let target_ms = job.target_ms();
-        let started = server.with(|m, now| {
+        let started = server.with_wifi(self.owner, |m, now| {
             // A shot that is still being shown, or a brew started by hand,
             // goes first; the job waits for the next poll.
             m.on_brew_job(now, grind_result(job), target_ms)
         });
-        if !started {
+        if started != Some(true) {
             return;
         }
         for other in fresh.iter().filter(|j| j.grind_uuid != job.grind_uuid) {
@@ -892,7 +933,7 @@ impl WifiGrinder {
             return;
         }
         // Already over when someone reported or aborted it a moment ago.
-        let _ = server.with(|m, now| m.give_up(now, cause));
+        let _ = server.with_wifi(self.owner, |m, now| m.give_up(now, cause));
         self.report_problem(server, cause.text());
     }
 
