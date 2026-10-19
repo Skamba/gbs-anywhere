@@ -236,10 +236,10 @@ line can stay as it is:
   and weight before it gives up on that shot (`--brew-timeout-s`, 3 minutes
   unless set). In the app it goes from 0:30 to 60:00 minutes, or **No
   limit**. − and + change it in 15 s steps (whole minutes above 10:00). To
-  type it, a number alone is minutes up to 60 and seconds above (`3` is
-  3:00, `150` is 2:30), which works on a phone's number pad; `m:ss`
-  (`2:30`) and a number with a unit (`2.5 min`, `150 s`) work too. `0` is
-  no limit.
+  type it, a whole number is minutes up to 60 and seconds above (`3` is
+  3:00, `150` is 2:30), and one with decimals is minutes (`2.5` is 2:30),
+  which works on a phone's number pad; `m:ss` (`2:30`) and a number with a
+  unit (`150 s`) work too. `0` is no limit.
 - **Grinder IP address**: the E65/E80 GbS to pair with (`--grinder`,
   `GRINDER_HOST`), optionally with `:port`. A new address takes effect at
   once and keeps the pairing. Saving the field empty removes the address and
@@ -261,8 +261,8 @@ means no grinder, whatever `GRINDER_HOST` says.
 
 In the API (`PUT /api/settings`), `null` goes back to the start setting,
 like **Use start setting**. For `grinder_host` that is not the same as
-removing the address, which is `""`. (Nightly builds before this took
-`null` as removing it; an address removed that way stays removed.)
+removing the address, which is `""`; without `GRINDER_HOST`, the two are
+the same.
 
 **Appearance** (System, Light, Dark) and **Language** (Auto, English,
 Deutsch) sit in the same card but are kept on each device: by default the app

@@ -163,7 +163,7 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub shot_window_s: Option<u32>,
     /// The E65/E80 grinder's address; `Some(None)` when it was removed in
-    /// the app (`""` in the API, `null` in the file).
+    /// the app over a start address (`""` in the API, `null` in the file).
     #[serde(
         default,
         deserialize_with = "present",
@@ -231,7 +231,8 @@ pub enum HostChange {
     /// Back to `--grinder` / `GRINDER_HOST`, if set (`null`): the app's
     /// value is forgotten.
     Reset,
-    /// No E65/E80 grinder, whatever the flags say (`""`).
+    /// No E65/E80 grinder, whatever the flags say (`""`). Without a start
+    /// address it is the same as [`HostChange::Reset`].
     Remove,
     Set(String),
 }
@@ -434,6 +435,11 @@ impl Live {
                 "grinder_host": grinder_host(&self.startup, &start).0,
                 "update_check": update_check(&self.startup, &start).0,
             },
+            // What the app can set, besides 0 (no limit).
+            "shot_window_range": {
+                "min_s": MIN_SHOT_WINDOW_S,
+                "max_s": MAX_SHOT_WINDOW_S,
+            },
             "persistent": self.file.is_some(),
         })
     }
@@ -523,6 +529,11 @@ impl Server {
         if let Some(host) = change.grinder_host {
             app.grinder_host = match host {
                 HostChange::Reset => None,
+                // Removing stands in for the start address; without one the
+                // app's address is only forgotten, so a GRINDER_HOST set
+                // later counts. (The start settings don't change while it
+                // runs.)
+                HostChange::Remove if live.startup.grinder_host.is_none() => None,
                 HostChange::Remove => Some(None),
                 HostChange::Set(host) => Some(Some(host)),
             };
@@ -570,17 +581,21 @@ impl Server {
         if window.0 != old_window.0 {
             self.with(|m, _| m.set_brew_timeout(brew_timeout(window.0)));
         }
-        if old_host_from == SettingSource::App && host_from != SettingSource::App {
+        // (With no address left, the link's line below says it.)
+        if old_host_from == SettingSource::App
+            && host_from != SettingSource::App
+            && new_host.is_some()
+        {
             tracing::info!("settings: grinder address is the start setting again");
         }
         if relink {
             self.stop_link(&mut live);
             match link {
                 Some(link) => self.run_link(&mut live, link),
-                None if host_from == SettingSource::App => {
-                    tracing::info!("grinder: address removed in the app, link stopped")
-                }
-                None => tracing::info!("grinder: no address in the start settings, link stopped"),
+                None if host_from == SettingSource::App => tracing::info!(
+                    "grinder: address removed in the app (instead of --grinder), link stopped"
+                ),
+                None => tracing::info!("grinder: no address any more, link stopped"),
             }
         }
         Ok(live.json())
@@ -920,6 +935,47 @@ mod tests {
         assert_eq!(s["source"]["shot_window_s"], "default");
         assert_eq!(s["update_check"], true);
         assert_eq!(s["source"]["update_check"], "default");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn an_empty_address_without_a_start_address_is_forgotten() {
+        let dir = temp_dir("empty");
+        let path = dir.join("settings.json");
+        let x = Server::new(MachineConfig::default());
+        x.start_settings(Startup::default(), Some(SettingsFile::open(&path).unwrap()))
+            .unwrap();
+        let s = x
+            .change_settings(change(json!({ "grinder_host": "" })).unwrap())
+            .unwrap();
+        assert_eq!(s["grinder_host"], Value::Null);
+        assert_eq!(
+            s["source"]["grinder_host"], "default",
+            "nothing to stand in for"
+        );
+        let text: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(text.get("settings").is_none(), "no removal saved: {text}");
+
+        // So a GRINDER_HOST set later counts.
+        let y = Server::new(MachineConfig::default());
+        let flag = Startup {
+            grinder_host: Some("127.0.0.1:9".into()),
+            ..Startup::default()
+        };
+        y.start_settings(flag, Some(SettingsFile::open(&path).unwrap()))
+            .unwrap();
+        let s = y.settings_json();
+        assert_eq!(s["grinder_host"], "127.0.0.1:9");
+        assert_eq!(s["source"]["grinder_host"], "command_line");
+
+        // With one, `""` stands in for it.
+        let s = y
+            .change_settings(change(json!({ "grinder_host": "" })).unwrap())
+            .unwrap();
+        assert_eq!(s["grinder_host"], Value::Null);
+        assert_eq!(s["source"]["grinder_host"], "app");
+        let text: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(text["settings"], json!({ "grinder_host": null }));
         let _ = std::fs::remove_dir_all(dir);
     }
 

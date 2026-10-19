@@ -393,6 +393,7 @@
   .win-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
   .set-from { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; font-size: 12px; color: var(--muted); }
   .set-from .link-btn { margin-left: auto; font-size: 13px; }
+  .set-from .link-btn[aria-disabled="true"] { opacity: .45; cursor: default; }
   .win-field { width: 116px; justify-content: center; gap: 4px; }
   .win-field input { flex: 1 1 auto; width: 0; min-width: 0; font-size: 17px; text-align: right; }
   .win-field .unit { font-size: 15px; }
@@ -747,14 +748,14 @@
           <button type="button" class="tool" id="set-window-none" aria-pressed="false" data-i18n="settings.noLimit">No limit</button>
         </div>
         <p class="hint" id="set-window-msg" role="status"></p>
-        <div class="set-from" id="set-window-from" hidden><span id="set-window-from-text"></span><button type="button" class="link-btn" id="set-window-reset" aria-describedby="set-window-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
+        <div class="set-from" id="set-window-from" hidden><span id="set-window-from-text" tabindex="-1"></span><button type="button" class="link-btn" id="set-window-reset" aria-describedby="set-window-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
       </div>
       <div class="set-block" id="set-host-row" hidden>
         <div class="set-row">
           <span class="set-text"><span class="set-name" id="set-host-name" data-i18n="settings.host">Grinder IP address</span><span class="set-sub" id="set-host-value"></span></span>
           <button type="button" class="btn-plain sm" id="set-host-change" aria-controls="set-host-form" aria-expanded="false" data-i18n="common.change">Change</button>
         </div>
-        <div class="set-from" id="set-host-from" hidden><span id="set-host-from-text"></span><button type="button" class="link-btn" id="set-host-reset" aria-describedby="set-host-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
+        <div class="set-from" id="set-host-from" hidden><span id="set-host-from-text" tabindex="-1"></span><button type="button" class="link-btn" id="set-host-reset" aria-describedby="set-host-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
         <p class="hint warn" id="set-host-reset-error" role="alert" hidden></p>
       </div>
       <form class="stack" id="set-host-form" autocomplete="off" hidden>
@@ -775,7 +776,7 @@
             <button type="button" data-update="off" aria-pressed="false" data-i18n="settings.off">Off</button>
           </span>
         </div>
-        <div class="set-from" id="set-update-from" hidden><span id="set-update-from-text"></span><button type="button" class="link-btn" id="set-update-reset" aria-describedby="update-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
+        <div class="set-from" id="set-update-from" hidden><span id="set-update-from-text" tabindex="-1"></span><button type="button" class="link-btn" id="set-update-reset" aria-describedby="update-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
         <p class="hint warn" id="set-update-error" role="alert" hidden></p>
       </div>
       <p class="foot" id="set-foot" hidden></p>
@@ -1161,7 +1162,7 @@
       "settings.windowToMax": "Limit to {time} min",
       "settings.windowMax": "At most {time} min.",
       "settings.windowMin": "At least {time} min.",
-      "settings.windowInvalid": "Type a time from {min} to {max} min: a number alone is minutes up to 60 and seconds above (3 or 150), or write 2:30, {decimal} min or 150 s. 0 is no limit.",
+      "settings.windowInvalid": "Type a time from {min} to {max} min: a whole number is minutes up to 60 and seconds above (3 or 150), one with decimals is minutes ({decimal}); or write 2:30 or 150 s. 0 is no limit.",
       "settings.noLimit": "No limit",
       "settings.from.default": "Default",
       "settings.from.start": "From the start settings",
@@ -1518,7 +1519,7 @@
       "settings.windowToMax": "Auf {time} min begrenzen",
       "settings.windowMax": "Höchstens {time} min.",
       "settings.windowMin": "Mindestens {time} min.",
-      "settings.windowInvalid": "Gib eine Zeit von {min} bis {max} min ein: Eine Zahl allein gilt bis 60 als Minuten, darüber als Sekunden (3 oder 150), oder schreib 2:30, {decimal} min oder 150 s. 0 heißt kein Limit.",
+      "settings.windowInvalid": "Gib eine Zeit von {min} bis {max} min ein: Eine ganze Zahl gilt bis 60 als Minuten, darüber als Sekunden (3 oder 150), eine Dezimalzahl als Minuten ({decimal}); oder schreib 2:30 oder 150 s. 0 heißt kein Limit.",
       "settings.noLimit": "Kein Limit",
       "settings.from.default": "Standard",
       "settings.from.start": "Aus den Starteinstellungen",
@@ -2016,7 +2017,7 @@
     const s = (tone, icon, label, text, detail) => ({
       key: label, tone, icon, text, detail: detail || "", label: t("sys.label." + label),
       short: hasText("sys.label." + label + "Short") ? t("sys.label." + label + "Short") : "",
-      big: t(label === "ready" ? "sys.label.readyLong" : "sys.label." + label),
+      big: label === "ready" ? t("sys.label.readyLong") : t("sys.label." + label),
     });
     if (!online) return s("error", "alert", "offline", t("sys.text.offline"));
     if (!S) return s("none", "clock", "connecting", "");
@@ -2072,7 +2073,7 @@
         const title = { title: i.title };
         if (i.health === "connected" || i.health === "watching") items.push(["ok", "check", t("check.integReady", title)]);
         else if (i.health === "starting") items.push(["wait", "clock", t("check.integConnecting", title)]);
-        else items.push(["bad", "alert", t(i.health === "stopped" ? "check.integStopped" : "check.integError", title)]);
+        else items.push(["bad", "alert", i.health === "stopped" ? t("check.integStopped", title) : t("check.integError", title)]);
       }
       if (list.length === 0) items.push(["muted", null, t("check.noIntegration")]);
       // The grinder alone on a line says nothing System status doesn't.
@@ -2389,8 +2390,9 @@
       if (Math.abs(d) <= ON_TARGET_S) result = t("outcome.onTarget", { time: secs(secsShot), target: secs(tg.t) });
       else {
         good = true;
-        result = t(d < 0 ? "outcome.fast" : "outcome.slow", { diff: secs(Math.abs(d)) });
-        change = t(d < 0 ? "outcome.finer" : "outcome.coarser");
+        const diff = { diff: secs(Math.abs(d)) };
+        result = d < 0 ? t("outcome.fast", diff) : t("outcome.slow", diff);
+        change = d < 0 ? t("outcome.finer") : t("outcome.coarser");
       }
     }
     box.classList.toggle("good", good);
@@ -2747,7 +2749,7 @@
       returnTo: () => focusKebab(i.id),
       title: t("integ.adopt.title", { title: i.title }),
       body: [
-        el("p", { class: "body-text", text: t(hasPassword(k) ? "integ.adopt.textPassword" : "integ.adopt.text") }),
+        el("p", { class: "body-text", text: hasPassword(k) ? t("integ.adopt.textPassword") : t("integ.adopt.text") }),
         el("p", { class: "body-text", text: t("integ.adopt.after") }),
       ],
       actions: [
@@ -2778,7 +2780,7 @@
       returnTo: () => focusKebab(i.id),
       title: t("integ.delete.title", { title: i.title }),
       body: [
-        el("p", { class: "body-text", text: t(hasPassword(k) ? "integ.delete.textPassword" : "integ.delete.text") }),
+        el("p", { class: "body-text", text: hasPassword(k) ? t("integ.delete.textPassword") : t("integ.delete.text") }),
         ...(i.from_command_line ? [el("p", { class: "body-text", text: t("integ.delete.moved") })] : []),
         el("label", { class: "sheet-label" }, t("integ.delete.type"), input),
       ],
@@ -2923,7 +2925,9 @@
     renderLanguage();
     const st = S.settings;
     // An older server has no settings API: only the appearance is shown.
-    for (const id of ["set-window-row", "set-foot"]) $(id).hidden = !st;
+    $("set-foot").hidden = !st;
+    // The shot window needs its range from the server.
+    $("set-window-row").hidden = !winRange();
     if (!st) { $("set-host-row").hidden = true; $("set-host-form").hidden = true; $("set-update-row").hidden = true; return; }
     if ($("set-host-form").hidden) $("set-host-row").hidden = false;
     renderWindow();
@@ -2931,8 +2935,8 @@
     renderUpdateSetting();
     $("set-host-value").textContent = st.grinder_host ? st.grinder_host : t("settings.hostNone");
     renderFrom("set-host", "grinder_host", (v) => v || t("settings.none"));
-    renderFrom("set-update", "update_check", (v) => t(v ? "settings.on" : "settings.off"));
-    $("set-foot").textContent = t(st.persistent ? "settings.saved" : "settings.notPersistent");
+    renderFrom("set-update", "update_check", (v) => (v ? t("settings.on") : t("settings.off")));
+    $("set-foot").textContent = st.persistent ? t("settings.saved") : t("settings.notPersistent");
   }
 
   /** The line under a setting saved on the server: where its value comes
@@ -2955,9 +2959,15 @@
   // Time to pull the shot: − and + (saved a moment after the last tap) in
   // 15 s steps, in whole minutes above 10:00; typed into the field (saved
   // on Enter or when leaving it); or No limit, which turned off again goes
-  // back to the limit before. The same range as the server: 0 (no limit) or
-  // 0:30 to 60:00. A shorter time from --brew-timeout-s shows as it is.
-  const WIN_MIN = 30, WIN_MAX = 3600, WIN_FINE = 600;
+  // back to the limit before. The range is the server's (0:30 to 60:00, and
+  // 0 for no limit). A shorter time from --brew-timeout-s shows as it is.
+  const WIN_FINE = 600;   // − and + take whole minutes above this
+  /** The shot windows the server takes besides 0 (no limit), in seconds:
+   *  `settings.shot_window_range` from /api/state; null until it came. */
+  function winRange() {
+    const r = S && S.settings && S.settings.shot_window_range;
+    return r && typeof r.min_s === "number" && typeof r.max_s === "number" ? r : null;
+  }
   const win = { pending: null, saved: null, seq: 0, timer: null, msg: "", warn: false, lastLimit: 0 };
   /** The shot window as shown: the one waiting to be saved, else the one
    *  just saved (a state poll that left before the save still brings the
@@ -2971,6 +2981,8 @@
   }
   const winText = (v) => (v === 0 ? t("settings.noLimit") : clock(v * 1000));
   function renderWindow() {
+    const r = winRange();
+    if (!r) return;
     const v = winValue();
     const input = $("set-window");
     if (document.activeElement !== input) {
@@ -2983,14 +2995,14 @@
     if (v > 0) win.lastLimit = v;
     // aria-disabled rather than disabled: the button keeps the focus.
     const down = $("set-window-down"), up = $("set-window-up");
-    down.setAttribute("aria-disabled", String(v !== 0 && v <= WIN_MIN));
-    up.setAttribute("aria-disabled", String(v === 0 || v >= WIN_MAX));
-    const less = v === 0 ? t("settings.windowToMax", { time: clock(WIN_MAX * 1000) }) : t("settings.windowLess", { step: stepText(v, -1) });
+    down.setAttribute("aria-disabled", String(v !== 0 && v <= r.min_s));
+    up.setAttribute("aria-disabled", String(v === 0 || v >= r.max_s));
+    const less = v === 0 ? t("settings.windowToMax", { time: clock(r.max_s * 1000) }) : t("settings.windowLess", { step: stepText(v, -1) });
     const more = t("settings.windowMore", { step: stepText(v, 1) });
     if (down.title !== less) { down.title = less; down.setAttribute("aria-label", less); }
     if (up.title !== more) { up.title = more; up.setAttribute("aria-label", more); }
     $("set-window-none").setAttribute("aria-pressed", String(v === 0));
-    $("set-window-range").textContent = t("settings.windowRange", { min: clock(WIN_MIN * 1000), max: clock(WIN_MAX * 1000) });
+    $("set-window-range").textContent = t("settings.windowRange", { min: clock(r.min_s * 1000), max: clock(r.max_s * 1000) });
     $("set-window-field").classList.toggle("bad", win.warn && document.activeElement === input);
     const msg = $("set-window-msg");
     if (msg.textContent !== win.msg) msg.textContent = win.msg;
@@ -2999,9 +3011,9 @@
   function windowNote(text, warn) { win.msg = text || ""; win.warn = !!warn; }
 
   /** Seconds from what was typed, or NaN. Three forms: m:ss ("2:30"), a
-   *  number with a unit ("150 s", "2,5 min"), or a number alone, which is
-   *  minutes up to 60 and seconds above ("3" is 3:00, "150" is 2:30). 0 is
-   *  no limit. */
+   *  number with a unit ("150 s", "2,5 min"), or a number alone: a whole
+   *  number is minutes up to 60 and seconds above ("3" is 3:00, "150" is
+   *  2:30), one with decimals is minutes ("2,5" is 2:30). 0 is no limit. */
   function parseWindow(text) {
     const s = String(text || "").trim().toLowerCase().replace(",", ".");
     let m = /^(\d{1,2}):([0-5]\d)(?:\s*min\.?)?$/.exec(s);
@@ -3009,44 +3021,50 @@
     m = /^(\d+(?:\.\d+)?)\s*(s|sec|sek|m|min)?\.?$/.exec(s);
     if (!m) return NaN;
     const n = Number(m[1]);
-    const minutes = m[2] ? m[2].charAt(0) === "m" : n <= 60;
+    // Decimals as typed ("60.0" too) are always minutes.
+    const minutes = m[2] ? m[2].charAt(0) === "m" : n <= 60 || m[1].includes(".");
     const secs = minutes ? n * 60 : n;
     // Whole seconds, as the server takes them; a limit stays a limit.
     return secs > 0 ? Math.max(1, Math.round(secs)) : 0;
   }
   /** `secs` within the server's range, with a note when it was moved into it. */
   function clampWindow(secs) {
-    if (secs === 0) return { secs, note: "" };
-    if (secs > WIN_MAX) return { secs: WIN_MAX, note: t("settings.windowMax", { time: clock(WIN_MAX * 1000) }) };
-    if (secs < WIN_MIN) return { secs: WIN_MIN, note: t("settings.windowMin", { time: clock(WIN_MIN * 1000) }) };
+    const r = winRange();
+    if (secs === 0 || !r) return { secs, note: "" };
+    if (secs > r.max_s) return { secs: r.max_s, note: t("settings.windowMax", { time: clock(r.max_s * 1000) }) };
+    if (secs < r.min_s) return { secs: r.min_s, note: t("settings.windowMin", { time: clock(r.min_s * 1000) }) };
     return { secs, note: "" };
   }
   /** What − (`dir` -1) or + (1) does from `cur`: 15 s steps up to 10:00,
    *  whole minutes above; from no limit, − gives the longest. */
   function stepUnit(cur, dir) { return (dir > 0 ? cur >= WIN_FINE : cur > WIN_FINE) ? 60 : 15; }
-  function stepFrom(cur, dir) {
-    if (cur === 0) return dir < 0 ? WIN_MAX : 0;
+  function stepFrom(cur, dir, r) {
+    if (cur === 0) return dir < 0 ? r.max_s : 0;
     const unit = stepUnit(cur, dir);
     const next = dir > 0 ? Math.floor(cur / unit) * unit + unit : Math.ceil(cur / unit) * unit - unit;
-    return Math.min(WIN_MAX, Math.max(WIN_MIN, next));
+    return Math.min(r.max_s, Math.max(r.min_s, next));
   }
-  const stepText = (cur, dir) => t(stepUnit(cur, dir) === 60 ? "settings.step1min" : "settings.step15s");
+  const stepText = (cur, dir) => (stepUnit(cur, dir) === 60 ? t("settings.step1min") : t("settings.step15s"));
 
+  /** Saves the shot window (null: the start setting); true once saved. */
   async function saveWindow(value) {
     clearTimeout(win.timer);
     // Only the newest save's answer counts; an older one may come back later.
     const seq = ++win.seq;
+    let saved = false;
     try {
       const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shot_window_s: value }) });
-      if (seq !== win.seq) return;
-      if (st && typeof st.shot_window_s === "number") {
-        S.settings = st;
-        win.saved = { value: st.shot_window_s, at: Date.now() };
-        // A state poll that left before this answer would bring back the
-        // old source line; one more poll after it puts it right.
-        tick();
+      if (seq === win.seq) {
+        if (st && typeof st.shot_window_s === "number") {
+          S.settings = st;
+          win.saved = { value: st.shot_window_s, at: Date.now() };
+          // A state poll that left before this answer would bring back the
+          // old source line; one more poll after it puts it right.
+          tick();
+        }
+        if (win.warn) windowNote("");   // an earlier failure is past
+        saved = true;
       }
-      if (win.warn) windowNote("");   // an earlier failure is past
     } catch (x) {
       if (seq === win.seq) windowNote(t("common.notSaved", { error: x.message }), true);
     } finally {
@@ -3054,11 +3072,14 @@
       if (win.pending === value) win.pending = null;
       renderAll();
     }
+    return saved;
   }
   function stepWindow(dir) {
+    const r = winRange();
+    if (!r) return;
     const cur = winValue();
-    if (dir > 0 ? cur === 0 || cur >= WIN_MAX : cur !== 0 && cur <= WIN_MIN) return;   // at the end
-    const next = stepFrom(cur, dir);
+    if (dir > 0 ? cur === 0 || cur >= r.max_s : cur !== 0 && cur <= r.min_s) return;   // at the end
+    const next = stepFrom(cur, dir, r);
     if (next === cur) return;
     win.pending = next;
     windowNote("");
@@ -3071,22 +3092,39 @@
   // No limit, saved at once; pressed again, the limit from before (else the
   // start setting's, else the longest).
   $("set-window-none").addEventListener("click", () => {
+    const r = winRange();
+    if (!r) return;
     const start = S.settings.start ? S.settings.start.shot_window_s : 0;
     // A flag may have set less than the app can (0:10): at least 0:30.
-    const next = winValue() !== 0 ? 0 : clampWindow(win.lastLimit || start || WIN_MAX).secs;
+    const next = winValue() !== 0 ? 0 : clampWindow(win.lastLimit || start || r.max_s).secs;
     win.pending = next;
     windowNote("");
     renderWindow();
     saveWindow(next);
   });
-  // Back to the start setting: the server's answer says what that is.
-  $("set-window-reset").addEventListener("click", () => {
-    const b = $("set-window-reset");
+
+  /** Use start setting under the setting `id`: `save` sends null and says
+   *  whether it was saved. While it runs the button is aria-disabled, not
+   *  disabled, so it keeps the focus; once saved, the button goes, and the
+   *  focus moves to the line saying where the value comes from now, which
+   *  a screen reader then reads. */
+  function resetButton(id, save) {
+    const b = $(id + "-reset");
+    b.addEventListener("click", async () => {
+      if (b.getAttribute("aria-disabled") === "true") return;
+      b.setAttribute("aria-disabled", "true");
+      let saved = false;
+      try { saved = await save(); } finally { b.removeAttribute("aria-disabled"); }
+      const at = document.activeElement;
+      if (saved && b.hidden && (!at || at === b || at === document.body)) $(id + "-from-text").focus();
+    });
+  }
+  // The server's answer says what the start setting is.
+  resetButton("set-window", () => {
     clearTimeout(win.timer);
     win.pending = null;
     windowNote("");
-    b.disabled = true;
-    saveWindow(null).finally(() => { b.disabled = false; });
+    return saveWindow(null);
   });
 
   /** Takes what was typed; `leaving`: the field lost focus. Returns false
@@ -3097,7 +3135,8 @@
     if (!typed || typed === input.dataset.shown) return true;
     const secs = parseWindow(typed);
     if (!isFinite(secs)) {
-      windowNote(t("settings.windowInvalid", { min: clock(WIN_MIN * 1000), max: clock(WIN_MAX * 1000), decimal: fmt.upToOne.format(2.5) }), true);
+      const r = winRange() || { min_s: 0, max_s: 0 };
+      windowNote(t("settings.windowInvalid", { min: clock(r.min_s * 1000), max: clock(r.max_s * 1000), decimal: fmt.upToOne.format(2.5) }), true);
       if (leaving) input.value = input.dataset.shown;
       renderWindow();
       return false;
@@ -3189,24 +3228,25 @@
     for (const b of $("set-update").querySelectorAll("button")) b.setAttribute("aria-pressed", String((b.dataset.update === "on") === on));
   }
   let updateSaving = false;
-  /** Saves the update check: true, false, or null for the start setting. */
+  /** Saves the update check: true, false, or null for the start setting;
+   *  true once saved. */
   async function saveUpdateCheck(on) {
-    if (updateSaving || !S || !S.settings) return;
+    if (updateSaving || !S || !S.settings) return false;
     updateSaving = true;
     $("set-update").setAttribute("aria-busy", "true");
-    $("set-update-reset").disabled = true;
     $("set-update-error").hidden = true;
     try {
       const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ update_check: on }) });
       if (st && "update_check" in st) S.settings = st;
       renderSettings();
-      await tick();
+      tick();
+      return true;
     } catch (x) {
       $("set-update-error").textContent = t("common.notSaved", { error: x.message }); $("set-update-error").hidden = false;
+      return false;
     } finally {
       updateSaving = false;
       $("set-update").removeAttribute("aria-busy");
-      $("set-update-reset").disabled = false;
     }
   }
   for (const b of $("set-update").querySelectorAll("button")) {
@@ -3215,7 +3255,7 @@
       if (S && S.settings && S.settings.update_check !== on) saveUpdateCheck(on);
     });
   }
-  $("set-update-reset").addEventListener("click", () => saveUpdateCheck(null));
+  resetButton("set-update", () => saveUpdateCheck(null));
 
   function hostEditor(open) {
     $("set-host-form").hidden = !open;
@@ -3227,17 +3267,16 @@
   }
   $("set-host-change").addEventListener("click", () => hostEditor(true));
   $("set-host-cancel").addEventListener("click", () => hostEditor(false));
-  // An empty field removes the address: over one from the start settings
-  // with "" (Use start setting, null, goes back to it); without one, null
-  // forgets the app's address, so a GRINDER_HOST set later counts.
+  // An empty field removes the address ("" to the server, which without a
+  // start address only forgets the app's one); Use start setting (null)
+  // goes back to the start address.
   $("set-host-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const v = $("f-host").value.trim();
     if (v === (S.settings.grinder_host || "")) { hostEditor(false); return; }   // unchanged
-    const host = v || (S.settings.start && S.settings.start.grinder_host ? "" : null);
     $("set-host-save").disabled = true; $("set-host-error").hidden = true;
     try {
-      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: host }) });
+      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: v }) });
       if (st && "grinder_host" in st) S.settings = st;
       hostEditor(false);
       await tick();
@@ -3245,17 +3284,18 @@
       $("set-host-error").textContent = t("common.notSaved", { error: x.message }); $("set-host-error").hidden = false;
     } finally { $("set-host-save").disabled = false; }
   });
-  $("set-host-reset").addEventListener("click", async () => {
-    const b = $("set-host-reset");
-    b.disabled = true; $("set-host-reset-error").hidden = true;
+  resetButton("set-host", async () => {
+    $("set-host-reset-error").hidden = true;
     try {
       const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: null }) });
       if (st && "grinder_host" in st) S.settings = st;
       renderSettings();
-      await tick();
+      tick();
+      return true;
     } catch (x) {
       $("set-host-reset-error").textContent = t("common.notSaved", { error: x.message }); $("set-host-reset-error").hidden = false;
-    } finally { b.disabled = false; }
+      return false;
+    }
   });
 
   function renderVersion() {
@@ -3269,10 +3309,10 @@
     const failing = on && !!u.failing;
     // A known newer release stays news when GitHub fails later; "up to date"
     // does not.
-    const word = !on ? null : u.available ? ["run", "version.updateAvailable"]
-      : failing ? ["none", "version.failing"] : u.latest ? ["ok", "version.upToDate"] : null;
+    const word = !on ? null : u.available ? ["run", t("version.updateAvailable")]
+      : failing ? ["none", t("version.failing")] : u.latest ? ["ok", t("version.upToDate")] : null;
     badge.hidden = !word;
-    if (word) { setTone(badge, word[0]); badge.textContent = t(word[1]); }
+    if (word) { setTone(badge, word[0]); badge.textContent = word[1]; }
     $("v-latest-box").hidden = !on;
     $("v-latest").textContent = !on ? "–" : u.latest || (failing ? "–" : t("version.notChecked"));
     $("v-note").hidden = !on;
@@ -3405,9 +3445,10 @@
           el("span", { class: "h-badge", text: kindLabel(s.kind) }));
       })))));
     empty.hidden = visible.length > 0;
-    empty.textContent = t(shots.length === 0 ? "history.empty" : "history.noMatch");
+    empty.textContent = shots.length === 0 ? t("history.empty") : t("history.noMatch");
     foot.hidden = false;
-    foot.textContent = t(hist.persistent === false ? "history.keptMemory" : "history.kept", { n: hist.capacity || 200 });
+    const kept = { n: hist.capacity || 200 };
+    foot.textContent = hist.persistent === false ? t("history.keptMemory", kept) : t("history.kept", kept);
   }
 
   // --- Log ---------------------------------------------------------------------
@@ -3538,7 +3579,7 @@
     $("log-lines").classList.toggle("warn-only", log.warnOnly);
     const live = window.EventSource ? log.connected : log.state === "live" && online;
     $("log-live-block").classList.toggle("on", log.follow && live);
-    $("log-live-text").textContent = t(!live ? "log.reconnecting" : log.follow ? "log.live" : "log.paused");
+    $("log-live-text").textContent = !live ? t("log.reconnecting") : log.follow ? t("log.live") : t("log.paused");
     // A status region announces every change, so only real ones.
     if (!log.done && $("log-note").textContent !== LOG_NOTE()) $("log-note").textContent = LOG_NOTE();
     if (!log.done) $("log-note").classList.remove("done");
@@ -3659,12 +3700,12 @@
     let lines = log.lines.filter((l) => Date.parse(l.ts) >= since && (!log.warnOnly || l.level !== "INFO"));
     if (lines.length > 500) lines = lines.slice(-500);
     if (!lines.length) {
-      logDone("note", t(log.warnOnly ? "log.nothingWarnings" : "log.nothingLines"));
+      logDone("note", log.warnOnly ? t("log.nothingWarnings") : t("log.nothingLines"));
       return;
     }
     const filter = log.warnOnly ? "warnings only" : "all levels";
     const text = exportText(lines, filter);
-    const note = t(log.warnOnly ? "log.copiedWarn" : "log.copied", { n: lines.length });
+    const note = log.warnOnly ? t("log.copiedWarn", { n: lines.length }) : t("log.copied", { n: lines.length });
     if (await copyText(text)) { logDone("copy", note); return; }
     // Copying is blocked: show the text to copy by hand.
     const ta = el("textarea", { readonly: true, "aria-label": t("log.copySheet.label") });

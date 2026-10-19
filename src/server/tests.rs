@@ -289,6 +289,11 @@ async fn settings_change_in_the_app_and_are_saved() {
     );
     assert_eq!(settings["persistent"], true);
     assert_eq!(settings["update_check"], true, "on unless turned off");
+    assert_eq!(
+        settings["shot_window_range"],
+        json!({ "min_s": 30, "max_s": 3600 }),
+        "what the app can set, besides 0"
+    );
     assert_eq!(state["update"]["enabled"], true);
     assert_eq!(state["update"]["latest"], Value::Null);
 
@@ -341,10 +346,12 @@ async fn settings_change_in_the_app_and_are_saved() {
     );
 
     // No address (`""`): the link stops, and a pairing ID has nowhere to go.
+    // Without a start address there is nothing to stand in for: the app's
+    // address is forgotten, as with `null`.
     let (code, settings) = put(json!({ "grinder_host": "" })).await;
     assert_eq!(code, 200);
     assert_eq!(settings["grinder_host"], Value::Null);
-    assert_eq!(settings["source"]["grinder_host"], "app");
+    assert_eq!(settings["source"]["grinder_host"], "default");
     wait_for("the link to stop", || x.grinder_link().wifi.is_none()).await;
     let url = format!("{base}/api/grinder/pairing");
     let (code, _) = call(reqwest::Method::POST, url, Some(json!({ "pairing_id": 7 }))).await;

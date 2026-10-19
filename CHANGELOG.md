@@ -26,18 +26,19 @@ a minor release may change behaviour.
   E65W GbS.
 - Settings in the app: the shot window (how long gbs-anywhere waits for a
   shot's numbers: 0:30 to 60:00 minutes or no limit, as in the API, with −
-  and +, **No limit**, or typed as `2:30`, `150 s` or a number alone, which
-  is minutes up to 60 and seconds above) and the E65/E80 grinder's address
-  (an IP address or name, optionally with `:port`). A new address takes
-  effect at once and keeps the pairing. A setting changed in the app is
-  saved in the settings file and wins over `--brew-timeout-s` or
-  `--grinder` from then on (`PUT /api/settings`, `settings` in
-  `GET /api/state`). The app shows where each value comes from (default,
-  start settings, or set in the app), and **Use start setting** goes back
-  to the flag or environment variable, else the default. In
-  `PUT /api/settings`, `null` does the same for each setting, and
-  `"grinder_host": ""` removes the address; `null` no longer removes it
-  (an address removed that way by an earlier nightly build stays removed).
+  and +, **No limit**, or typed as `2:30`, `150 s` or a number alone: a
+  whole number is minutes up to 60 and seconds above, one with decimals is
+  minutes) and the E65/E80 grinder's address (an IP address or name,
+  optionally with `:port`). A new address takes effect at once and keeps
+  the pairing. A setting changed in the app is saved in the settings file
+  and wins over `--brew-timeout-s` or `--grinder` from then on
+  (`PUT /api/settings`, `settings` in `GET /api/state`). The app shows
+  where each value comes from (default, start settings, or set in the
+  app), and **Use start setting** goes back to the flag or environment
+  variable, else the default. In `PUT /api/settings`, `null` does the same
+  for each setting, and `"grinder_host": ""` removes the address (without
+  a start address, the same as `null`); `null` does not remove it.
+  `settings` also carries the range the app can set (`shot_window_range`).
   The settings file keeps settings it does not know, saved by a newer
   version. Going back to an earlier version forgets the settings changed
   in the app.
