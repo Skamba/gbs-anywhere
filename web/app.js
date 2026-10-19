@@ -255,7 +255,7 @@
   let events = [], lastSeq = 0, primed = false;
   const seenAt = new Map();      // event seq -> when it happened, on this device's clock
   let hist = null;               // GET /api/history, or null
-  let histState = "unknown";     // "unknown" | "ok" | "unsupported"
+  let histState = "unknown";     // "unknown" | "ok" | "failed"
   let kinds = null, kindsPersistent = false, kindsLoading = false;
   let tab = "start";
   let sseOpen = false;
@@ -273,7 +273,6 @@
     brew: null, typeIn: false, missed: false,
   };
 
-  const hasNewApi = () => !!(S && S.settings);
   const wifiOf = () => (S && S.grinder && S.grinder.wifi) || null;
   function linkOn() {
     const age = S && S.grinder ? S.grinder.last_poll_age_ms : null;
@@ -281,8 +280,7 @@
   }
   function windowS() {
     if (S && S.settings && typeof S.settings.shot_window_s === "number") return S.settings.shot_window_s;
-    const t = S && S.config && S.config.brew_timeout;
-    return t && typeof t.secs === "number" ? t.secs : 0;
+    return 0;
   }
   const windowLabel = () => clock(windowS() * 1000);
   /** The shot times the grinder adjusts from (`grinder_range`: over min_ms,
@@ -354,35 +352,22 @@
     return { w: w > 0 ? w : null, t: t > 0 ? t : null };
   }
 
-  // The newest history entry, when it is the given machine event.
-  function histFor(ev) {
-    const h = hist && hist.shots && hist.shots[0];
-    if (!h || !ev) return null;
-    if (ev.kind === "shot_reported") {
-      return h.kind === "succeeded" && h.time_s != null && Math.abs(h.time_s * 1000 - ev.result.time_ms) < 60 ? h : null;
-    }
-    return h.kind !== "succeeded" && h.cause === ev.cause ? h : null;
-  }
   /** When the brew ended with this event. */
   function endTime(ev) {
-    if (!ev) return null;
-    if (seenAt.has(ev.seq)) return seenAt.get(ev.seq);
-    const h = histFor(ev);
-    return h && h.ended_at ? Date.parse(h.ended_at) : null;
+    return ev && seenAt.has(ev.seq) ? seenAt.get(ev.seq) : null;
   }
-  /** When the current (or last) brew started: from its event, counted back
-   *  from the running timer, or from the history entry of its outcome. */
+  /** When the current (or last) brew started: from its event, else (its
+   *  event is not in yet) counted back from the running timer. */
   function brewStart(f) {
-    const started = f.started;
-    if (started && seenAt.has(started.seq)) return seenAt.get(started.seq);
-    if (f.sc === "running") {
-      const t = Date.now() - elapsedMs();
-      if (started) seenAt.set(started.seq, t);
-      return t;
-    }
-    if (!started || !f.outcome || f.outcome.seq < started.seq) return null;
-    const h = histFor(f.outcome);
-    return h && h.at ? Date.parse(h.at) : null;
+    if (f.started && seenAt.has(f.started.seq)) return seenAt.get(f.started.seq);
+    return f.sc === "running" ? Date.now() - elapsedMs() : null;
+  }
+  /** How long the last brew ran until its outcome, from the ages of both
+   *  events, or null when one is missing. */
+  function brewMs(f) {
+    if (!f.started || !f.outcome || f.outcome.seq < f.started.seq) return null;
+    const start = brewStart(f), end = endTime(f.outcome);
+    return start != null && end != null ? end - start : null;
   }
   const fresh = (ev) => { const t = endTime(ev); return t != null && Date.now() - t < FRESH_MS; };
   /** E64: a grind waits for the knob press only for a while. */
@@ -443,7 +428,7 @@
     renderAll();
     if (toLog) { log.open = true; scrollToLog(); openLog().then(scrollToLog); }
     else if (name === "status" && log.open) openLog();   // back after a restart: start over
-    if (name === "history") loadHistory();
+    if (name === "history" && primed) loadHistory();   // else the first catch-up does
   }
   /** Opens a tab and puts it in the address, without a navigation: Safari on
    *  iPhone reloaded the whole page for a plain "#tab" link. */
@@ -520,7 +505,7 @@
     const blocked = grindBlocked();
     if (f.sc === "running") return s("run", "clock", "running", t("sys.text.running"));
     if (f.sc === "checking") return s("run", "clock", "running", t("sys.text.checking"));
-    if (f.sc === "knob") return s("run", "clock", "running", t("sys.text.knob"));
+    if (f.sc === "knob") return s("run", "clock", "knob", t("sys.text.knob"));
     if (wifi && wifi.needs_pairing_id) return s("start", "alert", "pairing", t("sys.text.needsId"));
     if (wifi && wifi.state === "pairing") return s("start", "alert", "pairing", t("sys.text.pairing"));
     if (linkStarting()) {
@@ -846,11 +831,10 @@
   /** Why the shot of flow() `f` failed. */
   function errorTitle(f) {
     if (f.cause === "shot_timed_out") {
-      // How long it waited, from the history; else the current setting.
-      const h = histFor(f.outcome);
-      const ms = h ? Date.parse(h.ended_at) - Date.parse(h.at) : NaN;
-      if (isFinite(ms) && ms > 0) return t("start.error.timeout", { window: clock(ms) });
-      return windowS() > 0 ? t("start.error.timeout", { window: windowLabel() }) : t("start.error.timeoutNoLimit");
+      // How long it waited, from the server's events: not the setting now,
+      // which may have changed since.
+      const ms = brewMs(f);
+      return ms > 0 ? t("start.error.timeout", { window: clock(ms) }) : t("start.error.timeoutNoLimit");
     }
     const text = causeInfo(f.cause).text;
     if (text) return t(text);
@@ -867,8 +851,8 @@
     const inRange = (ev ? ev.in_grinder_range : inGrinderRange(res.time_ms)) !== false;
     let result, change = "", good = false;
     // in_grinder_range does not say on which side a shot missed, so the
-    // time picks the wording, with every server: a shot too short also
-    // gets the hint to grind finer by hand.
+    // time picks the wording: a shot too short also gets the hint to grind
+    // finer by hand.
     if (range && res.time_ms <= range.min_ms) {
       result = t("outcome.tooShort", { time: secs(secsShot) });
       change = t("outcome.finerByHand");
@@ -1102,8 +1086,8 @@
     $("g-facts").replaceChildren(...facts.map(([k, v]) => el("div", null, el("dt", { text: t("grinder.fact." + k) }), el("dd", { text: v }))));
   }
 
-  // Integrations list. Rebuilt only when something shown changes, and not
-  // while one of its forms is open.
+  // Integrations list. Rebuilt only when something shown changes; an open
+  // edit form stays in place while the other cards change around it.
   let integSig = "", menuFor = null, editing = null, editForm = null, integOpen = store.get("integOpen") !== "0";
   /** Rebuilds the integrations list on the next render, and renders. */
   function invalidateIntegrations() { integSig = ""; renderStatus(); }
@@ -1129,7 +1113,7 @@
     // Deleted from another phone while being edited here: the form goes.
     if (editing && !list.some((i) => i.id === editing)) { editing = null; editForm = null; }
     const sig = JSON.stringify([list.map((i) => [i.id, i.title, i.subject, i.health, i.detail, integDetail(i), i.last_error, i.reports, i.source, i.adoptable, i.kind]),
-      !!kinds, menuFor, hasNewApi(), editing]);
+      !!kinds, menuFor, editing]);
     if (sig === integSig) return;
     integSig = sig;
     const box = $("integ-list");
@@ -1208,7 +1192,7 @@
   /** The ⋮ menu: only integrations in the app can be deleted there. */
   function integActions(i) {
     const acts = [];
-    if (hasNewApi() && kindOf(i.kind)) acts.push([t("common.edit"), "edit", "", () => (i.source === "command_line" ? moveToEdit(i) : startEdit(i))]);
+    if (kindOf(i.kind)) acts.push([t("common.edit"), "edit", "", () => (i.source === "command_line" ? moveToEdit(i) : startEdit(i))]);
     if (i.source === "app") acts.push([t("common.delete"), "trash", "danger", () => confirmDelete(i)]);
     return acts;
   }
@@ -1345,7 +1329,7 @@
     const fields = el("div", { class: "stack-12" }, k.fields.map((f) => formField(k.id, f, "ef-", f.input === "password" ? null : values[f.key], secrets.has(f.key))));
     const error = el("p", { class: "hint warn", role: "alert", hidden: true });
     const save = tEl("button", { type: "submit", class: "btn-send ok" }, "common.save");
-    const form = el("form", { class: "integ stack-12", autocomplete: "off", "aria-label": t("integ.edit.kicker") + " " + i.title },
+    const form = el("form", { class: "integ stack-12", autocomplete: "off", "aria-label": t("integ.edit.label", { title: i.title }) },
       el("div", { class: "integ-row" }, iconFor(i.kind), el("div", { class: "integ-name" }, tEl("p", { class: "kicker" }, "integ.edit.kicker"), el("p", { class: "integ-title", text: i.title }))),
       fields, error,
       el("div", { class: "actions" }, tEl("button", { type: "button", class: "btn-plain sm", onclick: stopEdit }, "common.cancel"), save));
@@ -1419,11 +1403,9 @@
     renderAppearance();
     renderLanguage();
     const st = S.settings;
-    // An older server has no settings API: only the appearance is shown.
-    $("set-foot").hidden = !st;
-    // The shot window needs its range from the server.
-    $("set-window-row").hidden = !winRange();
-    if (!st) { $("set-host-row").hidden = true; $("set-host-form").hidden = true; $("set-update-row").hidden = true; return; }
+    // Hidden until the state is in.
+    $("set-foot").hidden = false;
+    $("set-window-row").hidden = false;
     if ($("set-host-form").hidden) $("set-host-row").hidden = false;
     renderWindow();
     renderFrom("set-window", "shot_window_s", (v) => (v === 0 ? t("settings.noLimit") : clock(v * 1000) + " min"));
@@ -1719,7 +1701,7 @@
   // Update check: on or off, saved on the server like the settings above.
   function renderUpdateSetting() {
     const on = S.settings.update_check;
-    $("set-update-row").hidden = typeof on !== "boolean";
+    $("set-update-row").hidden = false;
     for (const b of $("set-update").querySelectorAll("button")) b.setAttribute("aria-pressed", String((b.dataset.update === "on") === on));
   }
   let updateSaving = false;
@@ -1832,23 +1814,17 @@
 
   async function loadHistory() {
     if (histLoading) return;
-    if (!hasNewApi()) {
-      if (S) { histState = "unsupported"; renderHistory(); }
-      return;
-    }
     histLoading = true;
     histTried = Date.now();
     try {
-      const h = await api("/api/history");
-      if (h && Array.isArray(h.shots)) { hist = h; histState = "ok"; } else histState = "unsupported";
+      hist = await api("/api/history");
+      histState = "ok";
     } catch (e) {
-      // Not there on an older server; otherwise tried again shortly (see refresh).
-      if (e.status === 404) histState = "unsupported";
-      else { histState = "failed"; histError = e.message; }
+      // Tried again shortly (see refresh).
+      histState = "failed"; histError = e.message;
     }
     histLoading = false;
     renderHistory();
-    renderStart();
   }
 
   /** "Today · 11 Oct", "Yesterday · 10 Oct", "Thursday · 9 Oct". */
@@ -1903,17 +1879,9 @@
 
   function renderHistory() {
     if (tab !== "history") return;
-    const supported = histState !== "unsupported";
     const shots = (hist && hist.shots) || [];
     const chips = $("h-chips"), groups = $("h-groups"), empty = $("h-empty"), foot = $("h-foot");
-    chips.hidden = !supported || !hist;
-    if (!supported) {
-      groups.replaceChildren();
-      empty.hidden = false;
-      empty.textContent = t("history.unsupported");
-      foot.hidden = true;
-      return;
-    }
+    chips.hidden = !hist;
     if (!hist) {
       groups.replaceChildren(); empty.hidden = false; foot.hidden = true;
       empty.textContent = histState === "failed" ? t("history.failed", { error: histError }) : t("history.loading");
@@ -2005,13 +1973,11 @@
   async function fetchLog() {
     try {
       const r = await api("/api/log?after=" + log.last);
-      if (!r || !Array.isArray(r.lines)) throw Object.assign(new Error("no log"), { status: 404 });
       if (typeof r.capacity === "number") log.capacity = r.capacity;
       if (typeof r.last_seq === "number" && r.last_seq < log.last) { restartLog(); return false; }
       addLines(r.lines);
       return true;
-    } catch (e) {
-      if (e.status === 404) { log.state = "unsupported"; stopLogFeed(); renderLog(); }
+    } catch (_) {
       return false;
     }
   }
@@ -2027,9 +1993,7 @@
     renderLog();
     if (log.state !== "idle") { if (log.follow) scrollLogEnd(); return; }
     if (!S) return;
-    if (!hasNewApi()) { log.state = "unsupported"; renderLog(); return; }
     log.state = "live";
-    $("log-note").textContent = LOG_NOTE();
     const ok = await fetchLog();
     if (!ok || log.state !== "live") return;
     renderLog();
@@ -2078,10 +2042,6 @@
     $("log-toggle").setAttribute("aria-expanded", String(log.open));
     $("log-body").hidden = !log.open;
     if (!log.open) return;
-    const unsupported = log.state === "unsupported";
-    $("log-unsupported").hidden = !unsupported;
-    for (const id of ["log-tools", "log-box", "log-note"]) $(id).hidden = unsupported;
-    if (unsupported) return;
     $("log-follow").setAttribute("aria-pressed", String(log.follow));
     $("log-warn").setAttribute("aria-pressed", String(log.warnOnly));
     $("log-lines").classList.toggle("warn-only", log.warnOnly);
@@ -2113,7 +2073,12 @@
   // Opened by hand, or from "Show the log" next to an error.
   $("log-toggle").addEventListener("click", () => {
     log.open = !log.open;
-    if (log.open) openLog(); else renderLog();
+    if (log.open) { openLog(); return; }
+    // Closed: no stream until it opens again, which catches up from `log.last`,
+    // and a reload doesn't open it again.
+    if (log.state === "live") { stopLogFeed(); log.state = "idle"; }
+    if (location.hash === "#log") history.replaceState(null, "", "#status");
+    renderLog();
   });
   $("sys-log-link").addEventListener("click", (e) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
@@ -2131,8 +2096,8 @@
     if (log.follow) scrollLogEnd();
   });
 
-  // Copy and Download share the export: IP addresses replaced the same way
-  // throughout, and a header line saying what it holds.
+  // Copy and Download share the export: IP addresses and logins replaced the
+  // same way throughout, and a header line saying what it holds.
   function scrubber() {
     const seen = new Map();
     const name = (ip) => {
@@ -2171,7 +2136,7 @@
     const first = lines.length ? new Date(lines[0].ts) : new Date();
     const last = lines.length ? new Date(lines[lines.length - 1].ts) : new Date();
     const head = "# gbs-anywhere " + ((S && S.version) || "") + " log · " + stamp(first) + " to " + stamp(last)
-      + " (" + utcOffset(last) + ") · " + lines.length + (lines.length === 1 ? " line" : " lines") + " · " + filter + " · IP addresses replaced";
+      + " (" + utcOffset(last) + ") · " + lines.length + (lines.length === 1 ? " line" : " lines") + " · " + filter + " · IP addresses and logins replaced";
     return head + "\n" + body.join("\n") + "\n";
   }
   /** Shows `note` under the log for a moment; `kind` "copy" or "dl" also ticks that button. */
@@ -2301,15 +2266,34 @@
     renderLog();
   }
 
+  // Another version of gbs-anywhere answers (it was updated): the page that
+  // comes with it is loaded, so the page always matches its server. Not
+  // while something is typed or open here; the next poll tries again.
+  let pageVersion = null, reloading = false;
+  /** Something typed or open that a reload would lose. */
+  function midEdit() {
+    const at = document.activeElement;
+    return !!(editing || addingKind || !$("set-host-form").hidden || !$("sheet").hidden
+      || (at && at.matches && at.matches("input, textarea")));
+  }
+
   async function refresh() {
     let st;
     try { st = await api("/api/state"); }
     catch (_) { if (online) offlineSince = Date.now(); online = false; renderAll(); return; }
     online = true;
-    // The server restarted: a new boot_id, or (without one) event numbers that went back.
-    const restarted = !!S && ((st.boot_id && S.boot_id && st.boot_id !== S.boot_id)
-      || (typeof st.last_seq === "number" && st.last_seq < lastSeq));
-    const hadNewApi = hasNewApi();
+    if (pageVersion === null) pageVersion = st.version;
+    if (st.version !== pageVersion && !midEdit()) {
+      if (!reloading) {
+        reloading = true;
+        // A weight typed for the next shot comes along (see the start below).
+        try { sessionStorage.setItem("gbs.weight", $("f-weight").value); } catch (_) {}
+        location.reload();
+      }
+      return;
+    }
+    // The server restarted: a new boot_id.
+    const restarted = !!S && st.boot_id !== S.boot_id;
     S = st; stateAt = performance.now();
     if (restarted) {
       events = []; lastSeq = 0; seenAt.clear();
@@ -2317,11 +2301,8 @@
       kinds = null;
       restartLog();
     }
-    // Upgraded in place: the history and the log may be there now.
-    if (primed && (restarted || (!hadNewApi && hasNewApi()))) {
-      if (log.state === "unsupported") { log.state = "idle"; if (logShown()) openLog(); }
-      if (histState !== "ok" || restarted) { histState = "unknown"; if (hasNewApi()) loadHistory(); }
-    }
+    // Its shots may have changed while it was away.
+    if (primed && restarted) { histState = "unknown"; loadHistory(); }
     if (!kinds) loadKinds();
     let shotDone = false;
     let caughtUp = st.last_seq === lastSeq;
@@ -2354,10 +2335,10 @@
     // shot loads it again.
     if (!primed && caughtUp) {
       primed = true;
-      if (hasNewApi()) await loadHistory(); else histState = "unsupported";
+      loadHistory();
       // Opened at #log: the card could only open now, so scroll to it now.
       if (logShown()) openLog().then(() => { if (location.hash === "#log") scrollToLog(); });
-    } else if (shotDone && hasNewApi()) loadHistory();
+    } else if (shotDone) loadHistory();
     else if (histState === "failed" && Date.now() - histTried > 5000) loadHistory();
     renderAll();
   }
@@ -2394,6 +2375,12 @@
 
   setLanguage();
   applyStatic();
+  // A weight typed before the reload for an update (see refresh).
+  try {
+    const w = sessionStorage.getItem("gbs.weight");
+    sessionStorage.removeItem("gbs.weight");
+    if (w) $("f-weight").value = w;
+  } catch (_) {}
   showTab(location.hash.slice(1) || "start");
   tick();
   connectEvents();
