@@ -77,7 +77,8 @@ if `HTTPS_PROXY` is set; the link to an E65/E80 grinder never does.
 **To update** with Docker, get the new image and re-create the container
 with the same command and volume: `docker pull ghcr.io/skamba/gbs-anywhere`,
 `docker rm -f gbs-anywhere`, then the `docker run` above. The `/data` volume
-keeps everything you set up.
+keeps everything you set up, and an app left open reloads itself once the
+new version answers and nothing is being typed in it.
 
 ## Set up the E64 WS
 
