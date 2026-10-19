@@ -354,32 +354,75 @@ pub struct ServeConfig {
 /// How long requests still open when the server stops get to finish.
 const STOP_GRACE: Duration = Duration::from_secs(5);
 
-/// Done on Ctrl-C, or on unix on SIGTERM, which `docker stop` sends.
-pub async fn shutdown_signal() {
-    let ctrl_c = async {
-        if let Err(e) = tokio::signal::ctrl_c().await {
-            tracing::warn!("cannot wait for Ctrl-C: {e}");
-            std::future::pending::<()>().await;
-        }
-    };
+/// Done on Ctrl-C, or on unix on SIGTERM, which `docker stop` sends. The
+/// handlers are in place from this call on: call it first thing at startup,
+/// since a signal that comes before them (to PID 1 in a container) is
+/// dropped. A second signal, while open requests get their few seconds,
+/// ends the process at once.
+pub fn shutdown_signal() -> impl Future<Output = ()> + Send + 'static {
+    let mut signals = Signals::new();
+    async move {
+        signals.recv().await;
+        tokio::spawn(async move {
+            signals.recv().await;
+            tracing::info!("stopping at once");
+            // 130, as shells report an interrupted program.
+            std::process::exit(130);
+        });
+    }
+}
+
+/// The signals that stop gbs-anywhere.
+struct Signals {
     #[cfg(unix)]
-    let term = async {
-        use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::terminate()) {
-            Ok(mut term) => {
-                term.recv().await;
-            }
-            Err(e) => {
-                tracing::warn!("cannot wait for SIGTERM: {e}");
-                std::future::pending::<()>().await;
+    interrupt: Option<tokio::signal::unix::Signal>,
+    #[cfg(unix)]
+    terminate: Option<tokio::signal::unix::Signal>,
+    #[cfg(windows)]
+    ctrl_c: Option<tokio::signal::windows::CtrlC>,
+}
+
+impl Signals {
+    fn new() -> Self {
+        fn listen<T>(what: &str, handler: std::io::Result<T>) -> Option<T> {
+            handler
+                .inspect_err(|e| tracing::warn!("cannot wait for {what}: {e}"))
+                .ok()
+        }
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            Self {
+                interrupt: listen("Ctrl-C", signal(SignalKind::interrupt())),
+                terminate: listen("SIGTERM", signal(SignalKind::terminate())),
             }
         }
-    };
-    #[cfg(not(unix))]
-    let term = std::future::pending::<()>();
-    tokio::select! {
-        () = ctrl_c => {}
-        () = term => {}
+        #[cfg(windows)]
+        Self {
+            ctrl_c: listen("Ctrl-C", tokio::signal::windows::ctrl_c()),
+        }
+    }
+
+    /// Waits for the next one; forever when none could be set up.
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            async fn next(handler: &mut Option<tokio::signal::unix::Signal>) {
+                match handler {
+                    Some(s) => _ = s.recv().await,
+                    None => std::future::pending().await,
+                }
+            }
+            tokio::select! {
+                () = next(&mut self.interrupt) => {}
+                () = next(&mut self.terminate) => {}
+            }
+        }
+        #[cfg(windows)]
+        match &mut self.ctrl_c {
+            Some(s) => _ = s.recv().await,
+            None => std::future::pending().await,
+        }
     }
 }
 

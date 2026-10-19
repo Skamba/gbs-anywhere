@@ -419,8 +419,9 @@ impl WifiGrinder {
     /// ended (see [`PairingLock`]).
     pub fn new(cfg: WifiConfig, lock: PairingLock) -> anyhow::Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let (pairing, spare_id) = Pairing::open(&cfg)?;
+        // Taken before the read: a link that ends in between may have saved.
         let holding = lock.clone().try_lock_owned().ok();
+        let (pairing, spare_id) = Pairing::open(&cfg)?;
         if holding.is_some() {
             pairing.save(cfg.pairing_file.as_deref())?;
         }
@@ -493,6 +494,7 @@ impl WifiGrinder {
                 self.status(&server, WifiState::Failing, None, format!("{e:#}"));
                 backoff.wait().await;
             }
+            backoff.reset();
         }
         // One subscription for the whole run, so a shot reported while a
         // request is being retried is still answered.

@@ -146,6 +146,8 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
     init_tracing();
+    // First, so a `docker stop` during startup is not dropped.
+    let shutdown = server::shutdown_signal();
     tracing::info!("gbs-anywhere {}", gbs_anywhere::version());
     let file = args.config.as_deref().map(SettingsFile::open).transpose()?;
     // The shot window comes from the settings (`start_settings` below).
@@ -248,9 +250,12 @@ async fn main() -> anyhow::Result<()> {
         println!("{HELP}");
         tokio::spawn(stdin_loop(x.clone()));
     }
-    server::serve(x, cfg, server::shutdown_signal()).await?;
-    // Not a return: a read from stdin cannot be cancelled, and the runtime
-    // would wait for it (for Enter) before the process ends.
+    // Exits rather than returns: a read from stdin cannot be cancelled, and
+    // the runtime would wait for it (for Enter) before the process ends.
+    if let Err(e) = server::serve(x, cfg, shutdown).await {
+        eprintln!("Error: {e:#}");
+        std::process::exit(1);
+    }
     std::process::exit(0)
 }
 
