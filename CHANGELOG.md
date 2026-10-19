@@ -84,8 +84,8 @@ a minor release may change behaviour.
   (also opened with **Log** next to the last error in System status): the
   last 1,000 lines it printed (INFO and up), and new ones as they come
   (`GET /api/log`, `GET /api/log/stream`). Copying or downloading it
-  replaces IP addresses and logins with placeholders, so it can go into a
-  bug report.
+  replaces IP addresses and passwords in addresses with placeholders, so it
+  can go into a bug report.
 - Update check: once a day gbs-anywhere asks GitHub for its latest release,
   so the app can say when a newer one is out (`update` in `GET /api/state`).
   GitHub sees the request like any other, including your IP address; it

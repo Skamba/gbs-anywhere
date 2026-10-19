@@ -136,14 +136,17 @@ async fn app_page() -> impl IntoResponse {
 }
 
 // The app page as a template: `index.html` names where the styles and the
-// script go, and `app.js` where the texts go. `page()` fills them in, so the
-// page comes in one response with everything inline.
+// script go, and `app.js` where the texts and the version go. `page()` fills
+// them in, so the page comes in one response with everything inline.
 const PAGE_HTML: &str = include_str!("../../web/index.html");
 const PAGE_CSS: &str = include_str!("../../web/app.css");
 const PAGE_JS: &str = include_str!("../../web/app.js");
 const CSS_SLOT: &str = "/* web/app.css */";
 const JS_SLOT: &str = "/* web/app.js */";
 const STRINGS_SLOT: &str = "/* web/strings/<lang>.json */";
+/// `PAGE_VERSION` in app.js: the version the page comes with, so a page from
+/// the browser's cache can tell that another version answers.
+const VERSION_SLOT: &str = "/* version */";
 
 /// The app's languages and their texts; the page takes its list from these.
 /// What else a new language needs is under "Web app" in AGENTS.md.
@@ -161,7 +164,14 @@ pub(super) fn page() -> &'static str {
             .map(|(lang, json)| format!("{}: {}", json!(lang), script_safe(json.trim())))
             .collect::<Vec<_>>()
             .join(",\n");
-        let script = fill(PAGE_JS.trim_end(), &[(STRINGS_SLOT, strings.as_str())]);
+        let version = script_safe(&json!(crate::version()).to_string());
+        let script = fill(
+            PAGE_JS.trim_end(),
+            &[
+                (STRINGS_SLOT, strings.as_str()),
+                (VERSION_SLOT, version.as_str()),
+            ],
+        );
         let styles = PAGE_CSS.trim_end();
         fill(PAGE_HTML, &[(CSS_SLOT, styles), (JS_SLOT, script.as_str())])
     });
@@ -599,7 +609,7 @@ mod tests {
     //! The app page and its texts (`web/strings/<lang>.json`), checked
     //! without a JavaScript engine: every English text is in every language,
     //! with the same placeholders, every key the page uses exists, and the
-    //! page comes with its styles, script and texts filled in.
+    //! page comes with its styles, script, texts and version filled in.
 
     use std::collections::{BTreeMap, BTreeSet};
     use std::path::Path;
@@ -608,7 +618,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        CSS_SLOT, JS_SLOT, LANGS, PAGE_CSS, PAGE_HTML, PAGE_JS, STRINGS_SLOT, page, script_safe,
+        CSS_SLOT, JS_SLOT, LANGS, PAGE_CSS, PAGE_HTML, PAGE_JS, STRINGS_SLOT, VERSION_SLOT, page,
+        script_safe,
     };
 
     /// One language's texts by key: a text, or a plural
@@ -940,11 +951,13 @@ mod tests {
             ("index.html", PAGE_HTML, CSS_SLOT),
             ("index.html", PAGE_HTML, JS_SLOT),
             ("app.js", PAGE_JS, STRINGS_SLOT),
+            ("app.js", PAGE_JS, VERSION_SLOT),
         ];
         for (file, text, slot) in slots {
             assert_eq!(text.matches(slot).count(), 1, "{slot} in {file}");
         }
         assert!(PAGE_HTML.find(CSS_SLOT) < PAGE_HTML.find(JS_SLOT));
+        assert!(PAGE_JS.find(STRINGS_SLOT) < PAGE_JS.find(VERSION_SLOT));
         let langs: BTreeSet<_> = LANGS.iter().map(|(lang, _)| lang).collect();
         assert_eq!(langs.len(), LANGS.len(), "a language twice in LANGS");
         // Nothing in them ends their element early.
@@ -958,9 +971,14 @@ mod tests {
         }
         let css = format!("<style>\n{}\n</style>", PAGE_CSS.trim_end());
         assert!(page.contains(&css), "the styles");
-        let (head, tail) = PAGE_JS.split_once(STRINGS_SLOT).unwrap();
+        let (head, rest) = PAGE_JS.split_once(STRINGS_SLOT).unwrap();
+        let (middle, tail) = rest.split_once(VERSION_SLOT).unwrap();
         assert!(page.contains(&format!("<script>\n{head}")), "the script");
-        assert!(page.contains(&format!("{}\n</script>", tail.trim_end())));
+        // The version the page comes with, as a JSON string.
+        let version = serde_json::to_string(crate::version()).unwrap();
+        let script_end = format!("{middle}{version}{}\n</script>", tail.trim_end());
+        assert!(page.contains(&script_end), "the rest of the script");
+        assert!(page.contains(&format!("const PAGE_VERSION = {version};")));
         for (lang, json) in LANGS {
             let texts = format!("\"{lang}\": {}", script_safe(json.trim()));
             assert!(page.contains(&texts), "the {lang} texts");

@@ -236,9 +236,7 @@
     let body = null;
     try { body = await r.json(); } catch (_) {}
     if (!r.ok) {
-      const e = new Error(body && body.error ? sentence(body.error) : t("common.requestFailed", { status: String(r.status) }));
-      e.status = r.status;
-      throw e;
+      throw new Error(body && body.error ? sentence(body.error) : t("common.requestFailed", { status: String(r.status) }));
     }
     return body == null ? {} : body;
   }
@@ -278,10 +276,7 @@
     const age = S && S.grinder ? S.grinder.last_poll_age_ms : null;
     return age != null && age < 6000;
   }
-  function windowS() {
-    if (S && S.settings && typeof S.settings.shot_window_s === "number") return S.settings.shot_window_s;
-    return 0;
-  }
+  const windowS = () => (S && S.settings && S.settings.shot_window_s) || 0;
   const windowLabel = () => clock(windowS() * 1000);
   /** The shot times the grinder adjusts from (`grinder_range`: over min_ms,
    *  up to max_ms), or null before the state is in. */
@@ -1526,6 +1521,7 @@
   /** Saves the shot window (null: the start setting); true once saved. */
   async function saveWindow(value) {
     clearTimeout(win.timer);
+    win.timer = null;
     // Only the newest save's answer counts; an older one may come back later.
     const seq = ++win.seq;
     let saved = false;
@@ -2096,8 +2092,8 @@
     if (log.follow) scrollLogEnd();
   });
 
-  // Copy and Download share the export: IP addresses and logins replaced the
-  // same way throughout, and a header line saying what it holds.
+  // Copy and Download share the export: IP addresses replaced the same way
+  // throughout, and a header line saying what it holds.
   function scrubber() {
     const seen = new Map();
     const name = (ip) => {
@@ -2136,7 +2132,7 @@
     const first = lines.length ? new Date(lines[0].ts) : new Date();
     const last = lines.length ? new Date(lines[lines.length - 1].ts) : new Date();
     const head = "# gbs-anywhere " + ((S && S.version) || "") + " log · " + stamp(first) + " to " + stamp(last)
-      + " (" + utcOffset(last) + ") · " + lines.length + (lines.length === 1 ? " line" : " lines") + " · " + filter + " · IP addresses and logins replaced";
+      + " (" + utcOffset(last) + ") · " + lines.length + (lines.length === 1 ? " line" : " lines") + " · " + filter + " · IP addresses and passwords in addresses replaced";
     return head + "\n" + body.join("\n") + "\n";
   }
   /** Shows `note` under the log for a moment; `kind` "copy" or "dl" also ticks that button. */
@@ -2269,11 +2265,18 @@
   // Another version of gbs-anywhere answers (it was updated): the page that
   // comes with it is loaded, so the page always matches its server. Not
   // while something is typed or open here; the next poll tries again.
-  let pageVersion = null, reloading = false;
-  /** Something typed or open that a reload would lose. */
+  // PAGE_VERSION is the version this page was built with, filled in by the
+  // server like STRINGS, so a page from the browser's cache keeps its own.
+  const PAGE_VERSION = /* version */;
+  // `reloadedFor`: the version the last reload was for (see the start
+  // below). A page still older after it, say from a cache in between, is
+  // not reloaded again for that version.
+  let reloading = false, reloadedFor = null;
+  /** Something typed or open that a reload would lose, or a shot window
+   *  still waiting to be saved. */
   function midEdit() {
     const at = document.activeElement;
-    return !!(editing || addingKind || !$("set-host-form").hidden || !$("sheet").hidden
+    return !!(editing || addingKind || win.timer || win.pending != null || !$("set-host-form").hidden || !$("sheet").hidden
       || (at && at.matches && at.matches("input, textarea")));
   }
 
@@ -2282,12 +2285,11 @@
     try { st = await api("/api/state"); }
     catch (_) { if (online) offlineSince = Date.now(); online = false; renderAll(); return; }
     online = true;
-    if (pageVersion === null) pageVersion = st.version;
-    if (st.version !== pageVersion && !midEdit()) {
+    if (st.version !== PAGE_VERSION && st.version !== reloadedFor && !midEdit()) {
       if (!reloading) {
         reloading = true;
         // A weight typed for the next shot comes along (see the start below).
-        try { sessionStorage.setItem("gbs.weight", $("f-weight").value); } catch (_) {}
+        try { sessionStorage.setItem("gbs.reload", JSON.stringify({ version: st.version, weight: $("f-weight").value })); } catch (_) {}
         location.reload();
       }
       return;
@@ -2375,11 +2377,12 @@
 
   setLanguage();
   applyStatic();
-  // A weight typed before the reload for an update (see refresh).
+  // Carried over the reload for an update (see refresh): the version it was
+  // for, and a weight typed for the next shot.
   try {
-    const w = sessionStorage.getItem("gbs.weight");
-    sessionStorage.removeItem("gbs.weight");
-    if (w) $("f-weight").value = w;
+    const r = JSON.parse(sessionStorage.getItem("gbs.reload") || "null");
+    sessionStorage.removeItem("gbs.reload");
+    if (r) { reloadedFor = r.version; if (r.weight) $("f-weight").value = r.weight; }
   } catch (_) {}
   showTab(location.hash.slice(1) || "start");
   tick();
