@@ -429,9 +429,11 @@
     min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--cs); color: var(--ci); font-size: 11px;
     font-weight: 700; text-align: center;
   }
-  .k-success { --cc: var(--ok-solid); --cs: var(--ok-bg); --ci: var(--ok-fg); }
+  .k-succeeded { --cc: var(--ok-solid); --cs: var(--ok-bg); --ci: var(--ok-fg); }
   .k-aborted { --cc: var(--warn-solid); --cs: var(--warn-soft); --ci: var(--warn-fg); }
-  .k-error { --cc: var(--bad-solid); --cs: var(--bad-bg); --ci: var(--bad-fg); }
+  .k-failed { --cc: var(--bad-solid); --cs: var(--bad-bg); --ci: var(--bad-fg); }
+  /* A success the grinder ignored: listed under Success, with a neutral badge. */
+  .k-ignored { --cs: var(--neutral-bg); --ci: var(--neutral-fg); }
   .day { display: flex; flex-direction: column; gap: 8px; }
   .day h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
   .day ul { margin: 0; padding: 0; list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
@@ -1046,8 +1048,8 @@
       "start.step2.send": "Send",
       "start.step2.byHand": "Entered by hand",
       "start.step2.reportedBy": "Reported by {title}",
-      "start.form.tooShort": "10 s or less: the grinder ignores this shot and asks you to go finer yourself.",
-      "start.form.tooLong": "Over 80 s: the grinder ignores this shot.",
+      "start.form.tooShort": "{limit}\u00a0s or less: the grinder ignores this shot and asks you to go finer yourself.",
+      "start.form.tooLong": "Over {limit}\u00a0s: the grinder ignores this shot.",
       "start.form.enterTime": "Enter the time.",
       "start.form.notSent": "Not sent: {error}",
       "start.abort.title": "Abort the shot?",
@@ -1192,9 +1194,9 @@
       "version.github": "gbs-anywhere on GitHub (opens in a new tab)",
 
       "history.filter": "Filter by status",
-      "history.kind.success": "Success",
+      "history.kind.succeeded": "Success",
       "history.kind.aborted": "Aborted",
-      "history.kind.error": "Error",
+      "history.kind.failed": "Error",
       "history.chip": { one: "{label}, {n} shot", other: "{label}, {n} shots" },
       "history.today": "Today",
       "history.yesterday": "Yesterday",
@@ -1205,15 +1207,16 @@
       "history.stoppedWaiting": "The grinder stopped waiting",
       "history.refused": "The grinder refused the shot",
       "history.address": "Ended: grinder address changed",
+      "history.endMissed": "Ended: next shot started",
       "history.target": "Target {targets}",
-      "history.ignored": "ignored by the grinder",
+      "history.ignored": "Ignored",
       "history.unsupported": "This gbs-anywhere server keeps no shot history. Update gbs-anywhere to see your shots here.",
       "history.failed": "Could not load the history: {error} Trying again…",
       "history.loading": "Loading…",
       "history.empty": "No shots yet. Each shot shows up here once it is done.",
       "history.noMatch": "No shots match the filter. Tap a status above to show it again.",
       "history.kept": { one: "The last shot is kept on this computer.", other: "The last {n} shots are kept on this computer." },
-      "history.keptMemory": { one: "The last shot is kept in memory only, until gbs-anywhere restarts.", other: "The last {n} shots are kept in memory only, until gbs-anywhere restarts." },
+      "history.keptMemory": { one: "The last shot is kept in memory for now, not saved on this computer.", other: "The last {n} shots are kept in memory for now, not saved on this computer." },
 
       "log.follow": "Follow",
       "log.warnOnly": "Warnings only",
@@ -1378,8 +1381,8 @@
       "start.step2.send": "Senden",
       "start.step2.byHand": "Von Hand eingegeben",
       "start.step2.reportedBy": "Gemeldet von {title}",
-      "start.form.tooShort": "10 s oder weniger: Die Mühle ignoriert diesen Bezug und bittet dich, selbst feiner zu stellen.",
-      "start.form.tooLong": "Über 80 s: Die Mühle ignoriert diesen Bezug.",
+      "start.form.tooShort": "{limit}\u00a0s oder weniger: Die Mühle ignoriert diesen Bezug und bittet dich, selbst feiner zu stellen.",
+      "start.form.tooLong": "Über {limit}\u00a0s: Die Mühle ignoriert diesen Bezug.",
       "start.form.enterTime": "Gib die Zeit ein.",
       "start.form.notSent": "Nicht gesendet: {error}",
       "start.abort.title": "Bezug abbrechen?",
@@ -1549,9 +1552,9 @@
       "version.github": "gbs-anywhere auf GitHub (öffnet einen neuen Tab)",
 
       "history.filter": "Nach Status filtern",
-      "history.kind.success": "Erfolgreich",
+      "history.kind.succeeded": "Erfolgreich",
       "history.kind.aborted": "Abgebrochen",
-      "history.kind.error": "Fehler",
+      "history.kind.failed": "Fehler",
       "history.chip": { one: "{label}, {n} Bezug", other: "{label}, {n} Bezüge" },
       "history.today": "Heute",
       "history.yesterday": "Gestern",
@@ -1562,15 +1565,16 @@
       "history.stoppedWaiting": "Die Mühle hat aufgehört zu warten",
       "history.refused": "Die Mühle hat den Bezug abgelehnt",
       "history.address": "Beendet: Mühlenadresse geändert",
+      "history.endMissed": "Beendet: nächster Bezug gestartet",
       "history.target": "Ziel {targets}",
-      "history.ignored": "von der Mühle ignoriert",
+      "history.ignored": "Ignoriert",
       "history.unsupported": "Dieser gbs-anywhere-Server führt keine Historie. Aktualisiere gbs-anywhere, um deine Bezüge hier zu sehen.",
       "history.failed": "Die Historie konnte nicht geladen werden: {error} Neuer Versuch…",
       "history.loading": "Lädt…",
       "history.empty": "Noch keine Bezüge. Jeder Bezug erscheint hier, sobald er fertig ist.",
       "history.noMatch": "Kein Bezug passt zum Filter. Tippe oben auf einen Status, um ihn wieder anzuzeigen.",
       "history.kept": { one: "Der letzte Bezug wird auf diesem Computer gespeichert.", other: "Die letzten {n} Bezüge werden auf diesem Computer gespeichert." },
-      "history.keptMemory": { one: "Der letzte Bezug wird nur im Speicher gehalten, bis gbs-anywhere neu startet.", other: "Die letzten {n} Bezüge werden nur im Speicher gehalten, bis gbs-anywhere neu startet." },
+      "history.keptMemory": { one: "Der letzte Bezug wird vorerst nur im Arbeitsspeicher gehalten, nicht auf diesem Computer gespeichert.", other: "Die letzten {n} Bezüge werden vorerst nur im Arbeitsspeicher gehalten, nicht auf diesem Computer gespeichert." },
 
       "log.follow": "Folgen",
       "log.warnOnly": "Nur Warnungen",
@@ -1777,8 +1781,6 @@
   }
 
   // --- App state ---------------------------------------------------------------
-  const MIN_MS = 10000;          // the grinder ignores shots up to 10 s
-  const MAX_MS = 80000;          // and shots over 80 s
   const FRESH_MS = 10 * 60000;   // a finished shot stays on the Start tab this long
   const ON_TARGET_S = 1.0;       // within this of the recipe time counts as on target
   const KNOB_MS = 5 * 60000;     // E64: how long a grind shows "press the knob"
@@ -1820,13 +1822,38 @@
     return t && typeof t.secs === "number" ? t.secs : 0;
   }
   const windowLabel = () => clock(windowS() * 1000);
+  /** The shot times the grinder adjusts from (`grinder_range`: over min_ms,
+   *  up to max_ms), or null before the state is in. */
+  const grinderRange = () => (S && S.grinder_range) || null;
+  /** Whether the grinder adjusts from a shot of `ms`, or null when that is
+   *  not known yet. */
+  function inGrinderRange(ms) {
+    const r = grinderRange();
+    return r && ms != null ? ms > r.min_ms && ms <= r.max_ms : null;
+  }
   function lastOf(kindsWanted) {
     for (let i = events.length - 1; i >= 0; i--) if (kindsWanted.includes(events[i].kind)) return events[i];
     return null;
   }
-  // Ends of a brew that are no failure (history kind "aborted").
-  const ABORTS = ["aborted by user", "a newer Grind-by-Sync grind replaced it", "the grinder address changed"];
-  const isAbort = (r) => ABORTS.includes(r);
+  // Why a brew ended without a result, by its `cause` (the server's
+  // AbortCause): on purpose (history kind "aborted") or a failure, the text
+  // on the Start tab and the history title. A timeout's texts say how long
+  // it waited (errorTitle, shotTitle). A test in control_api.rs checks this
+  // table against the server.
+  const CAUSES = {
+    shot_aborted_by_user: { onPurpose: true, text: "start.aborted.user", title: "history.abortedUser" },
+    grinder_shot_replaced: { onPurpose: true, text: "start.aborted.replaced", title: "history.replaced" },
+    grinder_address_changed: { onPurpose: true, text: "start.aborted.address", title: "history.address" },
+    shot_timed_out: { onPurpose: false },
+    grinder_shot_dropped: { onPurpose: false, text: "start.error.stoppedWaiting", title: "history.stoppedWaiting" },
+    grinder_shot_refused: { onPurpose: false, text: "start.error.refused", title: "history.refused" },
+    grinder_unpaired: { onPurpose: false, text: "start.error.unknownApp", title: "start.error.unknownApp" },
+    shot_end_missed: { onPurpose: false, title: "history.endMissed" },
+  };
+  /** The cause of a shot_aborted event or a history entry, or null. */
+  const causeOf = (x) => (x && x.cause) || null;
+  const causeInfo = (cause) => CAUSES[cause] || {};
+  const isAbort = (cause) => !!causeInfo(cause).onPurpose;
   /** An E65/E80 setup: a Generic WiFi link, or an address it is starting with. */
   const wifiSetup = () => !!(wifiOf() || (S && S.settings && S.settings.grinder_host));
   /** The E65/E80 link is (re)starting and has not reached the grinder yet. */
@@ -1869,9 +1896,9 @@
     const h = hist && hist.shots && hist.shots[0];
     if (!h || !ev) return null;
     if (ev.kind === "shot_reported") {
-      return h.kind === "success" && h.time_s != null && Math.abs(h.time_s * 1000 - ev.result.time_ms) < 60 ? h : null;
+      return h.kind === "succeeded" && h.time_s != null && Math.abs(h.time_s * 1000 - ev.result.time_ms) < 60 ? h : null;
     }
-    return h.kind !== "success" && h.reason === ev.reason ? h : null;
+    return h.kind !== "succeeded" && h.cause === ev.cause ? h : null;
   }
   /** When the brew ended with this event. */
   function endTime(ev) {
@@ -1904,19 +1931,25 @@
     const phase = S.phase.phase;
     const outcome = lastOf(["shot_reported", "shot_aborted"]);
     const last = lastOf(["grind_result", "brew_job", "shot_reported", "shot_aborted"]);
-    let sc = "ready", reason = null;
+    // `reason` is the server's words for `cause`, shown for a cause this
+    // app does not know.
+    let sc = "ready", reason = null, cause = null;
     if (phase === "brewing") sc = "running";
     else if (phase === "finishing") {
       if (!S.phase.aborted) sc = "checking";
       else {
-        reason = outcome && outcome.kind === "shot_aborted" ? outcome.reason : null;
-        sc = isAbort(reason) ? "aborted" : "error";
+        const ended = outcome && outcome.kind === "shot_aborted" ? outcome : null;
+        reason = ended ? ended.reason : null;
+        cause = causeOf(ended);
+        sc = isAbort(cause) ? "aborted" : "error";
       }
     } else if (last && last.kind === "grind_result" && knobFresh(last)) sc = "knob";
     else if (last && last.kind === "shot_reported") sc = fresh(last) ? "done" : "ready";
-    else if (last && last.kind === "shot_aborted" && !isAbort(last.reason) && fresh(last)) { sc = "error"; reason = last.reason; }
+    else if (last && last.kind === "shot_aborted" && !isAbort(causeOf(last)) && fresh(last)) {
+      sc = "error"; reason = last.reason; cause = causeOf(last);
+    }
     if (sc === "error" && outcome && outcome.seq <= ui.dismissed) sc = "ready";
-    return { sc, reason, outcome, started: lastOf(["brew_started"]), job: lastOf(["grind_result", "brew_job"]) };
+    return { sc, reason, cause, outcome, started: lastOf(["brew_started"]), job: lastOf(["grind_result", "brew_job"]) };
   }
 
   // Per state: the tone and badge (catalog key under badge.) of each step.
@@ -2036,7 +2069,7 @@
       return s("error", "alert", "noGrinder", missing.text, missing.detail);
     }
     if (blocked) return s("warn", "alert", "blocked", t("sys.text.blocked", { message: blocked.grinder_message }));
-    if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f.reason, f.outcome));
+    if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f));
     // Shots can still be made, but something needs a look: not green.
     if (wifi && wifi.problem) return s("warn", "alert", "problem", t("sys.text.problem"), sentence(wifi.problem));
     const failing = (S.integrations || []).find((i) => i.health === "error" || i.health === "stopped");
@@ -2322,17 +2355,14 @@
     }
     $("s2-error").hidden = f.sc !== "error";
     if (f.sc === "error") {
-      const timeout = f.reason === "no result reported in time";
-      $("s2-err-title").textContent = errorTitle(f.reason, f.outcome);
+      const timeout = f.cause === "shot_timed_out";
+      $("s2-err-title").textContent = errorTitle(f);
       $("s2-err-info-btn").hidden = !timeout;
       $("s2-err-info-btn").setAttribute("aria-expanded", String(ui.errInfo));
       $("s2-err-info").hidden = !(timeout && ui.errInfo);
     }
     $("s2-aborted").hidden = f.sc !== "aborted";
-    if (f.sc === "aborted") {
-      $("s2-aborted").textContent = t(f.reason === "aborted by user" ? "start.aborted.user"
-        : f.reason === "the grinder address changed" ? "start.aborted.address" : "start.aborted.replaced");
-    }
+    if (f.sc === "aborted") $("s2-aborted").textContent = t(causeInfo(f.cause).text);
 
     // Step 3
     $("s3-wait").hidden = !(f.sc === "ready" || f.sc === "knob" || f.sc === "running");
@@ -2350,33 +2380,33 @@
     return i ? t("start.step2.reportedBy", { title: i.title }) : t("start.step2.byHand");
   }
 
-  // The machine's reasons for ending a brew that failed, and their texts.
-  const ERROR_REASONS = {
-    "the grinder stopped waiting before the shot came": "start.error.stoppedWaiting",
-    "the grinder refused the job": "start.error.refused",
-    "the grinder no longer knows this gbs-anywhere": "start.error.unknownApp",
-  };
-  function errorTitle(reason, outcome) {
-    if (reason === "no result reported in time") {
+  /** Why the shot of flow() `f` failed. */
+  function errorTitle(f) {
+    if (f.cause === "shot_timed_out") {
       // How long it waited, from the history; else the current setting.
-      const h = histFor(outcome);
+      const h = histFor(f.outcome);
       const ms = h ? Date.parse(h.ended_at) - Date.parse(h.at) : NaN;
       if (isFinite(ms) && ms > 0) return t("start.error.timeout", { window: clock(ms) });
       return windowS() > 0 ? t("start.error.timeout", { window: windowLabel() }) : t("start.error.timeoutNoLimit");
     }
-    if (ERROR_REASONS[reason]) return t(ERROR_REASONS[reason]);
-    // A reason this app does not know: as the server says it.
-    return reason ? cap(reason) : t("start.error.generic");
+    const text = causeInfo(f.cause).text;
+    if (text) return t(text);
+    // A cause this app does not know: as the server says it.
+    return f.reason ? cap(f.reason) : t("start.error.generic");
   }
 
-  /** Green when the grinder takes the shot and may adjust; grey when it
-   *  ignores the shot or (as in the design) the shot was on target. */
+  /** Green when the grinder adjusts from the shot; grey when it ignores
+   *  the shot or (as in the design) the shot was on target. */
   function renderOutcome(res, tg, ev) {
     const secsShot = res.time_ms / 1000;
     const box = $("s3-outcome");
-    const inRange = ev && typeof ev.in_grinder_range === "boolean" ? ev.in_grinder_range : res.time_ms <= MAX_MS;
+    const range = grinderRange();
+    const inRange = (ev ? ev.in_grinder_range : inGrinderRange(res.time_ms)) !== false;
     let result, change = "", good = false;
-    if (res.time_ms <= MIN_MS) {
+    // in_grinder_range does not say on which side a shot missed, so the
+    // time picks the wording, with every server: a shot too short also
+    // gets the hint to grind finer by hand.
+    if (range && res.time_ms <= range.min_ms) {
       result = t("outcome.tooShort", { time: secs(secsShot) });
       change = t("outcome.finerByHand");
     } else if (!inRange) {
@@ -2435,8 +2465,10 @@
     $("send").disabled = !ok || busy;
     let text = message || "", isWarn = !!warn;
     if (!message && ok) {
-      if (typed * 1000 <= MIN_MS) { text = t("start.form.tooShort"); isWarn = true; }
-      else if (typed * 1000 > MAX_MS) { text = t("start.form.tooLong"); isWarn = true; }
+      // No warning before the state (and with it the limits) is in.
+      const range = grinderRange(), limit = (ms) => ({ limit: fmt.upToOne.format(ms / 1000) });
+      if (range && typed * 1000 <= range.min_ms) { text = t("start.form.tooShort", limit(range.min_ms)); isWarn = true; }
+      else if (range && typed * 1000 > range.max_ms) { text = t("start.form.tooLong", limit(range.max_ms)); isWarn = true; }
     }
     h.textContent = text;
     h.className = "hint" + (isWarn ? " warn" : "");
@@ -3329,7 +3361,7 @@
   }
 
   // --- History tab -----------------------------------------------------------------
-  const HKINDS = ["success", "aborted", "error"];
+  const HKINDS = ["succeeded", "aborted", "failed"];
   const kindLabel = (k) => (HKINDS.includes(k) ? t("history.kind." + k) : k);
   let hHidden = {};
   try { hHidden = JSON.parse(store.get("historyHidden") || "{}") || {}; } catch (_) {}
@@ -3366,36 +3398,44 @@
     return name + " · " + date;
   }
 
-  // The machine's reasons for ending a brew, and their short history titles.
-  const HISTORY_REASONS = {
-    "aborted by user": "history.abortedUser",
-    "a newer Grind-by-Sync grind replaced it": "history.replaced",
-    "the grinder stopped waiting before the shot came": "history.stoppedWaiting",
-    "the grinder refused the job": "history.refused",
-    "the grinder address changed": "history.address",
-    "the grinder no longer knows this gbs-anywhere": "start.error.unknownApp",
-  };
   function shotTitle(s) {
-    if (s.kind === "success") {
+    if (s.kind === "succeeded") {
       if (s.time_s == null) return "–";
       return s.weight_g != null ? t("unit.shot", { time: secs(s.time_s), weight: grams(s.weight_g) }) : t("unit.seconds", { time: secs(s.time_s) });
     }
-    const r = s.reason || "";
-    if (r === "no result reported in time") {
+    const cause = causeOf(s);
+    if (cause === "shot_timed_out") {
       const ms = Date.parse(s.ended_at) - Date.parse(s.at);
       return t("history.timeout", { time: isFinite(ms) ? clock(ms) : windowLabel() });
     }
-    if (HISTORY_REASONS[r]) return t(HISTORY_REASONS[r]);
-    // A reason this app does not know: as the server says it.
-    return r ? cap(r) : kindLabel(s.kind);
+    const title = causeInfo(cause).title;
+    if (title) return t(title);
+    // A cause this app does not know: as the server says it.
+    return s.reason ? cap(s.reason) : kindLabel(s.kind);
   }
   function shotSub(s) {
     const parts = [];
     const tgt = [s.target_time_s != null ? t("unit.seconds", { time: secs(s.target_time_s) }) : null,
       s.target_weight_g != null ? t("unit.grams", { weight: gramsShort(s.target_weight_g) }) : null].filter(Boolean);
     if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
-    if (s.kind === "success" && s.time_s != null && (s.time_s * 1000 <= MIN_MS || s.time_s * 1000 > MAX_MS)) parts.push(t("history.ignored"));
     return parts.join(" · ");
+  }
+  /** A success the grinder did not adjust from (too short or too long): as
+   *  the server recorded it, or for a shot saved before it did, by the same
+   *  rule from its time (once the limits are known). */
+  const ignoredShot = (s) => s.kind === "succeeded"
+    && (s.in_grinder_range ?? inGrinderRange(s.time_s == null ? null : s.time_s * 1000)) === false;
+
+  // Until it syncs, a computer's clock may still read the last shutdown
+  // time, or 1970 or the system's build date. A shot dated before the shot
+  // history existed (2026) was recorded in one of the last two cases: its
+  // day and time are not known. One dated by a last shutdown time looks
+  // right and is not caught here.
+  const CLOCK_SET_MS = Date.UTC(2026, 0, 1);
+  /** When the shot started, or null when that is not known. */
+  function shotDate(s) {
+    const d = new Date(s.at);
+    return isNaN(d) || d.getTime() < CLOCK_SET_MS ? null : d;
   }
 
   function renderHistory() {
@@ -3425,24 +3465,29 @@
         onclick: () => { hHidden[k] = on; store.set("historyHidden", JSON.stringify(hHidden)); renderHistory(); },
       }, el("span", { class: "chip" }, kindLabel(k), el("span", { class: "chip-count", text: fmt.int.format(n) })));
     }));
-    const visible = shots.filter((s) => !hHidden[s.kind]);
+    // Newest first by the time shown, so a shot dated wrongly (the clock
+    // was not set, or stepped) cannot split the days; those without a
+    // known day come last, newest recorded first.
+    const time = (x) => (x.d ? x.d.getTime() : 0);
+    const visible = shots.filter((s) => !hHidden[s.kind])
+      .map((s, i) => ({ s, d: shotDate(s), i }))
+      .sort((a, b) => time(b) - time(a) || a.i - b.i);
     const byDay = new Map();
-    for (const s of visible) {
-      const d = new Date(s.at);
-      const label = isNaN(d) ? t("history.unknownDay") : dayLabel(d);
+    for (const x of visible) {
+      const label = x.d ? dayLabel(x.d) : t("history.unknownDay");
       if (!byDay.has(label)) byDay.set(label, { label, items: [] });
-      byDay.get(label).items.push(s);
+      byDay.get(label).items.push(x);
     }
     const days = [...byDay.values()];
     groups.replaceChildren(...days.map((g) => el("section", { class: "day" },
       el("h2", { text: g.label }),
-      el("ul", null, g.items.map((s) => {
-        const d = new Date(s.at);
+      el("ul", null, g.items.map(({ s, d }) => {
         const sub = shotSub(s);
-        return el("li", { class: "k-" + s.kind },
-          el("p", { class: "h-time", text: isNaN(d) ? "–" : hhmm(d) }),
+        const ignored = ignoredShot(s);
+        return el("li", { class: "k-" + (ignored ? "ignored" : s.kind) },
+          el("p", { class: "h-time", text: d ? hhmm(d) : "–" }),
           el("div", { class: "h-main" }, el("p", { class: "h-title", text: shotTitle(s) }), sub ? el("p", { class: "h-sub", text: sub }) : null),
-          el("span", { class: "h-badge", text: kindLabel(s.kind) }));
+          el("span", { class: "h-badge", text: ignored ? t("history.ignored") : kindLabel(s.kind) }));
       })))));
     empty.hidden = visible.length > 0;
     empty.textContent = shots.length === 0 ? t("history.empty") : t("history.noMatch");
