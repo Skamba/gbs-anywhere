@@ -5,7 +5,7 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations (each status line also as `detail_key` and `detail_vars`, for wording it in another language), settings (with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit), update check; `boot_id` changes on every start, so an app can tell its event and log numbers start over; `grinder_range`: the shot times the grinder adjusts from, over `min_ms` and up to `max_ms` (10 000 and 80 000), as `in_grinder_range` checks them |
+//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations (each status line also as `detail_key` and `detail_vars`, for wording it in another language), settings (with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit), update check; `boot_id` changes on every start, so an app can tell its event and log numbers start over; `grinder_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them; they win over flags from then on. `null` goes back to the start setting (the flag or environment variable, else the default); `"grinder_host":""` removes the address (without a start address, the same as `null`). Replies with the settings as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
@@ -13,10 +13,10 @@
 //! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes one added in the app and restarts it; a password left out or empty stays |
 //! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
-//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first: how each ended as `kind` (`succeeded`, `aborted` or `failed`), `at` and `ended_at` (UTC, whole seconds; `ended_at` as the clock read when the shot ended, `at` counted back from it by the shot's length on a clock that does not jump), each that succeeded with `in_grinder_range` as on `shot_reported` (none on shots saved by earlier builds), each other with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart (false while saving fails) |
+//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first: how each ended as `kind` (`succeeded`, `aborted` or `failed`), `at` and `ended_at` (UTC, whole seconds; `ended_at` as the clock read when the shot ended, `at` counted back from it by the shot's length on a clock that does not jump), each that succeeded with `in_grinder_range` as on `shot_reported` (`null` when the shot's window was not known, see `grinder_range`, and on shots saved by earlier builds), each other with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart (false while saving fails) |
 //! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (`level`: `info`, `warn` or `error`) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
 //! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`); `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
-//! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened; `shot_reported` says with `in_grinder_range` whether the grinder adjusts from its time (see `grinder_range`); `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
+//! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened; `shot_reported` says with `in_grinder_range` whether the grinder adjusts from its time, by the window of the grinder's request (see `grinder_range`), or `null` when that is not known; `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the brew as a user abort (grinder skips it) |
@@ -30,9 +30,7 @@ use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use crate::protocol::machine::EventRecord;
-use crate::protocol::{
-    MAX_EXTRACTION_TIME_MS, MIN_EXTRACTION_TIME_MS, MachineError, MakoState, ShotResult,
-};
+use crate::protocol::{MachineError, MakoState, ShotResult};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -102,10 +100,7 @@ pub fn state_json(x: &Server) -> Value {
             "grind_blocked": blocked,
             "last_shot": m.last_shot(),
             "last_grind": m.last_grind(),
-            "grinder_range": {
-                "min_ms": MIN_EXTRACTION_TIME_MS,
-                "max_ms": MAX_EXTRACTION_TIME_MS,
-            },
+            "grinder_range": m.grinder_range(),
             "overrides": m.overrides,
             "grinder": {
                 "peer": link.peer,

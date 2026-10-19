@@ -26,8 +26,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{
-    EXTRACTION_STATUS_USER_ABORT, GrindResult, MAX_EXTRACTION_TIME_MS, MIN_EXTRACTION_TIME_MS,
-    MachineIdentity, MachineStatus, MakoState,
+    EXTRACTION_STATUS_USER_ABORT, GrindResult, MAX_EXTRACTION_TIME_MS, MAX_OFF_TARGET_MS,
+    MIN_EXTRACTION_TIME_MS, MachineIdentity, MachineStatus, MakoState,
 };
 
 /// Tunables. The extraction-status values for a normal brew are a best guess;
@@ -95,12 +95,39 @@ impl ShotResult {
     pub fn from_grams(time: Duration, beverage_g: f64) -> Self {
         Self::new(time, beverage_g)
     }
+}
 
-    /// Whether the grinder adjusts from the time: not from a shot of 10 s or
-    /// less ([`MIN_EXTRACTION_TIME_MS`]) or over 80 s
+/// The shot times the grinder adjusts from: over `min_ms`, up to `max_ms`
+/// (`grinder_range` in `GET /api/state`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct GrinderRange {
+    pub min_ms: u32,
+    pub max_ms: u32,
+}
+
+impl GrinderRange {
+    /// The E64 WS's: over 10 s ([`MIN_EXTRACTION_TIME_MS`]), up to 80 s
     /// ([`MAX_EXTRACTION_TIME_MS`]).
-    pub fn in_grinder_range(&self) -> bool {
-        self.time_ms > MIN_EXTRACTION_TIME_MS && self.time_ms <= MAX_EXTRACTION_TIME_MS
+    pub const E64: Self = Self {
+        min_ms: MIN_EXTRACTION_TIME_MS,
+        max_ms: MAX_EXTRACTION_TIME_MS,
+    };
+
+    /// An E65/E80 GbS's, for a brew job that aims for `target_ms`: within
+    /// 15 s of it ([`MAX_OFF_TARGET_MS`]), but never down to 10 s
+    /// ([`MIN_EXTRACTION_TIME_MS`]).
+    pub fn around(target_ms: u32) -> Self {
+        Self {
+            min_ms: target_ms
+                .saturating_sub(MAX_OFF_TARGET_MS)
+                .max(MIN_EXTRACTION_TIME_MS),
+            max_ms: target_ms.saturating_add(MAX_OFF_TARGET_MS),
+        }
+    }
+
+    /// Whether the grinder adjusts from a shot of `time_ms`.
+    pub fn contains(self, time_ms: u32) -> bool {
+        time_ms > self.min_ms && time_ms <= self.max_ms
     }
 }
 
@@ -146,8 +173,8 @@ pub enum MachineEvent {
     ShotReported {
         result: ShotResult,
         /// Whether the grinder adjusts from its time
-        /// ([`ShotResult::in_grinder_range`]).
-        in_grinder_range: bool,
+        /// ([`Machine::grinder_range`]); `None` when that is not known.
+        in_grinder_range: Option<bool>,
     },
     /// The brew ended without a result; the grinder skips it. Made with
     /// [`MachineEvent::shot_aborted`].
@@ -297,6 +324,8 @@ pub struct Machine {
     phase: Phase,
     /// The brew running (or last run) came from an E65/E80 brew job.
     brew_job: bool,
+    /// See [`Machine::grinder_range`].
+    range: Option<GrinderRange>,
     last_shot: Option<ShotResult>,
     last_grind: Option<GrindResult>,
     events: VecDeque<EventRecord>,
@@ -311,6 +340,7 @@ impl Machine {
             overrides: Map::new(),
             phase: Phase::Ready,
             brew_job: false,
+            range: None,
             last_shot: None,
             last_grind: None,
             events: VecDeque::new(),
@@ -345,6 +375,14 @@ impl Machine {
         self.last_grind.as_ref()
     }
 
+    /// The shot times the grinder adjusts from, for its current or last
+    /// request: the E64 WS's after a knob press, and within 15 s of the
+    /// target time (over 10 s) after an E65/E80 brew job. `None` before the
+    /// first request, and after a brew job without a target time.
+    pub fn grinder_range(&self) -> Option<GrinderRange> {
+        self.range
+    }
+
     /// The target weight of the last grind's recipe, if the grinder sent one.
     pub fn recipe_weight_g(&self) -> Option<f64> {
         let g = self.last_grind.as_ref()?.beverage_weight_g?;
@@ -373,6 +411,7 @@ impl Machine {
         if matches!(self.phase, Phase::Brewing { .. }) {
             return;
         }
+        self.range = Some(GrinderRange::E64);
         self.push(now, MachineEvent::StartRequested { script_id });
         if self.config.serve_on_start_request {
             self.begin(now, true);
@@ -392,6 +431,7 @@ impl Machine {
             return false;
         }
         self.last_grind = Some(result.clone());
+        self.range = target_time_ms.map(GrinderRange::around);
         self.push(
             now,
             MachineEvent::BrewJob {
@@ -448,7 +488,7 @@ impl Machine {
             now,
             MachineEvent::ShotReported {
                 result,
-                in_grinder_range: result.in_grinder_range(),
+                in_grinder_range: self.range.map(|r| r.contains(result.time_ms)),
             },
         );
         Ok(())
@@ -621,8 +661,7 @@ mod tests {
     }
 
     #[test]
-    fn the_grinder_adjusts_from_shots_over_10_s_up_to_80_s() {
-        let adjusts = |ms: u64| ShotResult::new(Duration::from_millis(ms), 36.0).in_grinder_range();
+    fn the_e64_adjusts_from_shots_over_10_s_up_to_80_s() {
         for (ms, expected) in [
             (0, false),
             (10_000, false),
@@ -631,8 +670,77 @@ mod tests {
             (80_000, true),
             (80_001, false),
         ] {
-            assert_eq!(adjusts(ms), expected, "{ms} ms");
+            assert_eq!(GrinderRange::E64.contains(ms), expected, "{ms} ms");
         }
+    }
+
+    #[test]
+    fn an_e65_adjusts_from_shots_within_15_s_of_the_target_over_10_s() {
+        let window = |target_ms| {
+            let r = GrinderRange::around(target_ms);
+            (r.min_ms, r.max_ms)
+        };
+        assert_eq!(window(28_000), (13_000, 43_000));
+        // Never down to 10 s, however short the target.
+        assert_eq!(window(20_000), (10_000, 35_000));
+        assert_eq!(window(12_000), (10_000, 27_000));
+        assert_eq!(window(5_000), (10_000, 20_000));
+        for (target_ms, ms, expected) in [
+            (28_000, 13_000, false),
+            (28_000, 43_000, true),
+            (24_000, 11_000, true),
+            (20_000, 10_000, false),
+            (20_000, 10_001, true),
+        ] {
+            let adjusts = GrinderRange::around(target_ms).contains(ms);
+            assert_eq!(adjusts, expected, "{ms} ms for {target_ms} ms");
+        }
+    }
+
+    /// Reports a shot of `ms` and returns its `in_grinder_range`; `t` moves
+    /// on past the time the shot is shown.
+    fn reported(m: &mut Machine, t: &mut Instant, ms: u64) -> Option<bool> {
+        m.report_shot(*t, ShotResult::new(Duration::from_millis(ms), 40.0))
+            .unwrap();
+        *t += Duration::from_secs(10);
+        match m.events_after(0).last().map(|e| &e.event) {
+            Some(MachineEvent::ShotReported {
+                in_grinder_range, ..
+            }) => *in_grinder_range,
+            other => panic!("not a shot: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn each_shot_is_checked_against_the_window_of_its_request() {
+        let mut t = Instant::now();
+        let mut m = Machine::new(MachineConfig::default());
+        assert_eq!(m.grinder_range(), None, "no request yet");
+        let job = GrindResult::parse(br#"{"SYNC_BEVERAGE_WEIGHT":40}"#).unwrap();
+
+        assert!(m.on_brew_job(t, job.clone(), Some(28_000)));
+        assert_eq!(m.grinder_range(), Some(GrinderRange::around(28_000)));
+        assert_eq!(reported(&mut m, &mut t, 12_000), Some(false));
+        assert!(m.on_brew_job(t, job.clone(), Some(24_000)));
+        // A knob press while that brew runs is ignored, its window too.
+        m.on_start_request(t, Some(9));
+        assert_eq!(m.grinder_range(), Some(GrinderRange::around(24_000)));
+        assert_eq!(reported(&mut m, &mut t, 11_000), Some(true));
+
+        // Without a target time, the window is not known.
+        assert!(m.on_brew_job(t, job.clone(), None));
+        assert_eq!(m.grinder_range(), None);
+        assert_eq!(reported(&mut m, &mut t, 50_000), None);
+
+        m.on_start_request(t, Some(9));
+        assert_eq!(m.grinder_range(), Some(GrinderRange::E64), "a knob press");
+        // A brew job while that brew runs is refused and leaves its window.
+        assert!(!m.on_brew_job(t, job.clone(), Some(40_000)));
+        assert_eq!(m.grinder_range(), Some(GrinderRange::E64));
+        assert_eq!(reported(&mut m, &mut t, 50_000), Some(true));
+        // A flush started by hand keeps the window of the last request.
+        m.start_brew(t).unwrap();
+        assert_eq!(m.grinder_range(), Some(GrinderRange::E64));
     }
 
     #[test]

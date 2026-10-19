@@ -285,8 +285,9 @@
     return t && typeof t.secs === "number" ? t.secs : 0;
   }
   const windowLabel = () => clock(windowS() * 1000);
-  /** The shot times the grinder adjusts from (`grinder_range`: over min_ms,
-   *  up to max_ms), or null before the state is in. */
+  /** The shot times the grinder adjusts from, for its current or last
+   *  request (`grinder_range`: over min_ms, up to max_ms), or null before
+   *  the state is in or while that is not known. */
   const grinderRange = () => (S && S.grinder_range) || null;
   /** Whether the grinder adjusts from a shot of `ms`, or null when that is
    *  not known yet. */
@@ -930,7 +931,7 @@
     if (!message && ok) {
       // No warning before the state (and with it the limits) is in.
       const range = grinderRange(), limit = (ms) => ({ limit: fmt.upToOne.format(ms / 1000) });
-      if (range && typed * 1000 <= range.min_ms) { text = t("start.form.tooShort", limit(range.min_ms)); isWarn = true; }
+      if (range && typed * 1000 <= range.min_ms) { text = tv("start.form.tooShort", limit(range.min_ms)); isWarn = true; }
       else if (range && typed * 1000 > range.max_ms) { text = t("start.form.tooLong", limit(range.max_ms)); isWarn = true; }
     }
     h.textContent = text;
@@ -1883,11 +1884,9 @@
     if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
     return parts.join(" · ");
   }
-  /** A success the grinder did not adjust from (too short or too long): as
-   *  the server recorded it, or for a shot saved before it did, by the same
-   *  rule from its time (once the limits are known). */
-  const ignoredShot = (s) => s.kind === "succeeded"
-    && (s.in_grinder_range ?? inGrinderRange(s.time_s == null ? null : s.time_s * 1000)) === false;
+  /** A success the grinder did not adjust from, as the server recorded it.
+   *  Without a record the current window may not be the shot's: a success. */
+  const ignoredShot = (s) => s.kind === "succeeded" && s.in_grinder_range === false;
 
   // Until it syncs, a computer's clock may still read the last shutdown
   // time, or 1970 or the system's build date. A shot dated before the shot
