@@ -322,7 +322,7 @@ fn describe(rec: &EventRecord) -> String {
             if *in_grinder_range {
                 ""
             } else {
-                "  (over 80 s: the grinder will reject it)"
+                "  (10 s or less, or over 80 s: the grinder will ignore it)"
             }
         ),
         MachineEvent::ShotAborted { reason, .. } => format!("[{}] brew aborted: {reason}", rec.seq),
