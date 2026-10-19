@@ -671,13 +671,20 @@ async fn web_pages_cannot_act_as_the_grinder() {
         .unwrap();
     assert_eq!(res.status(), 403);
     assert!(res.headers().get("access-control-allow-origin").is_none());
-    let res = http
-        .get(format!("{base}{PATH_MAKO}"))
-        .header("sec-fetch-site", "cross-site")
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(res.status(), 403);
+    // A read by fetch() from another site carries `Origin`; over HTTPS
+    // every request also carries `Sec-Fetch-Site`.
+    for (name, value) in [
+        ("origin", "https://evil.example"),
+        ("sec-fetch-site", "cross-site"),
+    ] {
+        let res = http
+            .get(format!("{base}{PATH_MAKO}"))
+            .header(name, value)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status(), 403, "{name}");
+    }
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
     assert_ne!(state["phase"]["phase"], "brewing");
     assert_eq!(
@@ -685,7 +692,9 @@ async fn web_pages_cannot_act_as_the_grinder() {
         "not counted as the grinder"
     );
 
-    // The grinder sends neither header; it gets no CORS header either.
+    // The grinder sends neither header, and nor does a page's plain read
+    // over HTTP (an image, say): it is answered, but with no CORS header,
+    // so another site can't see the reply.
     let res = http.get(format!("{base}{PATH_MAKO}")).send().await.unwrap();
     assert_eq!(res.status(), 200);
     assert!(res.headers().get("access-control-allow-origin").is_none());

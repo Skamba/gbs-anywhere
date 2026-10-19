@@ -134,6 +134,9 @@ impl SettingsFile {
 /// file what lets anyone speak to the grinder as gbs-anywhere, the history
 /// when someone is home. The mode is set on the open file too, because a
 /// file that is already there (say, left over from a crash) keeps its own.
+/// That is best effort: some shares (SMB, NFS that maps the owner) refuse a
+/// change of mode, and the file is still written there, as before;
+/// [`make_private`] warns about it at startup.
 pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create(true).truncate(true);
@@ -146,7 +149,12 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        if let Err(e) = f.set_permissions(std::fs::Permissions::from_mode(0o600)) {
+            tracing::debug!(
+                "{}: cannot make it readable by its owner only: {e}",
+                path.display()
+            );
+        }
     }
     f.write_all(bytes)?;
     f.sync_all()
@@ -171,9 +179,20 @@ pub(crate) fn make_private(path: &Path) {
         if mode & 0o077 == 0 {
             return;
         }
-        match std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
-            Ok(()) => tracing::info!(
+        // Checked again afterwards: some file systems (SMB shares, a Windows
+        // folder under WSL or Docker Desktop) take the change without
+        // keeping it.
+        let kept = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .and_then(|()| std::fs::metadata(path))
+            .map(|meta| meta.permissions().mode() & 0o077 == 0);
+        match kept {
+            Ok(true) => tracing::info!(
                 "{}: others could read it; made it readable by its owner only",
+                path.display()
+            ),
+            Ok(false) => tracing::warn!(
+                "{}: others may read it, and its file system does not keep it readable by its \
+                 owner only",
                 path.display()
             ),
             Err(e) => tracing::warn!(

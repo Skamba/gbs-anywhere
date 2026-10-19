@@ -6,6 +6,10 @@
 //! refuses whatever a browser sends with its headers, which every write from
 //! a page does: the grinder is no browser. A plain read can't be told apart,
 //! so the machine state the grinder polls stays readable.
+//!
+//! Browsers send `Sec-Fetch-Site` only over HTTPS (behind a proxy, say).
+//! Over plain HTTP, as on the home network, `Origin` alone does the work: a
+//! browser sends it with every write, and a plain read carries neither.
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
@@ -84,7 +88,8 @@ fn home_name(host: &str) -> bool {
 }
 
 /// A request a web page made from another site: the browser says so
-/// (`Sec-Fetch-Site`), or its `Origin` is not the host it asked for.
+/// (`Sec-Fetch-Site`, over HTTPS only), or its `Origin` is not the host it
+/// asked for.
 /// `authority` is that host as the request names it (the `Host` header, or
 /// over HTTP/2 the URI's authority), port included, so another site on the
 /// same computer stays another site.
@@ -106,7 +111,8 @@ fn from_other_site(headers: &HeaderMap, authority: Option<&str>) -> bool {
     }
 }
 
-/// Only browsers send these; the grinder never does.
+/// Only browsers send these; the grinder never does. A browser sends
+/// `Origin` with every write, `Sec-Fetch-Site` over HTTPS only.
 pub fn from_browser(headers: &HeaderMap) -> bool {
     headers.contains_key(header::ORIGIN) || headers.contains_key("sec-fetch-site")
 }
