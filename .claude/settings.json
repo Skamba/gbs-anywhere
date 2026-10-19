@@ -17,7 +17,12 @@
       "Bash(git push *)",
       "PowerShell(git push *)",
       "Bash(git tag *)",
-      "PowerShell(git tag *)"
+      "PowerShell(git tag *)",
+      "Bash(gh pr merge *)",
+      "PowerShell(gh pr merge *)",
+      "Bash(gh release *)",
+      "PowerShell(gh release *)",
+      "Edit(/.github/workflows/**)"
     ]
   },
   "hooks": {
