@@ -26,7 +26,7 @@
 //! | PUT/DELETE | `/api/overrides` | raw keys forced into every mako reply |
 
 use std::convert::Infallible;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use crate::protocol::machine::EventRecord;
@@ -51,7 +51,8 @@ use crate::server::{Server, SettingsChange, history};
 /// The app's routes, answering only to home-network host names (`hosts`
 /// adds more) and refusing writes from other sites.
 pub fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::Router {
-    // The page is built now rather than on the first visit.
+    // The page is built now, so a broken template fails when the server
+    // starts, not on someone's first visit.
     page();
     axum::Router::new()
         .route("/", get(app_page))
@@ -144,8 +145,8 @@ const CSS_SLOT: &str = "/* web/app.css */";
 const JS_SLOT: &str = "/* web/app.js */";
 const STRINGS_SLOT: &str = "/* web/strings/<lang>.json */";
 
-/// The app's languages and their texts. A new language is a file in
-/// `web/strings/` and its line here; the page takes its list from these.
+/// The app's languages and their texts; the page takes its list from these.
+/// What else a new language needs is under "Web app" in AGENTS.md.
 const LANGS: &[(&str, &str)] = &[
     ("en", include_str!("../../web/strings/en.json")),
     ("de", include_str!("../../web/strings/de.json")),
@@ -153,8 +154,7 @@ const LANGS: &[(&str, &str)] = &[
 
 /// The page with its slots filled, built once.
 pub(super) fn page() -> &'static str {
-    static PAGE: OnceLock<String> = OnceLock::new();
-    PAGE.get_or_init(|| {
+    static PAGE: LazyLock<String> = LazyLock::new(|| {
         // `STRINGS` in app.js: {"en": {…}, "de": {…}}.
         let strings = LANGS
             .iter()
@@ -164,7 +164,8 @@ pub(super) fn page() -> &'static str {
         let script = fill(PAGE_JS.trim_end(), &[(STRINGS_SLOT, strings.as_str())]);
         let styles = PAGE_CSS.trim_end();
         fill(PAGE_HTML, &[(CSS_SLOT, styles), (JS_SLOT, script.as_str())])
-    })
+    });
+    &PAGE
 }
 
 /// `template` with each slot replaced by its text, in order; what is filled
@@ -968,6 +969,31 @@ mod tests {
         assert!(page.starts_with("<!doctype html>") && page.ends_with("</html>\n"));
         assert_eq!(page.matches("<style>").count(), 1);
         assert!(!page.contains("<script src") && !page.contains("rel=\"stylesheet\""));
+        // And with the texts in, still only the theme script's and the app
+        // script's end, and the styles' end.
+        let lower = page.to_ascii_lowercase();
+        assert_eq!(
+            lower.matches("</script").count(),
+            2,
+            "</script> in the page"
+        );
+        assert_eq!(lower.matches("</style").count(), 1, "</style> in the page");
+        let at = page.find(&format!("<script>\n{head}")).unwrap();
+        assert!(!page[at..].contains("<!--"), "<!-- in the app's script");
+    }
+
+    #[test]
+    fn every_language_has_its_button() {
+        // Status → Settings → Language: Auto, and a button per language.
+        let attr = "data-lang-choice=\"";
+        let buttons: BTreeSet<&str> = PAGE_HTML
+            .match_indices(attr)
+            .filter_map(|(i, _)| PAGE_HTML[i + attr.len()..].split_once('"'))
+            .map(|(code, _)| code)
+            .filter(|code| *code != "auto")
+            .collect();
+        let langs: BTreeSet<&str> = LANGS.iter().map(|(lang, _)| *lang).collect();
+        assert_eq!(buttons, langs, "the language buttons and LANGS");
     }
 
     #[test]
