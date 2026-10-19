@@ -168,7 +168,19 @@ impl Server {
 
     /// Runs `f` on the machine and publishes any events it produced.
     pub fn with<R>(&self, f: impl FnOnce(&mut Machine, Instant) -> R) -> R {
+        self.apply(&mut self.lock(), f)
+    }
+
+    /// Like [`Server::with`], for the E65/E80 link `owner`: `None`, and the
+    /// machine untouched, once that link was replaced. Its task may still
+    /// be finishing a step when it is stopped, and must not start or end a
+    /// brew after that.
+    fn with_wifi<R>(&self, owner: u64, f: impl FnOnce(&mut Machine, Instant) -> R) -> Option<R> {
         let mut inner = self.lock();
+        (inner.wifi_owner == owner).then(|| self.apply(&mut inner, f))
+    }
+
+    fn apply<R>(&self, inner: &mut Inner, f: impl FnOnce(&mut Machine, Instant) -> R) -> R {
         let r = f(&mut inner.machine, Instant::now());
         let after = inner.published;
         for e in inner.machine.events_after(after) {

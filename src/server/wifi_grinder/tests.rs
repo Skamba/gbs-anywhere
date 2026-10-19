@@ -1233,3 +1233,18 @@ async fn changing_the_address_keeps_the_saved_pairing() {
     assert_eq!(saved(&file), paired_file);
     let _ = std::fs::remove_file(file);
 }
+
+#[tokio::test]
+async fn a_replaced_link_starts_no_brew() {
+    let (server, fake) = start(Fake::default(), None, None).await;
+    wait_for("paired", || paired(&server)).await;
+    // What stopping it does. Its task goes on here, as an aborted one does
+    // until its next await.
+    server.detach_wifi();
+    fake.lock().unwrap().jobs.push(job("g-1", 40_000));
+    let polls = || fake.lock().unwrap().requests_to(wifi::PATH_BREW_JOBS).len();
+    let seen = polls();
+    wait_for("a few more polls", || polls() >= seen + 5).await;
+    assert!(!brewing(&server), "the machine is left alone");
+    assert_eq!(taken(&fake), 0, "the job is not taken");
+}

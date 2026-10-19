@@ -815,11 +815,11 @@ impl WifiGrinder {
                 // brew ends here, and its event answers this job as cancelled.
                 // If someone reported or aborted it a moment ago, that event
                 // answers it instead; only a brew already over leaves it.
-                let over = server.with(|m, now| {
+                let over = server.with_wifi(self.owner, |m, now| {
                     m.give_up(now, AbortCause::GrinderShotReplaced).is_err()
                         && m.phase(now) == Phase::Ready
                 });
-                if over {
+                if over == Some(true) {
                     self.current = None;
                 }
             } else if waiting {
@@ -864,12 +864,12 @@ impl WifiGrinder {
             return;
         };
         let target_ms = job.target_ms();
-        let started = server.with(|m, now| {
+        let started = server.with_wifi(self.owner, |m, now| {
             // A shot that is still being shown, or a brew started by hand,
             // goes first; the job waits for the next poll.
             m.on_brew_job(now, grind_result(job), target_ms)
         });
-        if !started {
+        if started != Some(true) {
             return;
         }
         for other in fresh.iter().filter(|j| j.grind_uuid != job.grind_uuid) {
@@ -933,7 +933,7 @@ impl WifiGrinder {
             return;
         }
         // Already over when someone reported or aborted it a moment ago.
-        let _ = server.with(|m, now| m.give_up(now, cause));
+        let _ = server.with_wifi(self.owner, |m, now| m.give_up(now, cause));
         self.report_problem(server, cause.text());
     }
 
