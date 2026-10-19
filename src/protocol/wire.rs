@@ -137,45 +137,44 @@ impl MakoState {
     pub fn grind_blocked(&self) -> Option<GrindBlocked> {
         use MachineStatus::*;
         match self.status {
-            On | ActiveFinishing if !self.is_ready_heated() => Some(GrindBlocked::WarmingUp),
-            On | ActiveFinishing if !self.is_tank_full() => Some(GrindBlocked::TankEmpty),
+            On | ActiveFinishing if !self.is_ready_heated() => Some(GrindBlocked::MachineWarmingUp),
+            On | ActiveFinishing if !self.is_tank_full() => Some(GrindBlocked::MachineTankEmpty),
             On | ActiveFinishing => None,
-            Off => Some(GrindBlocked::Standby),
-            Eco => Some(GrindBlocked::Eco),
-            ActiveServing => Some(GrindBlocked::Brewing),
-            Testing => Some(GrindBlocked::Testing),
-            Fault => Some(GrindBlocked::Fault),
+            Off => Some(GrindBlocked::MachineInStandby),
+            Eco => Some(GrindBlocked::MachineInEco),
+            ActiveServing => Some(GrindBlocked::ShotRunning),
+            Testing => Some(GrindBlocked::MachineTesting),
+            Fault => Some(GrindBlocked::MachineFaulty),
         }
     }
 }
 
-/// Reasons the grinder blocks grinding, with its on-screen text.
+/// Why the grinder blocks grinding, as a code (`cause` in
+/// `grinder.grind_blocked` in `GET /api/state`), with its on-screen text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GrindBlocked {
-    NotConnected,
-    Standby,
-    Eco,
-    Brewing,
-    Testing,
-    Fault,
-    WarmingUp,
-    TankEmpty,
+    ShotRunning,
+    MachineInStandby,
+    MachineInEco,
+    MachineTesting,
+    MachineFaulty,
+    MachineWarmingUp,
+    MachineTankEmpty,
 }
 
 impl GrindBlocked {
     pub fn grinder_message(self) -> &'static str {
         match self {
-            Self::NotConnected => "Xenia is off. Please turn it on.",
-            Self::Standby => "Xenia is in standby. Please wake it up.",
-            Self::Eco => "Xenia is in ECO state. Please wake it up.",
-            Self::Brewing => "Xenia is brewing. Please wait until it's finished.",
-            Self::Testing => "Xenia is in testing state. Please wait until it's finished.",
-            Self::Fault => "Xenia has an error. Please check the machine.",
-            Self::WarmingUp => {
+            Self::MachineInStandby => "Xenia is in standby. Please wake it up.",
+            Self::MachineInEco => "Xenia is in ECO state. Please wake it up.",
+            Self::ShotRunning => "Xenia is brewing. Please wait until it's finished.",
+            Self::MachineTesting => "Xenia is in testing state. Please wait until it's finished.",
+            Self::MachineFaulty => "Xenia has an error. Please check the machine.",
+            Self::MachineWarmingUp => {
                 "Xenia is warming up. Please wait for the cup symbol to stop blinking."
             }
-            Self::TankEmpty => "Xenia tank is empty. Please refill it.",
+            Self::MachineTankEmpty => "Xenia tank is empty. Please refill it.",
         }
     }
 }
@@ -233,7 +232,7 @@ impl Default for MachineIdentity {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct GrindResult {
     /// Target beverage weight of the recipe, grams.
-    pub beverage_weight_g: Option<f64>,
+    pub target_weight_g: Option<f64>,
     /// Filter (basket) id, as sent. Type on the wire not yet observed, so both
     /// numbers and strings are accepted and kept as text.
     pub filter: Option<String>,
@@ -245,7 +244,7 @@ impl GrindResult {
     pub fn parse(body: &[u8]) -> Result<Self, serde_json::Error> {
         let raw: Value = serde_json::from_slice(body)?;
         Ok(Self {
-            beverage_weight_g: raw.get("SYNC_BEVERAGE_WEIGHT").and_then(number_like),
+            target_weight_g: raw.get("SYNC_BEVERAGE_WEIGHT").and_then(number_like),
             filter: raw.get("SYNC_FILTER").and_then(text_like),
             raw,
         })
@@ -371,7 +370,7 @@ mod tests {
             bg_sens_temp: 90.9,
             ..ok.clone()
         };
-        assert_eq!(cold.grind_blocked(), Some(GrindBlocked::WarmingUp));
+        assert_eq!(cold.grind_blocked(), Some(GrindBlocked::MachineWarmingUp));
         let almost = MakoState {
             bg_sens_temp: 91.1,
             ..ok.clone()
@@ -381,12 +380,12 @@ mod tests {
             tank_level: 2,
             ..ok.clone()
         };
-        assert_eq!(empty.grind_blocked(), Some(GrindBlocked::TankEmpty));
+        assert_eq!(empty.grind_blocked(), Some(GrindBlocked::MachineTankEmpty));
         let brewing = MakoState {
             status: MachineStatus::ActiveServing,
             ..ok
         };
-        assert_eq!(brewing.grind_blocked(), Some(GrindBlocked::Brewing));
+        assert_eq!(brewing.grind_blocked(), Some(GrindBlocked::ShotRunning));
     }
 
     #[test]
@@ -398,7 +397,7 @@ mod tests {
         );
         match r {
             GrinderRequest::GrindResult(g) => {
-                assert_eq!(g.beverage_weight_g, Some(36.5));
+                assert_eq!(g.target_weight_g, Some(36.5));
                 assert_eq!(g.filter.as_deref(), Some("2"));
             }
             other => panic!("{other:?}"),

@@ -127,12 +127,12 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   can supply their own icons with `--icons`.
 - Texts stay English in Rust. Give each status line a key with
   `Detail::keyed` (`<id>.<state>`) and its numbers with `Detail::var`
-  (unit in the name: `ago_ms`, `time_s`, `weight_g`); the API shows them as
+  (unit in the name: `age_ms`, `time_ms`, `weight_g`); the API shows them as
   `detail_key` and `detail_vars` next to `detail`. The German wording goes
   into `web/strings/de.json`, `integ.detail.<key>` for status lines and
   `kind.<id>.summary` / `kind.<id>.field.<key>.label|help|placeholder` for
-  the form. The placeholder leaves the unit out (`time_s` is `{time}`);
-  `ago_ms`, `time_s` and `weight_g` get their own format, other numbers up
+  the form. The placeholder leaves the unit out (`time_ms` is `{time}`);
+  `age_ms`, `time_ms` and `weight_g` get their own format, other numbers up
   to one decimal. Another unit or format needs a case in `integDetail()`.
   `cargo test` checks that the form and every keyed status line of each
   integration have their German; at run time a missing entry shows the

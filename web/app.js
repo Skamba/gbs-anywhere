@@ -279,9 +279,9 @@
   const windowS = () => (S && S.settings && S.settings.shot_window_s) || 0;
   const windowLabel = () => clock(windowS() * 1000);
   /** The shot times the grinder adjusts from, for its current or last
-   *  request (`grinder_range`: over min_ms, up to max_ms), or null before
-   *  the state is in or while that is not known. */
-  const grinderRange = () => (S && S.grinder_range) || null;
+   *  request (`grinder.shot_range`: over min_ms, up to max_ms), or null
+   *  before the state is in or while that is not known. */
+  const grinderRange = () => (S && S.grinder.shot_range) || null;
   /** Whether the grinder adjusts from a shot of `ms`, or null when that is
    *  not known yet. */
   function inGrinderRange(ms) {
@@ -324,7 +324,7 @@
   // the shot can still be typed in by hand.
   function reporters() {
     const list = (S && S.integrations) || [];
-    const live = list.filter((i) => i.health !== "error" && i.health !== "stopped");
+    const live = list.filter((i) => i.health !== "failing" && i.health !== "stopped");
     return { list, live, manual: live.length === 0 };
   }
   /** Seconds into a brew after which a shot no integration reported counts
@@ -337,14 +337,16 @@
     return win > 0 ? Math.min(due, Math.max(win - 30, win / 2)) : due;
   }
   // Integrations only report brews the grinder asked for.
-  const shotMissed = (r) => !r.manual && !!S.phase.requested_by_grinder && elapsedMs() >= missedAfterS() * 1000;
+  const shotMissed = (r) => !r.manual && !!S.shot.requested_by_grinder && elapsedMs() >= missedAfterS() * 1000;
 
   /** Recipe targets of the last grind: weight (g) and time (s). */
   function targets() {
-    const job = lastOf(["grind_result", "brew_job"]);
-    let w = job && job.result ? job.result.beverage_weight_g : null;
-    if (w == null && S && S.last_grind) w = S.last_grind.beverage_weight_g;
-    const t = job && job.kind === "brew_job" && job.target_time_ms ? job.target_time_ms / 1000 : null;
+    const grind = lastOf(["grinder_grind_finished"]);
+    let w = grind && grind.result ? grind.result.target_weight_g : null;
+    if (w == null && S && S.grinder.last_grind) w = S.grinder.last_grind.target_weight_g;
+    // An E65/E80 sends its target time with the request after the grind.
+    const req = lastOf(["grinder_shot_requested"]);
+    const t = req && grind && req.seq > grind.seq && req.target_time_ms ? req.target_time_ms / 1000 : null;
     return { w: w > 0 ? w : null, t: t > 0 ? t : null };
   }
 
@@ -372,28 +374,30 @@
   /** Where the shot is: ready, knob (E64: ground, press the knob), running,
    *  checking (the grinder takes the result), done, error or aborted. */
   function flow() {
-    const phase = S.phase.phase;
+    const phase = S.shot.phase;
     const outcome = lastOf(["shot_reported", "shot_aborted"]);
-    const last = lastOf(["grind_result", "brew_job", "shot_reported", "shot_aborted"]);
+    // A request after the grind (a knob press, or an E65/E80's job) means
+    // the knob is no longer waited for.
+    const last = lastOf(["grinder_grind_finished", "grinder_shot_requested", "shot_reported", "shot_aborted"]);
     // `reason` is the server's words for `cause`, shown for a cause this
     // app does not know.
     let sc = "ready", reason = null, cause = null;
-    if (phase === "brewing") sc = "running";
+    if (phase === "running") sc = "running";
     else if (phase === "finishing") {
-      if (!S.phase.aborted) sc = "checking";
+      if (!S.shot.aborted) sc = "checking";
       else {
         const ended = outcome && outcome.kind === "shot_aborted" ? outcome : null;
         reason = ended ? ended.reason : null;
         cause = causeOf(ended);
         sc = isAbort(cause) ? "aborted" : "error";
       }
-    } else if (last && last.kind === "grind_result" && knobFresh(last)) sc = "knob";
+    } else if (last && last.kind === "grinder_grind_finished" && knobFresh(last)) sc = "knob";
     else if (last && last.kind === "shot_reported") sc = fresh(last) ? "done" : "ready";
     else if (last && last.kind === "shot_aborted" && !isAbort(causeOf(last)) && fresh(last)) {
       sc = "error"; reason = last.reason; cause = causeOf(last);
     }
     if (sc === "error" && outcome && outcome.seq <= ui.dismissed) sc = "ready";
-    return { sc, reason, cause, outcome, started: lastOf(["brew_started"]), job: lastOf(["grind_result", "brew_job"]) };
+    return { sc, reason, cause, outcome, started: lastOf(["shot_started"]), job: lastOf(["grinder_grind_finished"]) };
   }
 
   // Per state: the tone and badge (catalog key under badge.) of each step.
@@ -456,8 +460,8 @@
   // --- Header and system status ---------------------------------------------------
   /** Why the grinder won't grind, unless it is only the shot in progress. */
   function grindBlocked() {
-    const b = S && S.grind_blocked;
-    return b && !(S.phase.phase !== "ready" && b.reason === "brewing") ? b : null;
+    const b = S && S.grinder.grind_blocked;
+    return b && !(S.shot.phase !== "ready" && b.cause === "shot_running") ? b : null;
   }
 
   /** The last part of a server error ("cannot reach the grinder at …:
@@ -469,7 +473,7 @@
    *  error behind it (`detail`), which stays English like the log. */
   function grinderMissing(wifi) {
     if (!wifi) return { text: t("sys.missing.e64"), detail: "" };
-    const error = wifi.state === "error" && wifi.detail ? lastCause(wifi.detail) : "";
+    const error = wifi.state === "failing" && wifi.detail ? lastCause(wifi.detail) : "";
     // It answers, but not as it should: not a matter of switching it on.
     if (error && wifi.unreachable === false) return { text: t("sys.missing.linkError"), detail: error };
     return { text: t("sys.missing.wifi"), detail: error };
@@ -516,7 +520,7 @@
     if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f));
     // Shots can still be made, but something needs a look: not green.
     if (wifi && wifi.problem) return s("warn", "alert", "problem", t("sys.text.problem"), sentence(wifi.problem));
-    const failing = (S.integrations || []).find((i) => i.health === "error" || i.health === "stopped");
+    const failing = (S.integrations || []).find((i) => i.health === "failing" || i.health === "stopped");
     if (failing) {
       const r = s("warn", "alert", "integError", t("sys.text.integError", { title: failing.title }), failing.last_error);
       r.integ = failing;
@@ -709,7 +713,7 @@
     if (brew !== ui.brew) { ui.brew = brew; ui.typeIn = ui.missed = false; }
     if (brew !== null) {
       ui.missed = ui.missed || shotMissed(r);
-      ui.typeIn = ui.typeIn || r.manual || !S.phase.requested_by_grinder || ui.missed;
+      ui.typeIn = ui.typeIn || r.manual || !S.shot.requested_by_grinder || ui.missed;
     }
     let plan = PLANS[f.sc];
     // Also after a shot, whose result stays in steps 2 and 3.
@@ -767,10 +771,10 @@
       $("s2-info").hidden = !ui.info;
       $("s2-info").textContent = [
         tv("start.step2.since"),
-        r.manual || !S.phase.requested_by_grinder ? t("start.step2.info.manual") : cap(t("start.step2.info.auto", { n: r.live.length, names: theTitles(r.live) })),
+        r.manual || !S.shot.requested_by_grinder ? t("start.step2.info.manual") : cap(t("start.step2.info.auto", { n: r.live.length, names: theTitles(r.live) })),
         win > 0 ? t("start.step2.info.limit", { window: windowLabel() }) : "",
       ].filter(Boolean).join(" ");
-      $("s2-flush").hidden = !!S.phase.requested_by_grinder;
+      $("s2-flush").hidden = !!S.shot.requested_by_grinder;
       // Whichever comes first wins: the shot typed in or an integration's.
       const note = r.manual && r.list.length ? cap(t("start.step2.failed", { n: r.list.length, names: theTitles(r.list) }))
         : ui.missed ? t("start.step2.missed", { n: r.live.length, names: theTitles(r.live) }) : "";
@@ -791,8 +795,8 @@
     $("s2-done").hidden = !shown;
     let res = null;
     if (shown) {
-      res = f.sc === "checking" ? S.phase.result : (f.outcome && f.outcome.result);
-      $("s2-shot").textContent = res ? t("unit.shot", { time: secs(res.time_ms / 1000), weight: grams(res.volume_ml) }) : "";
+      res = f.sc === "checking" ? S.shot.result : (f.outcome && f.outcome.result);
+      $("s2-shot").textContent = res ? t("unit.shot", { time: secs(res.time_ms / 1000), weight: grams(res.weight_g) }) : "";
       const at = endTime(f.outcome);
       const by = reportedBy(f.outcome, res);
       $("s2-source").textContent = [by, at ? hhmmss(new Date(at)) : null].filter(Boolean).join(" · ");
@@ -820,7 +824,7 @@
     if (!res) return "";
     if (ev && ui.mine.has(ev.seq)) return t("start.step2.byHand");
     const i = ((S && S.integrations) || []).find((x) => x.last_report && x.last_report.time_ms === res.time_ms
-      && Math.abs(x.last_report.volume_ml - res.volume_ml) < 0.05);
+      && Math.abs(x.last_report.weight_g - res.weight_g) < 0.05);
     return i ? t("start.step2.reportedBy", { title: i.title }) : t("start.step2.byHand");
   }
 
@@ -875,11 +879,11 @@
   }
 
   function elapsedMs() {
-    if (!S || S.phase.phase !== "brewing") return 0;
-    return (S.mako.REAL_EXTRACTION_TIME_MS || 0) + (performance.now() - stateAt);
+    if (!S || S.shot.phase !== "running") return 0;
+    return (S.machine.mako.REAL_EXTRACTION_TIME_MS || 0) + (performance.now() - stateAt);
   }
   function renderClock() {
-    if (!S || S.phase.phase !== "brewing" || tab !== "start") return;
+    if (!S || S.shot.phase !== "running" || tab !== "start") return;
     // A shot counts as missed while the clock runs: show the fields then.
     if (!$("s2-run").hidden && !ui.missed && shotMissed(reporters())) { renderStart(); return; }
     const ms = elapsedMs();
@@ -945,7 +949,7 @@
       const st = await api("/api/shot/result", { method: "POST", body: JSON.stringify(shot) });
       // Only a shot the server took was typed here ("Entered by hand"): its
       // event falls between the last one seen before and the reply.
-      ui.mineRange = { after, upTo: st.last_seq };
+      ui.mineRange = { after, upTo: st.server.last_event_seq };
       markMine();
       if (document.activeElement) document.activeElement.blur();
       busy = false;
@@ -999,7 +1003,7 @@
 
   // --- Status tab ------------------------------------------------------------------
   // Integration health: tone of its pill (the label is integ.health.<health>).
-  const HEALTH = { starting: "start", connected: "ok", watching: "run", error: "error", stopped: "error" };
+  const HEALTH = { starting: "start", connected: "ok", watching: "run", failing: "error", stopped: "error" };
   const kindOf = (id) => (kinds || []).find((k) => k.id === id);
   const hasPassword = (k) => !!(k && k.fields.some((f) => f.input === "password"));
 
@@ -1076,8 +1080,8 @@
     if (wifi && wifi.pairing_code != null && wifi.state === "pairing") facts.push(["pairingCode", String(wifi.pairing_code)]);
     facts.push(["lastContact", age == null ? t("grinder.fact.never") : ago(age)]);
     // Idle only with a grinder to brew for; a shot under way still shows.
-    const phase = S.phase.phase;
-    const inShot = phase === "brewing" || phase === "finishing";
+    const phase = S.shot.phase;
+    const inShot = phase === "running" || phase === "finishing";
     facts.push(["group", inShot ? t("grinder.group." + phase) : on ? t("grinder.group.idle") : "–"]);
     $("g-facts").replaceChildren(...facts.map(([k, v]) => el("div", null, el("dt", { text: t("grinder.fact." + k) }), el("dd", { text: v }))));
   }
@@ -1146,8 +1150,8 @@
       el("div", { class: "integ-end" },
         el("span", { class: "pill-sm t-" + tone }, el("span", { class: "dot" }), label),
         actions.length ? more : null));
-    const bad = i.health === "error" || i.health === "stopped";
-    const detailText = i.health === "error" ? (i.last_error || i.detail || t("integ.errorFallback"))
+    const bad = i.health === "failing" || i.health === "stopped";
+    const detailText = i.health === "failing" ? (i.last_error || i.detail || t("integ.errorFallback"))
       : i.health === "stopped" ? t("integ.stopped") : integDetail(i);
     const foot = [];
     if (i.reports > 0) foot.push(t("integ.reports", { n: i.reports }));
@@ -1168,8 +1172,9 @@
   /** An integration's status line in the current language: the catalog's
    *  wording for its detail_key (integ.detail.<key>), filled from
    *  detail_vars, else the server's English `detail`. A value's name ends in
-   *  its unit, which the wording leaves out: ago_ms is {ago} ("5 h ago", in
-   *  ageOf's steps), time_s {time} and weight_g {weight} with one decimal,
+   *  its unit, which the wording leaves out: age_ms is {age} ("5 h ago", in
+   *  ageOf's steps), time_ms {time} in seconds and weight_g {weight} with
+   *  one decimal,
    *  other numbers ({every}) with up to one, text ({host}) as it is. */
   function integDetail(i) {
     if (!i.detail_key) return i.detail;
@@ -1177,7 +1182,7 @@
     for (const [name, x] of Object.entries(i.detail_vars || {})) {
       if (x == null || typeof x === "object") continue;   // only numbers and text are filled in
       vars[name.replace(/_(ms|s|g)$/, "")] = typeof x !== "number" ? String(x)
-        : name === "ago_ms" ? ageOf(x) : name === "time_s" ? secs(x) : name === "weight_g" ? grams(x)
+        : name === "age_ms" ? ageOf(x) : name === "time_ms" ? secs(x / 1000) : name === "weight_g" ? grams(x)
         : fmt.upToOne.format(x);
     }
     const text = serverText("integ.detail." + i.detail_key, i.detail, vars);
@@ -1774,12 +1779,12 @@
 
   function renderVersion() {
     const u = S.update;
-    const v = String(S.version || (u && u.current) || "");
+    const v = String(S.server.version || "");
     const [release, build] = v.split("+");
     $("v-installed").textContent = release ? release + (build ? " · " + build : "") : "–";
     $("v-installed").title = v;
     const badge = $("v-badge");
-    const on = !!(u && u.enabled);
+    const on = !!(u && S.settings && S.settings.update_check);
     const failing = on && !!u.failing;
     // A known newer release stays news when GitHub fails later; "up to date"
     // does not.
@@ -1790,7 +1795,7 @@
     $("v-latest-box").hidden = !on;
     $("v-latest").textContent = !on ? "–" : u.latest || (failing ? "–" : t("version.notChecked"));
     $("v-note").hidden = !on;
-    $("v-off").hidden = !(u && !u.enabled);
+    $("v-off").hidden = !(u && !on);
     $("v-whatsnew").hidden = !(on && u.available);
   }
 
@@ -1835,30 +1840,31 @@
   }
 
   function shotTitle(s) {
-    if (s.kind === "succeeded") {
-      if (s.time_s == null) return "–";
-      return s.weight_g != null ? t("unit.shot", { time: secs(s.time_s), weight: grams(s.weight_g) }) : t("unit.seconds", { time: secs(s.time_s) });
+    if (s.outcome === "succeeded") {
+      if (s.time_ms == null) return "–";
+      const time = secs(s.time_ms / 1000);
+      return s.weight_g != null ? t("unit.shot", { time, weight: grams(s.weight_g) }) : t("unit.seconds", { time });
     }
     const cause = causeOf(s);
     if (cause === "shot_timed_out") {
-      const ms = Date.parse(s.ended_at) - Date.parse(s.at);
+      const ms = Date.parse(s.ended_at) - Date.parse(s.started_at);
       return t("history.timeout", { time: isFinite(ms) ? clock(ms) : windowLabel() });
     }
     const title = causeInfo(cause).title;
     if (title) return t(title);
     // A cause this app does not know: as the server says it.
-    return s.reason ? cap(s.reason) : kindLabel(s.kind);
+    return s.reason ? cap(s.reason) : kindLabel(s.outcome);
   }
   function shotSub(s) {
     const parts = [];
-    const tgt = [s.target_time_s != null ? t("unit.seconds", { time: secs(s.target_time_s) }) : null,
+    const tgt = [s.target_time_ms != null ? t("unit.seconds", { time: secs(s.target_time_ms / 1000) }) : null,
       s.target_weight_g != null ? t("unit.grams", { weight: gramsShort(s.target_weight_g) }) : null].filter(Boolean);
     if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
     return parts.join(" · ");
   }
   /** A success the grinder did not adjust from, as the server recorded it.
    *  Without a record the current window may not be the shot's: a success. */
-  const ignoredShot = (s) => s.kind === "succeeded" && s.in_grinder_range === false;
+  const ignoredShot = (s) => s.outcome === "succeeded" && s.in_grinder_range === false;
 
   // Until it syncs, a computer's clock may still read the last shutdown
   // time, or 1970 or the system's build date. A shot dated before the shot
@@ -1868,7 +1874,7 @@
   const CLOCK_SET_MS = Date.UTC(2026, 0, 1);
   /** When the shot started, or null when that is not known. */
   function shotDate(s) {
-    const d = new Date(s.at);
+    const d = new Date(s.started_at);
     return isNaN(d) || d.getTime() < CLOCK_SET_MS ? null : d;
   }
 
@@ -1884,7 +1890,7 @@
     }
     chips.replaceChildren(...HKINDS.map((k) => {
       const on = !hHidden[k];
-      const n = shots.filter((s) => s.kind === k).length;
+      const n = shots.filter((s) => s.outcome === k).length;
       return el("button", {
         type: "button", class: "chip-hit k-" + k, "aria-pressed": String(on),
         "aria-label": t("history.chip", { label: kindLabel(k), n }),
@@ -1895,7 +1901,7 @@
     // was not set, or stepped) cannot split the days; those without a
     // known day come last, newest recorded first.
     const time = (x) => (x.d ? x.d.getTime() : 0);
-    const visible = shots.filter((s) => !hHidden[s.kind])
+    const visible = shots.filter((s) => !hHidden[s.outcome])
       .map((s, i) => ({ s, d: shotDate(s), i }))
       .sort((a, b) => time(b) - time(a) || a.i - b.i);
     const byDay = new Map();
@@ -1910,10 +1916,10 @@
       el("ul", null, g.items.map(({ s, d }) => {
         const sub = shotSub(s);
         const ignored = ignoredShot(s);
-        return el("li", { class: "k-" + (ignored ? "ignored" : s.kind) },
+        return el("li", { class: "k-" + (ignored ? "ignored" : s.outcome) },
           el("p", { class: "h-time", text: d ? hhmm(d) : "–" }),
           el("div", { class: "h-main" }, el("p", { class: "h-title", text: shotTitle(s) }), sub ? el("p", { class: "h-sub", text: sub }) : null),
-          el("span", { class: "h-badge", text: ignored ? t("history.ignored") : kindLabel(s.kind) }));
+          el("span", { class: "h-badge", text: ignored ? t("history.ignored") : kindLabel(s.outcome) }));
       })))));
     empty.hidden = visible.length > 0;
     empty.textContent = shots.length === 0 ? t("history.empty") : t("history.noMatch");
@@ -2130,7 +2136,7 @@
     });
     const first = lines.length ? new Date(lines[0].ts) : new Date();
     const last = lines.length ? new Date(lines[lines.length - 1].ts) : new Date();
-    const head = "# gbs-anywhere " + ((S && S.version) || "") + " log · " + stamp(first) + " to " + stamp(last)
+    const head = "# gbs-anywhere " + ((S && S.server.version) || "") + " log · " + stamp(first) + " to " + stamp(last)
       + " (" + utcOffset(last) + ") · " + lines.length + (lines.length === 1 ? " line" : " lines") + " · " + filter + " · IP addresses and passwords in addresses replaced";
     return head + "\n" + body.join("\n") + "\n";
   }
@@ -2252,9 +2258,9 @@
     // Name and version at the bottom of every tab but Status, whose
     // gbs-anywhere card shows them.
     $("app-footer").hidden = tab === "status";
-    const [release, build] = String(S.version || "").split("+");
+    const [release, build] = String(S.server.version || "").split("+");
     $("app-footer").textContent = "gbs-anywhere" + (release ? " " + release + (build ? " · " + build : "") : "");
-    $("app-footer").title = String(S.version || "");
+    $("app-footer").title = String(S.server.version || "");
     renderStart();
     renderStatus();
     renderHistory();
@@ -2284,17 +2290,20 @@
     try { st = await api("/api/state"); }
     catch (_) { if (online) offlineSince = Date.now(); online = false; renderAll(); return; }
     online = true;
-    if (st.version !== PAGE_VERSION && st.version !== reloadedFor && !midEdit()) {
+    // A server from before the names were grouped (0.2.1) has its version
+    // at the top: the reload then brings that server's page.
+    const version = (st.server || st).version;
+    if (version !== PAGE_VERSION && version !== reloadedFor && !midEdit()) {
       if (!reloading) {
         reloading = true;
         // A weight typed for the next shot comes along (see the start below).
-        try { sessionStorage.setItem("gbs.reload", JSON.stringify({ version: st.version, weight: $("f-weight").value })); } catch (_) {}
+        try { sessionStorage.setItem("gbs.reload", JSON.stringify({ version, weight: $("f-weight").value })); } catch (_) {}
         location.reload();
       }
       return;
     }
     // The server restarted: a new boot_id.
-    const restarted = !!S && st.boot_id !== S.boot_id;
+    const restarted = !!S && st.server.boot_id !== S.server.boot_id;
     S = st; stateAt = performance.now();
     if (restarted) {
       events = []; lastSeq = 0; seenAt.clear();
@@ -2306,7 +2315,7 @@
     if (primed && restarted) { histState = "unknown"; loadHistory(); }
     if (!kinds) loadKinds();
     let shotDone = false;
-    let caughtUp = st.last_seq === lastSeq;
+    let caughtUp = st.server.last_event_seq === lastSeq;
     if (!caughtUp) {
       try {
         const fresh = await api("/api/events?after=" + lastSeq);
@@ -2327,7 +2336,7 @@
             for (const k of seenAt.keys()) if (k < min) seenAt.delete(k);
             for (const k of ui.mine) if (k < min) ui.mine.delete(k);
           }
-          lastSeq = Math.max(lastSeq, st.last_seq);
+          lastSeq = Math.max(lastSeq, st.server.last_event_seq);
           caughtUp = true;
         }
       } catch (_) {}
@@ -2358,7 +2367,7 @@
     if (!window.EventSource) return;
     const es = new EventSource("/api/events/stream");
     const onEvent = () => tick();
-    for (const k of ["grind_result", "start_requested", "brew_job", "brew_started", "shot_reported", "shot_aborted", "ready", "message"]) {
+    for (const k of ["grinder_grind_finished", "grinder_shot_requested", "shot_started", "shot_reported", "shot_aborted", "shot_finished", "message"]) {
       es.addEventListener(k, onEvent);
     }
     es.addEventListener("open", () => { sseOpen = true; tick(); });

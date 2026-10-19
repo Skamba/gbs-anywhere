@@ -46,7 +46,7 @@ use tokio::sync::{broadcast, mpsc};
 
 pub use control_api::{ShotInput, control_router, patch_ready, state_json};
 pub use grinder_api::grinder_router;
-pub use history::{History, Shot, ShotKind};
+pub use history::{History, Shot, ShotOutcome};
 pub use logbook::{LogBook, LogLayer, LogLine};
 pub use settings::{SettingsChange, SettingsError, SettingsFile, Startup};
 pub use update_check::UpdateConfig;
@@ -365,7 +365,7 @@ pub async fn serve(state: Arc<Server>, cfg: ServeConfig) -> anyhow::Result<()> {
         ));
     }
 
-    // Time-based transitions (finishing -> ready, brew timeout) publish their
+    // Time-based transitions (finishing -> ready, the shot window running out) publish their
     // events even when nobody polls.
     let ticker = state.clone();
     tasks.push(tokio::spawn(async move {

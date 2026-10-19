@@ -142,7 +142,7 @@ impl Link {
         self.server.with(|m, now| {
             matches!(
                 m.phase(now),
-                Phase::Brewing {
+                Phase::Running {
                     requested_by_grinder: true,
                     ..
                 }
@@ -166,7 +166,7 @@ impl Link {
         let outcome = self.server.with(|m, now| {
             if !matches!(
                 m.phase(now),
-                Phase::Brewing {
+                Phase::Running {
                     requested_by_grinder: true,
                     ..
                 }
@@ -219,7 +219,7 @@ impl GrinderBrews {
                 Ok(rec)
                     if matches!(
                         rec.event,
-                        MachineEvent::BrewStarted {
+                        MachineEvent::ShotStarted {
                             requested_by_grinder: true,
                             ..
                         }
@@ -275,7 +275,7 @@ impl Detail {
     }
 
     /// Adds a value the app fills into its wording. Numbers are in plain
-    /// units, with the unit in the name (`ago_ms`, `time_s`, `weight_g`,
+    /// units, with the unit in the name (`age_ms`, `time_ms`, `weight_g`,
     /// `every_s`); text goes in as it is (`host`).
     pub fn var(mut self, name: &str, value: impl Into<serde_json::Value>) -> Self {
         self.vars.insert(name.to_owned(), value.into());
@@ -309,7 +309,7 @@ pub enum Health {
     /// The grinder is waiting and the integration is looking for the shot.
     Watching,
     /// Something failed; the integration is retrying.
-    Error,
+    Failing,
     /// The task ended.
     Stopped,
 }
@@ -330,11 +330,11 @@ pub struct StatusSnapshot {
     /// `None` when the integration gives no key for it.
     pub detail_key: Option<&'static str>,
     /// The values the app fills into its wording for `detail_key`, as of
-    /// when `detail` was set: e.g. `{"ago_ms": 180000, "time_s": 25.1}`.
+    /// when `detail` was set: e.g. `{"age_ms": 180000, "time_ms": 25100}`.
     pub detail_vars: DetailVars,
     pub last_error: Option<String>,
     /// How long the current health has been in place.
-    pub since_ms: u64,
+    pub health_age_ms: u64,
     pub reports: u32,
     pub last_report: Option<ShotResult>,
 }
@@ -410,10 +410,10 @@ impl Status {
     pub fn error(&self, message: impl Into<String>) {
         let message = message.into();
         let mut s = self.lock();
-        if s.health != Health::Error {
+        if s.health != Health::Failing {
             s.since = Instant::now();
         }
-        s.health = Health::Error;
+        s.health = Health::Failing;
         s.detail = Detail::from(message.as_str());
         s.last_error = Some(message);
     }
@@ -429,7 +429,7 @@ impl Status {
         }
         s.health = health;
         s.detail = detail;
-        if health != Health::Error {
+        if health != Health::Failing {
             s.last_error = None;
         }
     }
@@ -452,7 +452,7 @@ impl Status {
             detail_key: s.detail.key,
             detail_vars: s.detail.vars.clone(),
             last_error: s.last_error.clone(),
-            since_ms: u64::try_from(s.since.elapsed().as_millis()).unwrap_or(u64::MAX),
+            health_age_ms: u64::try_from(s.since.elapsed().as_millis()).unwrap_or(u64::MAX),
             reports: s.reports,
             last_report: s.last_report,
         }
@@ -532,7 +532,7 @@ mod tests {
         assert!(!l.grinder_waiting());
 
         // A manual start is not a grinder request.
-        l.server.with(|m, now| m.start_brew(now)).unwrap();
+        l.server.with(|m, now| m.start_shot(now)).unwrap();
         assert_eq!(l.report(t, None), ReportOutcome::NotWaiting);
         l.server.with(|m, now| m.abort(now)).unwrap();
 

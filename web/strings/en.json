@@ -198,7 +198,7 @@
   "grinder.fact.never": "never",
   "grinder.fact.group": "Group head 1",
   "grinder.group.idle": "Idle",
-  "grinder.group.brewing": "Brewing",
+  "grinder.group.running": "Brewing",
   "grinder.group.finishing": "Finishing",
 
   "integ.title": "Machine integrations",
@@ -210,7 +210,7 @@
   "integ.health.starting": "Connecting",
   "integ.health.connected": "Ready",
   "integ.health.watching": "Watching",
-  "integ.health.error": "Error",
+  "integ.health.failing": "Error",
   "integ.health.stopped": "Stopped",
   "integ.stopped": "Stopped",
   "integ.errorFallback": "Error",

@@ -1,26 +1,39 @@
-//! The face for a person or support app. All JSON.
+//! The face for a person or support app. All JSON. Codes and field names
+//! follow one pattern: an event or cause is `<group>_<object>_<what
+//! happened>` (`grinder_shot_requested`, `shot_aborted`), a state is one word
+//! (`running`, `failing`), units are in the name (`_ms`, `_s`, `_g`), a point
+//! in time ends in `_at` and an age in `age_ms`. The groups are those of
+//! `/api/state`: `shot`, `grinder`, `machine`, `integrations`, `settings`,
+//! `update`, `server`.
+//!
+//! An error replies `{"error":"<sentence>","code":"<code>"}`: the words are
+//! for people, the code (`shot_not_running`, `integration_not_found`, …) for
+//! apps to match on. That holds for every route below, also for a body or
+//! query it can't read (`request_invalid`) and for a request refused as one a
+//! web page made (`request_host_refused`, `request_from_other_site`). Only a
+//! path or method not in the table gets a bare 404 or 405.
 //!
 //! | method | path | what |
 //! |---|---|---|
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations (each status line also as `detail_key` and `detail_vars`, for wording it in another language), settings (with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit), update check; `boot_id` changes on every start, so an app can tell its event and log numbers start over; `grinder_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time |
+//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80 with its `state`), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and the grinder's `grinder_message`), and `shot_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, 0 for no limit, `finishing_hold_s`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq` |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them; they win over flags from then on. `null` goes back to the start setting (the flag or environment variable, else the default); `"grinder_host":""` removes the address (without a start address, the same as `null`). Replies with the settings as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
 //! | GET | `/api/integrations/<id>/settings` | the settings of one added in the app, without passwords (`secrets_set` names the ones that are set) |
 //! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes one added in the app and restarts it; a password left out or empty stays |
 //! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
-//! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
-//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first: how each ended as `kind` (`succeeded`, `aborted` or `failed`), `at` and `ended_at` (UTC, whole seconds; `ended_at` as the clock read when the shot ended, `at` counted back from it by the shot's length on a clock that does not jump), each that succeeded with `in_grinder_range` as on `shot_reported` (`null` when the shot's window was not known, see `grinder_range`, and on shots saved by earlier builds), each other with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart (false while saving fails) |
-//! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (`level`: `info`, `warn` or `error`) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
+//! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app; replies `{"id":…}`, as adding and changing do |
+//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first: how each ended as `outcome` (`succeeded`, `aborted` or `failed`), `started_at` and `ended_at` (UTC, whole seconds; `ended_at` as the clock read when the shot ended, `started_at` counted back from it by the shot's length on a clock that does not jump), `time_ms` and `weight_g` of each that succeeded, with `in_grinder_range` as on `shot_reported` (`null` when the shot's window was not known, see `grinder.shot_range`, and on shots saved by earlier builds), `target_time_ms` and `target_weight_g` when the grinder said, each other with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart (false while saving fails) |
+//! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (`at`, `level`: `info`, `warn` or `error`, `text`) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
 //! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`); `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
-//! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened; `shot_reported` says with `in_grinder_range` whether the grinder adjusts from its time, by the window of the grinder's request (see `grinder_range`), or `null` when that is not known; `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
-//! | GET | `/api/events/stream` | the same, live, as server-sent events |
-//! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers; without a weight, the recipe's |
-//! | POST | `/api/shot/abort` | ends the brew as a user abort (grinder skips it) |
-//! | POST | `/api/shot/start` | starts a brew without a grinder request (an E64 WS sees a flush; an E65/E80 nothing) |
+//! | GET | `/api/events?after=N` | events with `seq > N`, each with its `kind`: `grinder_grind_finished` (`result`: the grind's `target_weight_g`, `filter`, `raw`), `grinder_shot_requested` (an E64 WS's `script_id`, an E65/E80's `target_time_ms`), `shot_started`, `shot_reported` (`result`: `time_ms`, `weight_g`; `in_grinder_range`: whether the grinder adjusts from its time, by the window of the grinder's request, see `grinder.shot_range`, or `null` when that is not known), `shot_aborted` and `shot_finished`; `age_ms` says how long ago each happened. `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
+//! | GET | `/api/events/stream` | the same, live, as server-sent events named by `kind` |
+//! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` (or `time_ms`) — ends the shot with these numbers; without a weight, the recipe's |
+//! | POST | `/api/shot/abort` | ends the shot as a user abort (grinder skips it) |
+//! | POST | `/api/shot/start` | starts a shot without a grinder request (an E64 WS sees a flush; an E65/E80 nothing) |
 //! | POST | `/api/machine` | patch the `ON`-state mako fields, e.g. `{"TANK_LEVEL":0}` |
 //! | POST | `/api/grinder/pairing` | `{"pairing_id":1234}` — the pairing ID an E65/E80 grinder shows, only while the link asks for it |
 //! | PUT/DELETE | `/api/overrides` | raw keys forced into every mako reply |
@@ -32,12 +45,14 @@ use std::time::{Duration, Instant};
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{MachineError, MakoState, ShotResult};
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequest, FromRequestParts, Path, Query, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
@@ -91,31 +106,38 @@ pub fn state_json(x: &Server) -> Value {
     let update = x.update_json();
     x.with(|m, now| {
         let mako = m.mako(now);
-        let blocked = mako.grind_blocked().map(|b| {
-            json!({ "reason": b, "grinder_message": b.grinder_message() })
-        });
+        let blocked = mako
+            .grind_blocked()
+            .map(|b| json!({ "cause": b, "grinder_message": b.grinder_message() }));
+        let mut shot = serde_json::to_value(m.phase(now)).unwrap_or(Value::Null);
+        if let Value::Object(o) = &mut shot {
+            o.insert("last".into(), json!(m.last_shot()));
+        }
         json!({
-            "phase": m.phase(now),
-            "mako": m.mako_json(now),
-            "grind_blocked": blocked,
-            "last_shot": m.last_shot(),
-            "last_grind": m.last_grind(),
-            "grinder_range": m.grinder_range(),
-            "overrides": m.overrides,
+            "shot": shot,
             "grinder": {
                 "peer": link.peer,
                 "polls": link.polls,
                 "requests": link.requests,
                 "last_poll_age_ms": link.last_poll.map(|t| now.saturating_duration_since(t).as_millis() as u64),
                 "wifi": link.wifi,
+                "last_grind": m.last_grind(),
+                "grind_blocked": blocked,
+                "shot_range": m.grinder_range(),
+            },
+            "machine": {
+                "mako": m.mako_json(now),
+                "overrides": m.overrides,
+                "config": m.config(),
             },
             "integrations": integrations,
-            "last_seq": m.last_seq(),
-            "boot_id": x.boot_id(),
-            "version": crate::version(),
-            "config": m.config(),
             "settings": settings,
             "update": update,
+            "server": {
+                "version": crate::version(),
+                "boot_id": x.boot_id(),
+                "last_event_seq": m.last_seq(),
+            },
         })
     })
 }
@@ -206,23 +228,27 @@ async fn no_icon() -> StatusCode {
 /// `[a-z0-9_-]+.(svg|png|webp)` so nothing else on disk can be read.
 async fn icon(State(x): State<Arc<Server>>, Path(name): Path<String>) -> Response {
     let Some(dir) = x.icons_dir() else {
-        return error(StatusCode::NOT_FOUND, "no --icons directory");
+        return error(
+            StatusCode::NOT_FOUND,
+            "icon_not_found",
+            "no --icons directory",
+        );
     };
     let Some((stem, ext)) = name.rsplit_once('.') else {
-        return error(StatusCode::NOT_FOUND, "no such icon");
+        return error(StatusCode::NOT_FOUND, "icon_not_found", "no such icon");
     };
     let mime = match ext {
         "svg" => "image/svg+xml",
         "png" => "image/png",
         "webp" => "image/webp",
-        _ => return error(StatusCode::NOT_FOUND, "no such icon"),
+        _ => return error(StatusCode::NOT_FOUND, "icon_not_found", "no such icon"),
     };
     if stem.is_empty()
         || !stem
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
     {
-        return error(StatusCode::NOT_FOUND, "no such icon");
+        return error(StatusCode::NOT_FOUND, "icon_not_found", "no such icon");
     }
     match tokio::fs::read(dir.join(&name)).await {
         Ok(bytes) => (
@@ -233,7 +259,7 @@ async fn icon(State(x): State<Arc<Server>>, Path(name): Path<String>) -> Respons
             bytes,
         )
             .into_response(),
-        Err(_) => error(StatusCode::NOT_FOUND, "no such icon"),
+        Err(_) => error(StatusCode::NOT_FOUND, "icon_not_found", "no such icon"),
     }
 }
 
@@ -247,7 +273,7 @@ struct After {
     after: u64,
 }
 
-async fn get_events(State(x): State<Arc<Server>>, Query(q): Query<After>) -> Json<Value> {
+async fn get_events(State(x): State<Arc<Server>>, Params(q): Params<After>) -> Json<Value> {
     Json(x.with(|m, now| {
         Value::Array(
             m.events_after(q.after)
@@ -294,15 +320,15 @@ async fn stream_events(State(x): State<Arc<Server>>) -> impl IntoResponse {
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-async fn put_settings(State(x): State<Arc<Server>>, Json(body): Json<Value>) -> Response {
+async fn put_settings(State(x): State<Arc<Server>>, Body(body): Body<Value>) -> Response {
     let change = match SettingsChange::parse(&body) {
         Ok(c) => c,
-        Err(e) => return error(StatusCode::BAD_REQUEST, &e),
+        Err(e) => return error(StatusCode::BAD_REQUEST, "settings_invalid", &e),
     };
     match x.change_settings(change) {
         Ok(settings) => Json(settings).into_response(),
         // The file could not be written, or the pairing file read.
-        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e.code(), &e.to_string()),
     }
 }
 
@@ -314,7 +340,7 @@ async fn get_history(State(x): State<Arc<Server>>) -> Json<Value> {
     }))
 }
 
-async fn get_log(State(x): State<Arc<Server>>, Query(q): Query<After>) -> Json<Value> {
+async fn get_log(State(x): State<Arc<Server>>, Params(q): Params<After>) -> Json<Value> {
     let (lines, last_seq) = x.log().after(q.after);
     Json(json!({
         "lines": lines,
@@ -329,7 +355,7 @@ async fn get_log(State(x): State<Arc<Server>>, Query(q): Query<After>) -> Json<V
 /// an `N` beyond the last line (the server restarted since) sends them all.
 async fn stream_log(
     State(x): State<Arc<Server>>,
-    Query(q): Query<AfterMaybe>,
+    Params(q): Params<AfterMaybe>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     // A reconnecting browser sends the same URL again, so its
@@ -416,7 +442,7 @@ struct AddIntegration {
 
 async fn add_integration(
     State(x): State<Arc<Server>>,
-    Json(req): Json<AddIntegration>,
+    Body(req): Body<AddIntegration>,
 ) -> Response {
     let Some(kind) = integration::KINDS
         .iter()
@@ -425,6 +451,7 @@ async fn add_integration(
     else {
         return error(
             StatusCode::BAD_REQUEST,
+            "integration_kind_unknown",
             &format!("no integration `{}`", req.kind),
         );
     };
@@ -450,7 +477,7 @@ struct UpdateIntegration {
 async fn update_integration(
     State(x): State<Arc<Server>>,
     Path(id): Path<String>,
-    Json(req): Json<UpdateIntegration>,
+    Body(req): Body<UpdateIntegration>,
 ) -> Response {
     match x.integrations().update(&x, &id, req.settings) {
         Ok(()) => Json(json!({ "id": id })).into_response(),
@@ -467,7 +494,7 @@ async fn adopt_integration(State(x): State<Arc<Server>>, Path(id): Path<String>)
 
 async fn remove_integration(State(x): State<Arc<Server>>, Path(id): Path<String>) -> Response {
     match x.integrations().remove(&id) {
-        Ok(()) => Json(json!({ "removed": id })).into_response(),
+        Ok(()) => Json(json!({ "id": id })).into_response(),
         Err(e) => change_error(&e),
     }
 }
@@ -481,18 +508,19 @@ struct PairingInput {
 /// 65535, as `--grinder-pairing-id` takes).
 async fn grinder_pairing(
     State(x): State<Arc<Server>>,
-    Json(input): Json<PairingInput>,
+    Body(input): Body<PairingInput>,
 ) -> Response {
     let id = input.pairing_id;
     if !(1..=u32::from(u16::MAX)).contains(&id) {
         return error(
             StatusCode::BAD_REQUEST,
+            "grinder_pairing_id_invalid",
             "the pairing ID is a number from 1 to 65535",
         );
     }
     match x.use_grinder_pairing_id(id) {
         Ok(()) => Json(json!({ "pairing_id": id })).into_response(),
-        Err(e) => error(StatusCode::CONFLICT, &e.to_string()),
+        Err(e) => error(StatusCode::CONFLICT, e.code(), &e.to_string()),
     }
 }
 
@@ -505,17 +533,19 @@ fn change_error(e: &ChangeError) -> Response {
         }
         ChangeError::Save(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
-    error(code, &e.to_string())
+    error(code, e.code(), &e.to_string())
 }
 
-/// A measured shot as a person enters it. Time is required; volume may be
-/// given as grams from a scale (1 g ≈ 1 ml) or as ml. Without one (or with
-/// 0), the machine uses the recipe weight.
+/// A measured shot as a person enters it. Time is required; the weight is
+/// in grams. Without one (or with 0), the machine uses the recipe weight.
 #[derive(Debug, Deserialize)]
 pub struct ShotInput {
     pub time_s: Option<f64>,
     pub time_ms: Option<u32>,
     pub weight_g: Option<f64>,
+    /// `weight_g`'s name in 0.2.1 and before, so a client that still sends
+    /// it does not fall back to the recipe weight. `weight_g` wins when both
+    /// are there.
     pub volume_ml: Option<f64>,
 }
 
@@ -529,15 +559,15 @@ impl ShotInput {
         let time = time
             .filter(|t| *t <= ShotResult::MAX_TIME)
             .ok_or("time must be between 0 and 600 seconds")?;
-        let volume = self.volume_ml.or(self.weight_g).unwrap_or(0.0);
-        Ok(ShotResult::new(time, volume))
+        let weight = self.weight_g.or(self.volume_ml).unwrap_or(0.0);
+        Ok(ShotResult::new(time, weight))
     }
 }
 
-async fn shot_result(State(x): State<Arc<Server>>, Json(input): Json<ShotInput>) -> Response {
+async fn shot_result(State(x): State<Arc<Server>>, Body(input): Body<ShotInput>) -> Response {
     let result = match input.into_result() {
         Ok(r) => r,
-        Err(e) => return error(StatusCode::BAD_REQUEST, e),
+        Err(e) => return error(StatusCode::BAD_REQUEST, "shot_result_invalid", e),
     };
     machine_reply(x.with(|m, now| m.report_shot(now, result)), &x)
 }
@@ -547,7 +577,7 @@ async fn shot_abort(State(x): State<Arc<Server>>) -> Response {
 }
 
 async fn shot_start(State(x): State<Arc<Server>>) -> Response {
-    machine_reply(x.with(|m, now| m.start_brew(now)), &x)
+    machine_reply(x.with(|m, now| m.start_shot(now)), &x)
 }
 
 /// Merges the given keys (mako wire names) into the `ON`-state reply.
@@ -566,17 +596,17 @@ pub fn patch_ready(x: &Server, patch: &Map<String, Value>) -> Result<(), String>
 
 async fn patch_machine(
     State(x): State<Arc<Server>>,
-    Json(patch): Json<Map<String, Value>>,
+    Body(patch): Body<Map<String, Value>>,
 ) -> Response {
     match patch_ready(&x, &patch) {
         Ok(()) => Json(state_json(&x)).into_response(),
-        Err(e) => error(StatusCode::BAD_REQUEST, &e),
+        Err(e) => error(StatusCode::BAD_REQUEST, "machine_patch_invalid", &e),
     }
 }
 
 async fn put_overrides(
     State(x): State<Arc<Server>>,
-    Json(o): Json<Map<String, Value>>,
+    Body(o): Body<Map<String, Value>>,
 ) -> Json<Value> {
     x.with(|m, _| m.overrides = o);
     Json(state_json(&x))
@@ -590,13 +620,46 @@ async fn clear_overrides(State(x): State<Arc<Server>>) -> Json<Value> {
 fn machine_reply(r: Result<(), MachineError>, x: &Server) -> Response {
     match r {
         Ok(()) => Json(state_json(x)).into_response(),
-        Err(e @ MachineError::NoWeight) => error(StatusCode::BAD_REQUEST, &e.to_string()),
-        Err(e) => error(StatusCode::CONFLICT, &e.to_string()),
+        Err(e @ MachineError::NoWeight) => error(StatusCode::BAD_REQUEST, e.code(), &e.to_string()),
+        Err(e) => error(StatusCode::CONFLICT, e.code(), &e.to_string()),
     }
 }
 
-fn error(code: StatusCode, msg: &str) -> Response {
-    (code, Json(json!({ "error": msg }))).into_response()
+/// An error reply: `error` in words for people, `code` for apps to match on
+/// (`<group>_<what is wrong>`, e.g. `shot_not_running`).
+pub(super) fn error(status: StatusCode, code: &str, msg: &str) -> Response {
+    (status, Json(json!({ "error": msg, "code": code }))).into_response()
+}
+
+/// A JSON body, as `Json` reads it, but one it can't read (malformed, of the
+/// wrong shape, without `Content-Type: application/json`) gets the API's
+/// error reply with `request_invalid`.
+struct Body<T>(T);
+
+impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
+    type Rejection = Response;
+
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Response> {
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(body)) => Ok(Self(body)),
+            Err(e) => Err(error(e.status(), "request_invalid", &e.body_text())),
+        }
+    }
+}
+
+/// The query string, as `Query` reads it, but one it can't read gets the
+/// API's error reply with `request_invalid`.
+struct Params<T>(T);
+
+impl<T: DeserializeOwned, S: Send + Sync> FromRequestParts<S> for Params<T> {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Response> {
+        match Query::<T>::from_request_parts(parts, state).await {
+            Ok(Query(params)) => Ok(Self(params)),
+            Err(e) => Err(error(e.status(), "request_invalid", &e.body_text())),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -859,13 +922,17 @@ mod tests {
 
     #[test]
     fn the_page_knows_every_shot_kind() {
-        use crate::server::history::ShotKind;
-        let all = [ShotKind::Succeeded, ShotKind::Aborted, ShotKind::Failed];
+        use crate::server::history::ShotOutcome;
+        let all = [
+            ShotOutcome::Succeeded,
+            ShotOutcome::Aborted,
+            ShotOutcome::Failed,
+        ];
         for kind in all {
             // No wildcard, so a new kind has to be named here, next to
             // `all`, as a reminder to add it there too.
             match kind {
-                ShotKind::Succeeded | ShotKind::Aborted | ShotKind::Failed => {}
+                ShotOutcome::Succeeded | ShotOutcome::Aborted | ShotOutcome::Failed => {}
             }
         }
         let en = catalog("en");

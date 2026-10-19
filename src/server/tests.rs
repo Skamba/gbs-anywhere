@@ -133,7 +133,7 @@ async fn grinder_accepts_a_shot_entered_in_the_app() {
     assert_eq!(grinder.poll().await.status, MachineStatus::On);
 
     let state: Value = grinder.get("/api/state").await;
-    assert_eq!(state["version"], crate::version());
+    assert_eq!(state["server"]["version"], crate::version());
 
     // Grind with a Grind-by-Sync recipe, then the knob press.
     let recipe = json!({ "SYNC_BEVERAGE_WEIGHT": 36.0 });
@@ -163,7 +163,57 @@ async fn grinder_accepts_a_shot_entered_in_the_app() {
     assert_eq!(grinder.accepted, Some(30_000));
     assert_eq!(grinder.model.brew_state(), BrewState::Idle);
     let state: Value = grinder.get("/api/state").await;
-    assert_eq!(state["last_shot"]["volume_ml"], 36.0, "the recipe weight");
+    assert_eq!(state["shot"]["last"]["weight_g"], 36.0, "the recipe weight");
+    assert_eq!(state["shot"]["phase"], "ready");
+
+    // The events tell the shot's course, in the grinder's and the shot's
+    // words.
+    let events: Value = grinder.get("/api/events?after=0").await;
+    let kinds: Vec<_> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "grinder_grind_finished",
+            "grinder_shot_requested",
+            "shot_started",
+            "shot_reported",
+            "shot_finished"
+        ]
+    );
+    assert_eq!(events[0]["result"]["target_weight_g"], 36.0);
+    assert_eq!(
+        (&events[1]["script_id"], &events[1]["target_time_ms"]),
+        (&json!(START_BREW_SCRIPT_ID), &Value::Null)
+    );
+    assert_eq!(
+        events[3]["result"],
+        json!({ "time_ms": 30_000, "weight_g": 36.0 })
+    );
+}
+
+#[tokio::test]
+async fn a_weight_sent_as_volume_ml_still_counts() {
+    // Its name in 0.2.1: without it, the shot would get the recipe weight.
+    // Sent with `weight_g`, as a client in between might, `weight_g` wins.
+    for (shot, weight) in [
+        (json!({ "time_s": 30, "volume_ml": 38.5 }), 38.5),
+        (
+            json!({ "time_s": 30, "weight_g": 36, "volume_ml": 38.5 }),
+            36.0,
+        ),
+    ] {
+        let base = start().await;
+        let post = reqwest::Method::POST;
+        call(post.clone(), format!("{base}/api/shot/start"), None).await;
+        let (code, state) = call(post, format!("{base}/api/shot/result"), Some(shot)).await;
+        assert_eq!(code, 200);
+        assert_eq!(state["shot"]["last"]["weight_g"], weight);
+    }
 }
 
 /// The app is one HTML document with its styles, script and texts inline,
@@ -242,8 +292,8 @@ async fn events_say_how_long_ago_they_happened() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["kind"] == "brew_started")
-        .expect("a brew_started event");
+        .find(|e| e["kind"] == "shot_started")
+        .expect("a shot_started event");
     let age = started["age_ms"].as_u64().expect("age_ms");
     assert!((300..10_000).contains(&age), "age {age} ms");
 }
@@ -276,7 +326,7 @@ async fn an_abort_says_why_over_the_api() {
 #[tokio::test]
 async fn each_start_has_its_own_boot_id() {
     let (a, b) = (start().await, start().await);
-    let boot_id = |state: &Value| state["boot_id"].as_str().unwrap().to_owned();
+    let boot_id = |state: &Value| state["server"]["boot_id"].as_str().unwrap().to_owned();
     let (_, first) = call(reqwest::Method::GET, format!("{a}/api/state"), None).await;
     let (_, again) = call(reqwest::Method::GET, format!("{a}/api/state"), None).await;
     let (_, other) = call(reqwest::Method::GET, format!("{b}/api/state"), None).await;
@@ -290,9 +340,16 @@ async fn control_api_rejects_what_it_cannot_do() {
     let base = start().await;
     let post = reqwest::Method::POST;
 
+    // Each error says what is wrong in words, and as a code to match on.
+    let code_of = |(status, body): (u16, Value)| (status, body["code"].as_str().map(str::to_owned));
+    let expect = |status: u16, code: &str| (status, Some(code.to_owned()));
+
     let shot = json!({ "time_s": 30 });
-    let (code, _) = call(post.clone(), format!("{base}/api/shot/result"), Some(shot)).await;
-    assert_eq!(code, 409, "no brew running");
+    let reply = call(post.clone(), format!("{base}/api/shot/result"), Some(shot)).await;
+    assert_eq!(reply.1["error"], "no shot is running");
+    assert_eq!(code_of(reply), expect(409, "shot_not_running"));
+    let reply = call(post.clone(), format!("{base}/api/shot/abort"), None).await;
+    assert_eq!(code_of(reply), expect(409, "shot_not_running"));
 
     let (code, body) = call(
         post.clone(),
@@ -301,8 +358,12 @@ async fn control_api_rejects_what_it_cannot_do() {
     )
     .await;
     assert_eq!(
-        (code, body["error"].as_str()),
-        (400, Some("need time_s or time_ms"))
+        (code, body["error"].as_str(), body["code"].as_str()),
+        (
+            400,
+            Some("need time_s or time_ms"),
+            Some("shot_result_invalid")
+        )
     );
 
     for time in [json!({ "time_s": 1e20 }), json!({ "time_ms": 600_001 })] {
@@ -313,20 +374,65 @@ async fn control_api_rejects_what_it_cannot_do() {
         );
     }
 
+    // Without a weight or a recipe weight to fall back on.
+    call(post.clone(), format!("{base}/api/shot/start"), None).await;
+    let reply = call(post.clone(), format!("{base}/api/shot/start"), None).await;
+    assert_eq!(code_of(reply), expect(409, "shot_already_running"));
+    let shot = json!({ "time_s": 30 });
+    let reply = call(post.clone(), format!("{base}/api/shot/result"), Some(shot)).await;
+    assert_eq!(code_of(reply), expect(400, "shot_weight_missing"));
+
     let add = json!({ "kind": "nope", "settings": {} });
-    let (code, _) = call(post.clone(), format!("{base}/api/integrations"), Some(add)).await;
-    assert_eq!(code, 400);
+    let reply = call(post.clone(), format!("{base}/api/integrations"), Some(add)).await;
+    assert_eq!(code_of(reply), expect(400, "integration_kind_unknown"));
 
     let url = format!("{base}/api/integrations/nope");
-    let (code, _) = call(reqwest::Method::DELETE, url, None).await;
-    assert_eq!(code, 404);
+    let reply = call(reqwest::Method::DELETE, url, None).await;
+    assert_eq!(code_of(reply), expect(404, "integration_not_found"));
 
     let pairing = |id: u32| Some(json!({ "pairing_id": id }));
     let url = format!("{base}/api/grinder/pairing");
-    let (code, _) = call(post.clone(), url.clone(), pairing(0)).await;
-    assert_eq!(code, 400, "out of range");
-    let (code, _) = call(post, url, pairing(1234)).await;
-    assert_eq!(code, 409, "no --grinder");
+    let reply = call(post.clone(), url.clone(), pairing(0)).await;
+    assert_eq!(code_of(reply), expect(400, "grinder_pairing_id_invalid"));
+    let reply = call(post.clone(), url, pairing(1234)).await;
+    assert_eq!(
+        code_of(reply),
+        expect(409, "grinder_not_set_up"),
+        "no --grinder"
+    );
+
+    let reply = call(
+        reqwest::Method::PUT,
+        format!("{base}/api/settings"),
+        Some(json!({ "nope": 1 })),
+    )
+    .await;
+    assert_eq!(code_of(reply), expect(400, "settings_invalid"));
+
+    let patch = Some(json!({ "MA_STATUS": "not a number" }));
+    let reply = call(post.clone(), format!("{base}/api/machine"), patch).await;
+    assert_eq!(code_of(reply), expect(400, "machine_patch_invalid"));
+
+    // A body or query it can't read: malformed, of the wrong shape, or not
+    // said to be JSON.
+    let http = reqwest::Client::new();
+    let result = format!("{base}/api/shot/result");
+    for req in [
+        http.post(&result)
+            .header("content-type", "application/json")
+            .body("{"),
+        http.post(&result).json(&json!({ "time_s": "thirty" })),
+        http.post(&result).body(r#"{"time_s":30}"#),
+        http.get(format!("{base}/api/events?after=x")),
+        http.get(format!("{base}/api/log?after=-1")),
+    ] {
+        let res = req.send().await.unwrap();
+        let status = res.status().as_u16();
+        let body: Value = res.json().await.unwrap();
+        assert!((400..500).contains(&status), "{status}");
+        assert_eq!(body["code"], "request_invalid", "{body}");
+        assert!(body["error"].is_string());
+    }
 }
 
 #[tokio::test]
@@ -363,7 +469,7 @@ async fn settings_change_in_the_app_and_are_saved() {
         json!({ "min_s": 30, "max_s": 3600 }),
         "what the app can set, besides 0"
     );
-    assert_eq!(state["update"]["enabled"], true);
+    assert!(x.update_check_on());
     assert_eq!(state["update"]["latest"], Value::Null);
 
     let (code, settings) = put(json!({ "shot_window_s": 120 })).await;
@@ -372,9 +478,20 @@ async fn settings_change_in_the_app_and_are_saved() {
     assert_eq!(settings["source"]["shot_window_s"], "app");
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
     assert_eq!(
-        state["config"]["brew_timeout"]["secs"], 120,
+        state["machine"]["config"]["shot_window_s"], 120,
         "the machine uses it"
     );
+    // No limit is 0 in both places.
+    put(json!({ "shot_window_s": 0 })).await;
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(
+        (
+            &state["settings"]["shot_window_s"],
+            &state["machine"]["config"]["shot_window_s"]
+        ),
+        (&json!(0), &json!(0))
+    );
+    put(json!({ "shot_window_s": 120 })).await;
 
     for bad in [
         json!({ "shot_window_s": 20 }),
@@ -387,7 +504,11 @@ async fn settings_change_in_the_app_and_are_saved() {
         json!({ "nope": 1 }),
     ] {
         let (code, body) = put(bad.clone()).await;
-        assert_eq!(code, 400, "{bad}");
+        assert_eq!(
+            (code, &body["code"]),
+            (400, &json!("settings_invalid")),
+            "{bad}"
+        );
         assert!(body["error"].is_string());
     }
 
@@ -395,8 +516,7 @@ async fn settings_change_in_the_app_and_are_saved() {
     let (code, settings) = put(json!({ "update_check": false })).await;
     assert_eq!(code, 200);
     assert_eq!(settings["update_check"], false);
-    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
-    assert_eq!(state["update"]["enabled"], false);
+    assert!(!x.update_check_on());
 
     // An E65/E80 address starts the link (here to a closed local port), and
     // the pairing is kept where it was set up to be.
@@ -423,8 +543,8 @@ async fn settings_change_in_the_app_and_are_saved() {
     assert_eq!(settings["source"]["grinder_host"], "default");
     wait_for("the link to stop", || x.grinder_link().wifi.is_none()).await;
     let url = format!("{base}/api/grinder/pairing");
-    let (code, _) = call(reqwest::Method::POST, url, Some(json!({ "pairing_id": 7 }))).await;
-    assert_eq!(code, 409);
+    let (code, body) = call(reqwest::Method::POST, url, Some(json!({ "pairing_id": 7 }))).await;
+    assert_eq!((code, &body["code"]), (409, &json!("grinder_not_set_up")));
 
     // `null` goes back to the start settings, here the defaults: the app's
     // values are forgotten.
@@ -580,7 +700,7 @@ async fn the_log_is_kept_for_the_app() {
     assert_eq!(ours.len(), 3);
     assert_eq!(ours[0]["seq"], first.seq);
     assert_eq!(ours[0]["text"], "routes test: first");
-    assert!(ours[0]["ts"].as_str().unwrap().ends_with('Z'));
+    assert!(ours[0]["at"].as_str().unwrap().ends_with('Z'));
     assert_eq!(body["last_seq"], first.seq + 2);
     // Lower case, like the API's other codes.
     let levels: Vec<_> = ours.iter().map(|l| l["level"].as_str().unwrap()).collect();
@@ -677,42 +797,95 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
         (&json!(200), &json!(true))
     );
     let shots = body["shots"].as_array().unwrap();
-    assert_eq!(shots[0]["kind"], "aborted", "newest first");
+    assert_eq!(shots[0]["outcome"], "aborted", "newest first");
     assert_eq!(shots[0]["reason"], "aborted by user");
     assert_eq!(shots[0]["cause"], "shot_aborted_by_user");
-    assert_eq!(shots[0]["time_s"], Value::Null);
+    assert_eq!(shots[0]["time_ms"], Value::Null);
     assert_eq!(shots[0]["in_grinder_range"], Value::Null);
     let short = &shots[1];
-    assert_eq!(short["kind"], "succeeded");
-    assert_eq!(short["time_s"], 8.0);
+    assert_eq!(short["outcome"], "succeeded");
+    assert_eq!(short["time_ms"], 8_000);
     assert_eq!(short["in_grinder_range"], false, "the grinder ignores it");
     let shot = &shots[2];
-    assert_eq!(shot["kind"], "succeeded");
+    assert_eq!(shot["outcome"], "succeeded");
     assert_eq!(
-        (&shot["time_s"], &shot["weight_g"]),
-        (&json!(28.5), &json!(37.2))
+        (&shot["time_ms"], &shot["weight_g"]),
+        (&json!(28_500), &json!(37.2))
     );
     assert_eq!(shot["in_grinder_range"], true);
     assert_eq!(shot["target_weight_g"], 36.0);
-    assert_eq!(shot["target_time_s"], Value::Null, "the E64 WS sends none");
+    assert_eq!(shot["target_time_ms"], Value::Null, "the E64 WS sends none");
     assert_eq!(
         (&shot["reason"], &shot["cause"]),
         (&Value::Null, &Value::Null)
     );
     assert!(shot["id"].as_str().is_some_and(|id| !id.is_empty()));
-    assert!(shot["at"].as_str().unwrap().ends_with('Z'));
-    assert!(shot["ended_at"].as_str().unwrap() >= shot["at"].as_str().unwrap());
+    assert!(shot["started_at"].as_str().unwrap().ends_with('Z'));
+    assert!(shot["ended_at"].as_str().unwrap() >= shot["started_at"].as_str().unwrap());
     let saved: Value =
         serde_json::from_slice(&std::fs::read(dir.join("history.json")).unwrap()).unwrap();
     assert_eq!(saved["shots"].as_array().unwrap().len(), 3);
     let _ = std::fs::remove_dir_all(dir);
 }
 
-/// `grinder_range` in `GET /api/state`, which is always there (`null` when
-/// not known).
+/// `grinder.shot_range` in `GET /api/state`, which is always there (`null`
+/// when not known).
 async fn grinder_range(base: &str) -> Value {
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
-    state.get("grinder_range").cloned().expect("grinder_range")
+    state["grinder"]
+        .get("shot_range")
+        .cloned()
+        .expect("shot_range")
+}
+
+#[tokio::test]
+async fn the_state_comes_in_groups() {
+    let base = start().await;
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    let groups: Vec<_> = state.as_object().unwrap().keys().cloned().collect();
+    let mut expected = [
+        "shot",
+        "grinder",
+        "machine",
+        "integrations",
+        "settings",
+        "update",
+        "server",
+    ];
+    expected.sort_unstable();
+    assert_eq!(groups, expected);
+
+    assert_eq!(state["shot"]["phase"], "ready");
+    assert_eq!(state["shot"]["last"], Value::Null);
+    assert_eq!(
+        state["grinder"]["shot_range"],
+        Value::Null,
+        "no request yet"
+    );
+    assert_eq!(state["grinder"]["last_grind"], Value::Null);
+    assert_eq!(state["grinder"]["grind_blocked"], Value::Null);
+    let config = &state["machine"]["config"];
+    assert_eq!(
+        (&config["shot_window_s"], &config["finishing_hold_s"]),
+        (&json!(180), &json!(0.3))
+    );
+    assert_eq!(state["machine"]["mako"]["MA_STATUS"], 1);
+    assert_eq!(state["machine"]["overrides"], json!({}));
+    assert_eq!(state["server"]["last_event_seq"], 0);
+    assert!(state["server"]["boot_id"].is_string());
+    assert!(state["update"].get("enabled").is_none(), "in the settings");
+
+    // While a shot runs, the grinder is told so.
+    let post = reqwest::Method::POST;
+    let (_, state) = call(post, format!("{base}/api/shot/start"), None).await;
+    assert_eq!(
+        (
+            &state["shot"]["phase"],
+            &state["shot"]["requested_by_grinder"]
+        ),
+        (&json!("running"), &json!(false))
+    );
+    assert_eq!(state["grinder"]["grind_blocked"]["cause"], "shot_running");
 }
 
 #[tokio::test]
@@ -785,7 +958,7 @@ async fn an_e65_shot_counts_within_15_s_of_its_target_time() {
         assert_eq!(reported.get("in_grinder_range"), adjusts, "{time_ms} ms");
         let (_, history) = call(reqwest::Method::GET, format!("{base}/api/history"), None).await;
         let newest = &history["shots"][0];
-        assert_eq!(newest["kind"], "succeeded");
+        assert_eq!(newest["outcome"], "succeeded");
         assert_eq!(newest.get("in_grinder_range"), adjusts, "{time_ms} ms");
     }
 }
@@ -816,19 +989,23 @@ async fn integrations_are_edited_and_moved_into_the_app() {
     let key = entry["detail_key"].as_str().unwrap();
     assert!(key.starts_with("half_decent."), "{key}");
     assert!(entry["detail_vars"].is_object());
-    let (code, _) = call(reqwest::Method::POST, url("/adopt"), None).await;
-    assert_eq!(code, 409, "no settings file");
+    let (code, body) = call(reqwest::Method::POST, url("/adopt"), None).await;
+    assert_eq!(
+        (code, &body["code"]),
+        (409, &json!("settings_file_missing"))
+    );
 
     x.integrations()
         .load(&x, file, crate::integration::KINDS)
         .unwrap();
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
     assert_eq!(state["integrations"][0]["adoptable"], true);
-    let (code, _) = call(reqwest::Method::GET, url("/settings"), None).await;
-    assert_eq!(code, 409, "command line");
+    let on_command_line = (409, json!("integration_on_command_line"));
+    let (code, body) = call(reqwest::Method::GET, url("/settings"), None).await;
+    assert_eq!((code, body["code"].clone()), on_command_line);
     let edit = json!({ "settings": { "host": "127.0.0.1:10" } });
-    let (code, _) = call(reqwest::Method::PUT, url(""), Some(edit.clone())).await;
-    assert_eq!(code, 409, "command line");
+    let (code, body) = call(reqwest::Method::PUT, url(""), Some(edit.clone())).await;
+    assert_eq!((code, body["code"].clone()), on_command_line);
 
     let (code, view) = call(reqwest::Method::POST, url("/adopt"), None).await;
     assert_eq!(code, 200);
@@ -836,8 +1013,8 @@ async fn integrations_are_edited_and_moved_into_the_app() {
         (&view["id"], &view["source"], &view["adoptable"]),
         (&json!("half_decent"), &json!("app"), &json!(false))
     );
-    let (code, _) = call(reqwest::Method::POST, url("/adopt"), None).await;
-    assert_eq!(code, 409, "already in the app");
+    let (code, body) = call(reqwest::Method::POST, url("/adopt"), None).await;
+    assert_eq!((code, &body["code"]), (409, &json!("integration_in_app")));
 
     let (code, form) = call(reqwest::Method::GET, url("/settings"), None).await;
     assert_eq!(code, 200);
@@ -850,15 +1027,19 @@ async fn integrations_are_edited_and_moved_into_the_app() {
     let (_, form) = call(reqwest::Method::GET, url("/settings"), None).await;
     assert_eq!(form["settings"]["host"], "127.0.0.1:10");
     let bad = json!({ "settings": { "host": "not an address" } });
-    let (code, _) = call(reqwest::Method::PUT, url(""), Some(bad)).await;
-    assert_eq!(code, 400);
+    let (code, body) = call(reqwest::Method::PUT, url(""), Some(bad)).await;
+    assert_eq!(
+        (code, &body["code"]),
+        (400, &json!("integration_settings_invalid"))
+    );
     let unknown = format!("{base}/api/integrations/nope");
-    let (code, _) = call(reqwest::Method::PUT, unknown.clone(), Some(json!({}))).await;
-    assert_eq!(code, 404);
-    let (code, _) = call(reqwest::Method::GET, format!("{unknown}/settings"), None).await;
-    assert_eq!(code, 404);
-    let (code, _) = call(reqwest::Method::POST, format!("{unknown}/adopt"), None).await;
-    assert_eq!(code, 404);
+    let not_found = (404, json!("integration_not_found"));
+    let (code, body) = call(reqwest::Method::PUT, unknown.clone(), Some(json!({}))).await;
+    assert_eq!((code, body["code"].clone()), not_found);
+    let (code, body) = call(reqwest::Method::GET, format!("{unknown}/settings"), None).await;
+    assert_eq!((code, body["code"].clone()), not_found);
+    let (code, body) = call(reqwest::Method::POST, format!("{unknown}/adopt"), None).await;
+    assert_eq!((code, body["code"].clone()), not_found);
 
     let saved: Value =
         serde_json::from_slice(&std::fs::read(dir.join("settings.json")).unwrap()).unwrap();
@@ -898,7 +1079,8 @@ async fn web_pages_cannot_act_as_the_grinder() {
         assert_eq!(res.status(), 403, "{name}");
     }
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
-    assert_ne!(state["phase"]["phase"], "brewing");
+    assert_ne!(state["shot"]["phase"], "running");
+
     assert_eq!(
         state["grinder"]["requests"], 0,
         "not counted as the grinder"
@@ -935,7 +1117,13 @@ async fn the_app_answers_home_names_only_and_refuses_other_sites() {
             .send()
     };
     // DNS rebinding: a page on its own, public name.
-    assert_eq!(get_state("attacker.example").await.unwrap().status(), 421);
+    let res = get_state("attacker.example").await.unwrap();
+    assert_eq!(res.status(), 421);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(
+        body["code"], "request_host_refused",
+        "an error as any other"
+    );
     assert_eq!(get_state("gbs.fritz.box").await.unwrap().status(), 200);
     assert_eq!(get_state("kitchen-pi").await.unwrap().status(), 200);
     assert_eq!(get_state("").await.unwrap().status(), 421, "an empty Host");
@@ -993,8 +1181,10 @@ async fn the_app_answers_home_names_only_and_refuses_other_sites() {
         .await
         .unwrap();
     assert_eq!(res.status(), 403);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["code"], "request_from_other_site");
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
-    assert_ne!(state["phase"]["phase"], "brewing");
+    assert_ne!(state["shot"]["phase"], "running");
 
     // The app's own page, same origin, still works.
     let res = http
@@ -1027,7 +1217,8 @@ async fn without_a_host_header_the_host_in_the_uri_is_checked() {
         "another site on the same computer"
     );
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
-    assert_ne!(state["phase"]["phase"], "brewing");
+    assert_ne!(state["shot"]["phase"], "running");
+
     assert_eq!(
         raw_status(&base, &start_shot("http://192.168.1.20")).await,
         200

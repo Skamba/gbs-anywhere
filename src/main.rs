@@ -58,10 +58,11 @@ struct Args {
     #[arg(long, default_value_t = 6.0, value_parser = up_to_an_hour)]
     finishing_hold_s: f64,
 
-    /// Abort a brew after this many seconds without a reported result; 0
-    /// waits forever [default: 180]. A shot window set in the app wins.
-    #[arg(long, value_parser = up_to_an_hour, value_name = "S")]
-    brew_timeout_s: Option<f64>,
+    /// The shot window: abort a shot after this many seconds without a
+    /// reported result; 0 waits forever [default: 180]. A shot window set in
+    /// the app wins. Also taken as --brew-timeout-s, its name in 0.2.1.
+    #[arg(long, value_parser = up_to_an_hour, value_name = "S", alias = "brew-timeout-s")]
+    shot_window_s: Option<f64>,
 
     /// Serial number to report (MA_SN).
     #[arg(long)]
@@ -147,7 +148,7 @@ async fn main() -> anyhow::Result<()> {
     init_tracing();
     tracing::info!("gbs-anywhere {}", gbs_anywhere::version());
     let file = args.config.as_deref().map(SettingsFile::open).transpose()?;
-    // The brew timeout follows the shot window (`start_settings` below).
+    // The shot window comes from the settings (`start_settings` below).
     let mut config = MachineConfig {
         finishing_hold: Duration::from_secs_f64(args.finishing_hold_s),
         ..MachineConfig::default()
@@ -204,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
             .as_deref(),
     )?;
     let startup = Startup {
-        shot_window_s: args.brew_timeout_s,
+        shot_window_s: args.shot_window_s,
         grinder_host: args.grinder.clone(),
         pairing_file: args.grinder_pairing_file.clone().or_else(|| {
             args.config
@@ -283,32 +284,27 @@ async fn print_events(x: Arc<Server>) {
 
 fn describe(rec: &EventRecord) -> String {
     match &rec.event {
-        MachineEvent::GrindResult { result } => format!(
-            "[{}] grinder finished a grind: target beverage {} g, filter {}. \
-             Press the grinder knob to start brewing.",
+        MachineEvent::GrinderGrindFinished { result } => format!(
+            "[{}] grinder finished a grind: target weight {} g, filter {}",
             rec.seq,
             result
-                .beverage_weight_g
+                .target_weight_g
                 .map_or("?".into(), |w| format!("{w}")),
             result.filter.as_deref().unwrap_or("?"),
         ),
-        MachineEvent::BrewJob {
-            result,
+        MachineEvent::GrinderShotRequested {
+            script_id,
             target_time_ms,
         } => format!(
-            "[{}] grinder finished a Grind-by-Sync grind: target {}{}",
+            "[{}] grinder asks for the shot{}{}",
             rec.seq,
-            target_time_ms.map_or("?".into(), |ms| format!("{} s", f64::from(ms) / 1000.0)),
-            result
-                .beverage_weight_g
-                .map_or(String::new(), |w| format!(", {w} g")),
+            script_id.map_or(String::new(), |id| format!(" (script ID {id})")),
+            target_time_ms.map_or(String::new(), |ms| format!(
+                ", target time {} s",
+                f64::from(ms) / 1000.0
+            )),
         ),
-        MachineEvent::StartRequested { script_id } => format!(
-            "[{}] grinder requests brew start{}",
-            rec.seq,
-            script_id.map_or(String::new(), |id| format!(" (ID {id})")),
-        ),
-        MachineEvent::BrewStarted { human_action, .. } => {
+        MachineEvent::ShotStarted { human_action, .. } => {
             format!("[{}] >>> {human_action}", rec.seq)
         }
         MachineEvent::ShotReported {
@@ -318,15 +314,16 @@ fn describe(rec: &EventRecord) -> String {
             "[{}] showing shot to grinder: {:.1} s, {:.1} g{}",
             rec.seq,
             result.time_ms as f64 / 1000.0,
-            result.volume_ml,
+            result.weight_g,
             if *in_grinder_range == Some(false) {
                 "  (too short or too long: the grinder will ignore it)"
             } else {
                 ""
             }
         ),
-        MachineEvent::ShotAborted { reason, .. } => format!("[{}] brew aborted: {reason}", rec.seq),
-        MachineEvent::Ready => format!("[{}] machine back to ON", rec.seq),
+        MachineEvent::ShotAborted { reason, .. } => format!("[{}] shot aborted: {reason}", rec.seq),
+
+        MachineEvent::ShotFinished => format!("[{}] machine back to ON", rec.seq),
     }
 }
 
@@ -349,7 +346,7 @@ fn handle_line(x: &Server, line: &str) -> String {
         "h" | "help" => HELP.into(),
         "?" => serde_json::to_string_pretty(&server::state_json(x)).unwrap_or_default(),
         "a" => result_msg(x.with(|m, now| m.abort(now))),
-        "s" => result_msg(x.with(|m, now| m.start_brew(now))),
+        "s" => result_msg(x.with(|m, now| m.start_shot(now))),
         "set" => {
             let mut patch = Map::new();
             for kv in words {
@@ -442,14 +439,19 @@ mod tests {
             2.5
         );
         assert_eq!(
-            parse("--brew-timeout-s", "0").unwrap().brew_timeout_s,
+            parse("--shot-window-s", "0").unwrap().shot_window_s,
             Some(0.0)
         );
+        assert_eq!(
+            parse("--brew-timeout-s", "90").unwrap().shot_window_s,
+            Some(90.0),
+            "the name in 0.2.1"
+        );
         let none = Args::try_parse_from(["gbs-anywhere"]).unwrap();
-        assert_eq!(none.brew_timeout_s, None, "the default is not a flag");
+        assert_eq!(none.shot_window_s, None, "the default is not a flag");
         for bad in ["-1", "3601", "1e20", "NaN", "inf", "soon"] {
             assert!(parse("--finishing-hold-s", bad).is_err(), "{bad}");
-            assert!(parse("--brew-timeout-s", bad).is_err(), "{bad}");
+            assert!(parse("--shot-window-s", bad).is_err(), "{bad}");
         }
     }
 

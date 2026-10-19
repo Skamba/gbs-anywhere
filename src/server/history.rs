@@ -2,9 +2,9 @@
 //! the numbers sent (`GET /api/history`). Kept in `history.json` next to the
 //! settings file, or in memory without one.
 //!
-//! A brew counts from the grinder's request (the E64 WS's knob press, an
-//! E65/E80 brew job) to its end: a reported shot, or an abort. A brew
-//! started by hand (a flush) is not a shot and is left out.
+//! A shot counts from the grinder's request (the E64 WS's knob press, an
+//! E65/E80 brew job) to its end: a reported result, or an abort. A shot
+//! started by hand (a flush) is left out.
 
 use std::collections::VecDeque;
 use std::io::Read;
@@ -28,11 +28,11 @@ pub const CAPACITY: usize = 200;
 /// Far more than [`CAPACITY`] shots take: a bigger file is not a history.
 const MAX_FILE_BYTES: u64 = 4 << 20;
 
-/// How a shot ended. Files written by earlier builds say `success` and
-/// `error`; they read as `succeeded` and `failed`.
+/// How a shot ended (`outcome`). Files written by earlier builds say
+/// `success` and `error`; they read as `succeeded` and `failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ShotKind {
+pub enum ShotOutcome {
     /// Measured and sent to the grinder.
     #[serde(alias = "success")]
     Succeeded,
@@ -45,7 +45,7 @@ pub enum ShotKind {
     Failed,
 }
 
-impl ShotKind {
+impl ShotOutcome {
     /// How a shot that ended for `cause` is listed.
     fn of(cause: AbortCause) -> Self {
         if cause.on_purpose() {
@@ -58,31 +58,75 @@ impl ShotKind {
 
 /// One shot in the history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "StoredShot")]
 pub struct Shot {
     pub id: String,
     /// When the grinder asked for it (UTC): `ended_at` less how long the
-    /// brew took in whole seconds, counted on the machine's clock.
-    pub at: String,
+    /// shot took in whole seconds, counted on the machine's clock.
+    pub started_at: String,
     /// When it ended, as the wall clock read then (UTC). A clock step during
-    /// the brew does not change how far apart the two are.
+    /// the shot does not change how far apart the two are.
     pub ended_at: String,
-    pub kind: ShotKind,
+    pub outcome: ShotOutcome,
     /// Only for a success.
-    pub time_s: Option<f64>,
+    pub time_ms: Option<u32>,
     pub weight_g: Option<f64>,
     /// Only for a success: whether the grinder adjusts from its time, as on
     /// its `shot_reported` event. None when the shot's window is not known
     /// (an E65/E80 brew job without a target time); older files have none.
     pub in_grinder_range: Option<bool>,
     /// What the grinder aims for, when it said.
-    pub target_time_s: Option<f64>,
+    pub target_time_ms: Option<u32>,
     pub target_weight_g: Option<f64>,
     /// Why it was not a success, in words.
     pub reason: Option<String>,
     /// The same as a fixed code, for the app to match on. Older files have
     /// none and get it from `reason` when read.
-    #[serde(default, deserialize_with = "known_cause")]
     pub cause: Option<AbortCause>,
+}
+
+/// A shot as files keep it, including those written by earlier builds:
+/// `at`, `kind`, and the times in seconds (`time_s`, `target_time_s`).
+#[derive(Deserialize)]
+struct StoredShot {
+    id: String,
+    #[serde(alias = "at")]
+    started_at: String,
+    ended_at: String,
+    #[serde(alias = "kind")]
+    outcome: ShotOutcome,
+    time_ms: Option<u32>,
+    time_s: Option<f64>,
+    weight_g: Option<f64>,
+    in_grinder_range: Option<bool>,
+    target_time_ms: Option<u32>,
+    target_time_s: Option<f64>,
+    target_weight_g: Option<f64>,
+    reason: Option<String>,
+    #[serde(default, deserialize_with = "known_cause")]
+    cause: Option<AbortCause>,
+}
+
+impl From<StoredShot> for Shot {
+    fn from(s: StoredShot) -> Self {
+        let ms = |secs: Option<f64>| {
+            secs.filter(|s| s.is_finite() && *s >= 0.0)
+                .map(|s| (s * 1000.0).round().min(f64::from(u32::MAX)) as u32)
+        };
+        Self {
+            id: s.id,
+            started_at: s.started_at,
+            ended_at: s.ended_at,
+            outcome: s.outcome,
+            time_ms: s.time_ms.or_else(|| ms(s.time_s)),
+            weight_g: s.weight_g,
+            in_grinder_range: s.in_grinder_range,
+            target_time_ms: s.target_time_ms.or_else(|| ms(s.target_time_s)),
+            target_weight_g: s.target_weight_g,
+            reason: s.reason,
+            cause: s.cause,
+        }
+    }
 }
 
 /// A cause this version does not know (written by a newer one) reads as
@@ -239,7 +283,7 @@ fn read_file(path: &Path) -> anyhow::Result<Result<VecDeque<Shot>, String>> {
         Ok(raw) => raw,
         Err(e) => return Ok(Err(e.to_string())),
     };
-    // A shot this version cannot read (say, a kind added later) is dropped,
+    // A shot this version cannot read (say, an outcome added later) is dropped,
     // not the whole file.
     let total = raw.shots.len();
     let shots: VecDeque<Shot> = raw
@@ -276,22 +320,20 @@ fn save(path: &Path, file: &HistoryFile) -> anyhow::Result<()> {
 /// What the last grind asked for.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 struct Target {
-    time_s: Option<f64>,
+    time_ms: Option<u32>,
     weight_g: Option<f64>,
 }
 
 impl Target {
-    fn of(result: &GrindResult, target_time_ms: Option<u32>) -> Self {
+    fn of(result: &GrindResult) -> Self {
         Self {
-            time_s: target_time_ms.map(|ms| f64::from(ms) / 1000.0),
-            weight_g: result
-                .beverage_weight_g
-                .filter(|g| g.is_finite() && *g > 0.0),
+            time_ms: None,
+            weight_g: result.target_weight_g.filter(|g| g.is_finite() && *g > 0.0),
         }
     }
 }
 
-/// A brew the grinder asked for that has not ended yet.
+/// A shot the grinder asked for that has not ended yet.
 #[derive(Debug, Clone)]
 struct Open {
     /// When it started, on the machine's clock, which a clock step does not
@@ -300,7 +342,7 @@ struct Open {
     target: Target,
 }
 
-/// How a brew ended.
+/// How a shot ended.
 #[derive(Debug, Clone, Copy)]
 enum End {
     /// With a shot result, and whether the grinder adjusts from its time.
@@ -315,7 +357,7 @@ enum End {
 /// Turns the machine's events into shots.
 #[derive(Debug, Default)]
 struct Recorder {
-    /// The grind since the last brew started.
+    /// The grind since the last shot started.
     grind: Option<Target>,
     open: Option<Open>,
 }
@@ -323,25 +365,26 @@ struct Recorder {
 impl Recorder {
     /// The finished shot, once `event` ends one. `at` is when the event
     /// happened on the machine's clock, and `wall` the same moment on the
-    /// wall clock. Only a brew's end reads `wall`; its start is counted back
+    /// wall clock. Only a shot's end reads `wall`; its start is counted back
     /// from there with the machine's clock. Until it syncs, a computer's
     /// clock may still read the last shutdown time, or 1970 or the system's
     /// build date, and then steps forward: the later reading is the one to
-    /// trust, and a step during the brew does not change how long it took.
+    /// trust, and a step during the shot does not change how long it took.
     fn observe(&mut self, event: &MachineEvent, at: Instant, wall: SystemTime) -> Option<Shot> {
         match event {
-            MachineEvent::GrindResult { result } => {
-                self.grind = Some(Target::of(result, None));
+            MachineEvent::GrinderGrindFinished { result } => {
+                self.grind = Some(Target::of(result));
                 None
             }
-            MachineEvent::BrewJob {
-                result,
-                target_time_ms,
+            // An E65/E80 says the time it aims for with its request.
+            MachineEvent::GrinderShotRequested {
+                target_time_ms: Some(ms),
+                ..
             } => {
-                self.grind = Some(Target::of(result, *target_time_ms));
+                self.grind.get_or_insert_default().time_ms = Some(*ms);
                 None
             }
-            MachineEvent::BrewStarted {
+            MachineEvent::ShotStarted {
                 requested_by_grinder,
                 ..
             } => {
@@ -371,34 +414,36 @@ impl Recorder {
                 let open = self.open.take()?;
                 Some(shot(&open, at, wall, End::Aborted(*cause)))
             }
-            MachineEvent::StartRequested { .. } | MachineEvent::Ready => None,
+            MachineEvent::GrinderShotRequested { .. } | MachineEvent::ShotFinished => None,
         }
     }
 }
 
-/// The shot of a brew that ended at `ended` on the machine's clock and at
+/// The shot that ended at `ended` on the machine's clock and at
 /// `wall` on the wall clock; one that ended for a cause also gets its words
 /// as `reason`.
 fn shot(open: &Open, ended: Instant, wall: SystemTime, end: End) -> Shot {
-    // Whole seconds, as the history keeps its times: `at` and `ended_at` are
-    // then exactly this far apart, so a 3:00 timeout does not show as 3:01.
+    // Whole seconds, as the history keeps its times: `started_at` and
+    // `ended_at` are then exactly this far apart, so a 3:00 timeout does not
+    // show as 3:01.
     let took = Duration::from_secs(ended.saturating_duration_since(open.since).as_secs());
-    let (kind, result, in_grinder_range, cause) = match end {
+    let (outcome, result, in_grinder_range, cause) = match end {
         End::Shot {
             result,
             in_grinder_range,
-        } => (ShotKind::Succeeded, Some(result), in_grinder_range, None),
-        End::Aborted(cause) => (ShotKind::of(cause), None, None, Some(cause)),
+        } => (ShotOutcome::Succeeded, Some(result), in_grinder_range, None),
+        End::Aborted(cause) => (ShotOutcome::of(cause), None, None, Some(cause)),
     };
     Shot {
         id: uuid::Uuid::new_v4().simple().to_string(),
-        at: super::utc::with_seconds(wall.checked_sub(took).unwrap_or(wall)),
+        started_at: super::utc::with_seconds(wall.checked_sub(took).unwrap_or(wall)),
         ended_at: super::utc::with_seconds(wall),
-        kind,
-        time_s: result.map(|r| f64::from(r.time_ms) / 1000.0),
-        weight_g: result.map(|r| r.volume_ml),
+        outcome,
+        time_ms: result.map(|r| r.time_ms),
+        weight_g: result.map(|r| r.weight_g),
         in_grinder_range,
-        target_time_s: open.target.time_s,
+        target_time_ms: open.target.time_ms,
+
         target_weight_g: open.target.weight_g,
         reason: cause.map(|c| c.text().to_owned()),
         cause,
@@ -459,7 +504,7 @@ async fn record(server: Arc<Server>, mut events: broadcast::Receiver<EventRecord
 mod tests {
     use super::*;
     use crate::protocol::GrinderRange;
-    use serde_json::Value;
+    use serde_json::{Value, json};
     use std::sync::LazyLock;
     use std::time::UNIX_EPOCH;
 
@@ -516,7 +561,7 @@ mod tests {
     }
 
     fn started(by_grinder: bool) -> MachineEvent {
-        MachineEvent::BrewStarted {
+        MachineEvent::ShotStarted {
             requested_by_grinder: by_grinder,
             human_action: "",
         }
@@ -534,26 +579,32 @@ mod tests {
     #[test]
     fn records_grinder_brews_only() {
         let mut r = Recorder::default();
-        // An E65/E80 job: target time and weight from the job.
-        let job = MachineEvent::BrewJob {
+        // An E65/E80 job: target time and weight from the job, as the grind
+        // and the request.
+        let grind_finished = MachineEvent::GrinderGrindFinished {
             result: grind(40.0),
+        };
+        let requested = MachineEvent::GrinderShotRequested {
+            script_id: None,
             target_time_ms: Some(28_000),
         };
-        assert_eq!(r.feed(&job, at(0)), None);
+        assert_eq!(r.feed(&grind_finished, at(0)), None);
+        assert_eq!(r.feed(&requested, at(0)), None);
         assert_eq!(r.feed(&started(true), at(0)), None);
+
         let shot = r.feed(&reported(28_500, 40.9), at(40)).unwrap();
-        assert_eq!(shot.kind, ShotKind::Succeeded);
+        assert_eq!(shot.outcome, ShotOutcome::Succeeded);
         assert_eq!(
             (
-                shot.time_s,
+                shot.time_ms,
                 shot.weight_g,
-                shot.target_time_s,
+                shot.target_time_ms,
                 shot.target_weight_g
             ),
-            (Some(28.5), Some(40.9), Some(28.0), Some(40.0))
+            (Some(28_500), Some(40.9), Some(28_000), Some(40.0))
         );
         assert_eq!(
-            (shot.at.as_str(), shot.ended_at.as_str()),
+            (shot.started_at.as_str(), shot.ended_at.as_str()),
             ("2026-10-11T12:00:00Z", "2026-10-11T12:00:40Z")
         );
         assert_eq!((shot.reason, shot.cause), (None, None));
@@ -565,19 +616,22 @@ mod tests {
 
         // An E64 WS knob press after a grind result: the recipe weight, no
         // target time.
-        let e64 = MachineEvent::GrindResult {
+        let e64 = MachineEvent::GrinderGrindFinished {
             result: grind(36.0),
         };
         r.feed(&e64, at(100));
         r.feed(
-            &MachineEvent::StartRequested { script_id: Some(9) },
+            &MachineEvent::GrinderShotRequested {
+                script_id: Some(9),
+                target_time_ms: None,
+            },
             at(110),
         );
         r.feed(&started(true), at(110));
         let abort = MachineEvent::shot_aborted(AbortCause::ShotAbortedByUser);
         let shot = r.feed(&abort, at(120)).unwrap();
-        assert_eq!(shot.kind, ShotKind::Aborted);
-        assert_eq!((shot.time_s, shot.target_time_s), (None, None));
+        assert_eq!(shot.outcome, ShotOutcome::Aborted);
+        assert_eq!((shot.time_ms, shot.target_time_ms), (None, None));
         assert_eq!(shot.target_weight_g, Some(36.0));
         assert_eq!(shot.reason.as_deref(), Some("aborted by user"));
         assert_eq!(shot.cause, Some(AbortCause::ShotAbortedByUser));
@@ -587,7 +641,7 @@ mod tests {
         assert_eq!(r.feed(&started(true), at(200)), None);
         let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
         let shot = r.feed(&timeout, at(380)).unwrap();
-        assert_eq!(shot.kind, ShotKind::Failed);
+        assert_eq!(shot.outcome, ShotOutcome::Failed);
         assert_eq!(shot.target_weight_g, None);
     }
 
@@ -602,7 +656,7 @@ mod tests {
         ] {
             r.feed(&started(true), at(0));
             let shot = r.feed(&reported(ms, 36.0), at(100)).unwrap();
-            assert_eq!(shot.kind, ShotKind::Succeeded, "{ms} ms");
+            assert_eq!(shot.outcome, ShotOutcome::Succeeded, "{ms} ms");
             assert_eq!(shot.in_grinder_range, Some(adjusts), "{ms} ms");
         }
     }
@@ -620,7 +674,7 @@ mod tests {
         r.observe(&started(true), at(0), shutdown);
         let shot = r.feed(&reported(28_500, 36.0), at(40)).unwrap();
         assert_eq!(
-            (shot.at.as_str(), shot.ended_at.as_str()),
+            (shot.started_at.as_str(), shot.ended_at.as_str()),
             ("2026-10-11T12:00:00Z", "2026-10-11T12:00:40Z")
         );
 
@@ -629,7 +683,7 @@ mod tests {
         let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
         let shot = r.feed(&timeout, at(280)).unwrap();
         assert_eq!(
-            (shot.at.as_str(), shot.ended_at.as_str()),
+            (shot.started_at.as_str(), shot.ended_at.as_str()),
             ("2026-10-11T12:01:40Z", "2026-10-11T12:04:40Z")
         );
 
@@ -638,7 +692,7 @@ mod tests {
         r.observe(&started(true), at(300), unset);
         let missed = r.feed(&started(true), at(4 * 3600)).unwrap();
         assert_eq!(
-            (missed.at.as_str(), missed.ended_at.as_str()),
+            (missed.started_at.as_str(), missed.ended_at.as_str()),
             ("2026-10-11T12:05:00Z", "2026-10-11T16:00:00Z")
         );
 
@@ -652,7 +706,7 @@ mod tests {
         );
         let shot = shot.unwrap();
         assert_eq!(
-            (shot.at.as_str(), shot.ended_at.as_str()),
+            (shot.started_at.as_str(), shot.ended_at.as_str()),
             ("1970-01-01T00:01:35Z", "1970-01-01T00:02:07Z")
         );
     }
@@ -675,7 +729,7 @@ mod tests {
         let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
         let shot = r.observe(&timeout, end, end_wall).unwrap();
         assert_eq!(
-            (shot.at.as_str(), shot.ended_at.as_str()),
+            (shot.started_at.as_str(), shot.ended_at.as_str()),
             ("2026-10-11T12:00:01Z", "2026-10-11T12:03:01Z")
         );
     }
@@ -683,19 +737,19 @@ mod tests {
     #[test]
     fn abort_causes_are_sorted() {
         for (cause, kind) in [
-            (AbortCause::ShotAbortedByUser, ShotKind::Aborted),
-            (AbortCause::GrinderShotReplaced, ShotKind::Aborted),
-            (AbortCause::GrinderAddressChanged, ShotKind::Aborted),
-            (AbortCause::ShotTimedOut, ShotKind::Failed),
-            (AbortCause::GrinderShotDropped, ShotKind::Failed),
-            (AbortCause::GrinderShotRefused, ShotKind::Failed),
-            (AbortCause::GrinderUnpaired, ShotKind::Failed),
+            (AbortCause::ShotAbortedByUser, ShotOutcome::Aborted),
+            (AbortCause::GrinderShotReplaced, ShotOutcome::Aborted),
+            (AbortCause::GrinderAddressChanged, ShotOutcome::Aborted),
+            (AbortCause::ShotTimedOut, ShotOutcome::Failed),
+            (AbortCause::GrinderShotDropped, ShotOutcome::Failed),
+            (AbortCause::GrinderShotRefused, ShotOutcome::Failed),
+            (AbortCause::GrinderUnpaired, ShotOutcome::Failed),
         ] {
             let mut r = Recorder::default();
             r.feed(&started(true), at(0));
             let shot = r.feed(&MachineEvent::shot_aborted(cause), at(1));
             let shot = shot.unwrap();
-            assert_eq!((shot.kind, shot.cause), (kind, Some(cause)));
+            assert_eq!((shot.outcome, shot.cause), (kind, Some(cause)));
             assert_eq!(shot.reason.as_deref(), Some(cause.text()));
         }
     }
@@ -705,15 +759,15 @@ mod tests {
         let mut r = Recorder::default();
         r.feed(&started(true), at(0));
         let missed = r.feed(&started(true), at(100)).unwrap();
-        assert_eq!(missed.kind, ShotKind::Failed);
+        assert_eq!(missed.outcome, ShotOutcome::Failed);
         assert_eq!(missed.cause, Some(AbortCause::ShotEndMissed));
         assert_eq!(
             missed.reason.as_deref(),
             Some("the next brew started before this one ended")
         );
         assert_eq!(
-            r.feed(&reported(25_000, 36.0), at(130)).unwrap().kind,
-            ShotKind::Succeeded
+            r.feed(&reported(25_000, 36.0), at(130)).unwrap().outcome,
+            ShotOutcome::Succeeded
         );
     }
 
@@ -772,7 +826,7 @@ mod tests {
         let path = dir.join("history.json");
         let known = serde_json::to_value(ended(30, success(28))).unwrap();
         let mut newer = known.clone();
-        newer["kind"] = "partial".into();
+        newer["outcome"] = "partial".into();
         newer["id"] = "from-a-newer-version".into();
         std::fs::write(
             &path,
@@ -782,7 +836,7 @@ mod tests {
         let h = History::default();
         h.use_file(&path).unwrap();
         assert_eq!(h.list().len(), 1);
-        assert_eq!(h.list()[0].time_s, Some(28.0));
+        assert_eq!(h.list()[0].time_ms, Some(28_000));
         assert!(!dir.join("history.json.bad").exists(), "not set aside");
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -859,11 +913,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("history.json");
         // Shots as saved before `cause` and `in_grinder_range` were kept,
-        // with the kinds of then (`success`, `error`). Whether the grinder
-        // took the success is not known, and stays so.
+        // with the names of then (`at`, `kind`, times in seconds) and the
+        // kinds of then (`success`, `error`). Whether the grinder took the
+        // success is not known, and stays so.
         let older = r#"{"shots":[{"id":"older","at":"2026-10-11T12:00:00Z",
-            "ended_at":"2026-10-11T12:00:30Z","kind":"success","time_s":8.0,
-            "weight_g":18.0,"target_time_s":null,"target_weight_g":36.0,
+            "ended_at":"2026-10-11T12:00:30Z","kind":"success","time_s":8.25,
+            "weight_g":18.0,"target_time_s":28.0,"target_weight_g":36.0,
             "reason":null},{"id":"older-error","at":"2026-10-11T11:00:00Z",
             "ended_at":"2026-10-11T11:03:00Z","kind":"error","time_s":null,
             "weight_g":null,"target_time_s":null,"target_weight_g":null,
@@ -876,26 +931,51 @@ mod tests {
         let h = History::default();
         h.use_file(&path).unwrap();
         let shots = h.list();
-        let kinds: Vec<_> = shots.iter().map(|s| s.kind).collect();
+        let outcomes: Vec<_> = shots.iter().map(|s| s.outcome).collect();
         assert_eq!(
-            kinds,
-            [ShotKind::Succeeded, ShotKind::Failed, ShotKind::Aborted]
+            outcomes,
+            [
+                ShotOutcome::Succeeded,
+                ShotOutcome::Failed,
+                ShotOutcome::Aborted
+            ]
         );
         assert_eq!(
-            (shots[0].time_s, shots[0].in_grinder_range),
-            (Some(8.0), None)
+            (
+                shots[0].time_ms,
+                shots[0].target_time_ms,
+                shots[0].in_grinder_range
+            ),
+            (Some(8_250), Some(28_000), None)
         );
+        assert_eq!(shots[0].started_at, "2026-10-11T12:00:00Z");
         assert_eq!(shots[1].cause, Some(AbortCause::ShotTimedOut));
-        // Written back with the kinds of now.
+        // Written back with the names of now.
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        let saved_kinds: Vec<_> = saved["shots"]
+        let saved_outcomes: Vec<_> = saved["shots"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|s| s["kind"].as_str().unwrap())
+            .map(|s| s["outcome"].as_str().unwrap())
             .collect();
-        assert_eq!(saved_kinds, ["succeeded", "failed", "aborted"]);
-        assert_eq!(saved["shots"][0]["in_grinder_range"], Value::Null);
+        assert_eq!(saved_outcomes, ["succeeded", "failed", "aborted"]);
+        let first = &saved["shots"][0];
+        assert_eq!(first["in_grinder_range"], Value::Null);
+        assert_eq!(
+            (
+                &first["started_at"],
+                &first["time_ms"],
+                &first["target_time_ms"]
+            ),
+            (
+                &json!("2026-10-11T12:00:00Z"),
+                &json!(8_250),
+                &json!(28_000)
+            )
+        );
+        for old in ["at", "kind", "time_s", "target_time_s"] {
+            assert!(first.get(old).is_none(), "{old}");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

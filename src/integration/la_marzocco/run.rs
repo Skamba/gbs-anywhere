@@ -98,16 +98,17 @@ fn idle_line(last: Option<&Idle>, now_ms: i64) -> Detail {
     let Some(c) = last else {
         return Detail::keyed("la_marzocco.no_coffee", "no coffee in the last 7 days");
     };
-    let ago_ms = (now_ms - c.time_ms).max(0);
+    let age_ms = (now_ms - c.time_ms).max(0);
     let seconds = tenths(c.extraction_seconds);
-    let time = format!("last coffee {} ago: {seconds:.1} s", age_of(ago_ms));
+    let time = format!("last coffee {} ago: {seconds:.1} s", age_of(age_ms));
     let line = match c.grams.map(tenths) {
         Some(g) => {
             Detail::keyed("la_marzocco.last_coffee", format!("{time}, {g:.1} g")).var("weight_g", g)
         }
         None => Detail::keyed("la_marzocco.last_coffee_no_weight", time),
     };
-    line.var("ago_ms", ago_ms).var("time_s", seconds)
+    line.var("age_ms", age_ms)
+        .var("time_ms", (seconds * 1000.0).round() as i64)
 }
 
 /// How often the idle line's age is refreshed.
@@ -378,7 +379,7 @@ mod tests {
         assert_eq!(snap.detail_key, Some("la_marzocco.last_coffee"));
         assert_eq!(
             serde_json::Value::Object(snap.detail_vars),
-            json!({"ago_ms": 18_000_000, "time_s": 28.5, "weight_g": 40.9})
+            json!({"age_ms": 18_000_000, "time_ms": 28_500, "weight_g": 40.9})
         );
 
         // No Connected Scale: no weight.
@@ -392,7 +393,7 @@ mod tests {
         assert_eq!(snap.detail_key, Some("la_marzocco.last_coffee_no_weight"));
         assert_eq!(
             serde_json::Value::Object(snap.detail_vars),
-            json!({"ago_ms": 90_000, "time_s": 28.5})
+            json!({"age_ms": 90_000, "time_ms": 28_500})
         );
 
         let snap = shown(idle_line(None, now));

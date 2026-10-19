@@ -192,7 +192,7 @@ There is no knob press: the Grind-by-Sync grind itself tells gbs-anywhere a
 shot is coming. Pull the shot and enter its time and weight in the app
 (`http://<computer's IP>/`), or let an [integration](#integrations) report
 it. The grinder waits for it up to the shot window (3 minutes unless changed
-in the app's settings or with `--brew-timeout-s`); if you grind again first,
+in the app's settings or with `--shot-window-s`); if you grind again first,
 the shot counts for the newer grind.
 
 The grinder adjusts only from a shot over 10 s and within 15 s of the
@@ -250,7 +250,7 @@ Three settings can be changed under **Status → Settings**, so the command
 line can stay as it is:
 
 - **Time to pull the shot**: how long gbs-anywhere waits for a shot's time
-  and weight before it gives up on that shot (`--brew-timeout-s`, 3 minutes
+  and weight before it gives up on that shot (`--shot-window-s`, 3 minutes
   unless set). In the app it goes from 0:30 to 60:00 minutes, or **No
   limit**. − and + change it in 15 s steps (whole minutes above 10:00). To
   type it, a whole number is minutes up to 60 and seconds above (`3` is
@@ -299,7 +299,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 
 | flag | default | what |
 |---|---|---|
-| `--brew-timeout-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever); **Time to pull the shot** set in the app wins |
+| `--shot-window-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever); **Time to pull the shot** set in the app wins; `--brew-timeout-s`, its name until 0.2.1, still works |
 | `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings, integrations moved from the command line); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
 | `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
@@ -324,6 +324,11 @@ Scripts and other front ends can use the app's JSON API on the same port,
 e.g. `POST /api/shot/result` with `{"time_s":30,"weight_g":36}`, or follow
 `GET /api/events/stream`. All routes are listed in
 [`src/server/control_api.rs`](src/server/control_api.rs).
+`GET /api/state` comes in groups (`shot`, `grinder`, `machine`,
+`integrations`, `settings`, `update`, `server`), and an error replies
+`{"error":"<sentence>","code":"<code>"}`, with a fixed `code` to match on.
+Coming from 0.2.1, whose names were different, the
+[changelog](CHANGELOG.md) lists what was renamed.
 
 The API has no login: anyone on your network who can open the app can add,
 change or remove integrations, change the settings, including the grinder
