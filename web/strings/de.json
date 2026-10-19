@@ -198,7 +198,7 @@
   "grinder.fact.never": "nie",
   "grinder.fact.group": "Brühgruppe 1",
   "grinder.group.idle": "Leerlauf",
-  "grinder.group.brewing": "Bezug läuft",
+  "grinder.group.running": "Bezug läuft",
   "grinder.group.finishing": "Wird abgeschlossen",
 
   "integ.title": "Integrationen",
@@ -210,7 +210,7 @@
   "integ.health.starting": "Verbindet",
   "integ.health.connected": "Bereit",
   "integ.health.watching": "Aktiv",
-  "integ.health.error": "Fehler",
+  "integ.health.failing": "Fehler",
   "integ.health.stopped": "Gestoppt",
   "integ.stopped": "Gestoppt",
   "integ.errorFallback": "Fehler",
