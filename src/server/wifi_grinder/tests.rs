@@ -13,7 +13,8 @@ use tokio::net::TcpListener;
 
 use super::*;
 use crate::protocol::{GrinderRange, MachineConfig, MachineError, Phase, ShotResult};
-use crate::server::wait_for;
+use crate::server::settings::HostChange;
+use crate::server::{SettingsChange, Startup, wait_for};
 
 /// The pairing ID the fake hands out.
 const PAIRING_ID: u32 = 42;
@@ -225,6 +226,24 @@ async fn start_polling(
     pairing_id: Option<u32>,
     poll: Duration,
 ) -> (Arc<Server>, Shared) {
+    let (base, fake) = fake_grinder(fake).await;
+    let server = Server::new(MachineConfig {
+        finishing_hold: Duration::from_millis(100),
+        ..machine
+    });
+    let mut cfg = WifiConfig::from_host(&base).unwrap();
+    cfg.poll = poll;
+    cfg.restart_quiet = RESTART_QUIET_IN_TESTS;
+    cfg.refused_for = REFUSED_FOR_IN_TESTS;
+    cfg.pairing_file = pairing_file;
+    cfg.pairing_id = pairing_id;
+    let link = WifiGrinder::new(cfg, server.pairing_lock.clone()).unwrap();
+    run(&server, link);
+    (server, fake)
+}
+
+/// A fake grinder on a free port, and its base URL.
+async fn fake_grinder(fake: Fake) -> (String, Shared) {
     let fake = Arc::new(Mutex::new(fake));
     let app = axum::Router::new()
         .fallback(axum::routing::post(handle))
@@ -232,20 +251,14 @@ async fn start_polling(
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}"), fake)
+}
 
-    let server = Server::new(MachineConfig {
-        finishing_hold: Duration::from_millis(100),
-        ..machine
-    });
-    let mut cfg = WifiConfig::from_host(&format!("http://{addr}")).unwrap();
-    cfg.poll = poll;
-    cfg.restart_quiet = RESTART_QUIET_IN_TESTS;
-    cfg.refused_for = REFUSED_FOR_IN_TESTS;
-    cfg.pairing_file = pairing_file;
-    cfg.pairing_id = pairing_id;
-    let link = WifiGrinder::new(cfg).unwrap();
-    tokio::spawn(link.run(server.clone()));
-    (server, fake)
+/// Runs `link` as the server's E65/E80 link, as the settings do.
+fn run(server: &Arc<Server>, link: WifiGrinder) {
+    let (owner, ids) = server.attach_wifi();
+    server.set_wifi(owner, link.connecting());
+    tokio::spawn(link.run(server.clone(), owner, ids));
 }
 
 fn wifi(server: &Server) -> WifiLink {
@@ -291,8 +304,11 @@ fn temp_file(name: &str) -> PathBuf {
 }
 
 fn saved_id(file: &Path) -> Value {
-    let saved: Value = serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap();
-    saved["pairing_id"].clone()
+    saved(file)["pairing_id"].clone()
+}
+
+fn saved(file: &Path) -> Value {
+    serde_json::from_slice(&std::fs::read(file).unwrap()).unwrap()
 }
 
 #[test]
@@ -573,7 +589,7 @@ async fn the_app_sees_a_grinder_that_does_not_answer_until_it_does() {
     let server = Server::new(MachineConfig::default());
     let mut cfg = WifiConfig::from_host(&format!("http://{addr}")).unwrap();
     cfg.poll = Duration::from_millis(20);
-    tokio::spawn(WifiGrinder::new(cfg).unwrap().run(server.clone()));
+    run(&server, WifiGrinder::new(cfg, Arc::default()).unwrap());
     wait_for("the error", || {
         server
             .grinder_link()
@@ -1082,4 +1098,138 @@ async fn a_result_after_a_lost_accept_reply_is_retried() {
         fake.lock().unwrap().ongoing.is_empty(),
         "the grinder got it"
     );
+}
+
+#[tokio::test]
+async fn a_new_link_waits_for_the_one_it_replaces_before_it_touches_the_pairing() {
+    let file = temp_file("handover");
+    let unpaired = json!({ "brew_device_id": "dev-1", "pairing_id": null });
+    std::fs::write(&file, unpaired.to_string()).unwrap();
+    let fake = Fake {
+        paired: Some(PAIRING_ID),
+        ..Fake::default()
+    };
+    let (base, fake) = fake_grinder(fake).await;
+    let server = Server::new(MachineConfig::default());
+    // Stands in for a replaced link whose task has not ended yet: aborting
+    // it only takes effect at its next await.
+    let old = server.pairing_lock.clone().lock_owned().await;
+    let mut cfg = WifiConfig::from_host(&base).unwrap();
+    cfg.poll = Duration::from_millis(20);
+    cfg.pairing_file = Some(file.clone());
+    run(
+        &server,
+        WifiGrinder::new(cfg, server.pairing_lock.clone()).unwrap(),
+    );
+
+    // The old link's last step: the pairing went through, and it saves it.
+    let accepted = json!({ "brew_device_id": "dev-1", "pairing_id": PAIRING_ID });
+    std::fs::write(&file, accepted.to_string()).unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(fake.lock().unwrap().requests.is_empty(), "it waits");
+    assert_eq!(saved(&file), accepted, "not written over");
+    assert_eq!(wifi(&server).state, WifiState::Connecting);
+
+    drop(old);
+    wait_for("paired", || paired(&server)).await;
+    assert_eq!(
+        fake.lock().unwrap().applications(),
+        0,
+        "it went on with what the old link saved"
+    );
+    assert_eq!(wifi(&server).pairing_id, Some(PAIRING_ID));
+    assert_eq!(saved(&file), accepted);
+    let _ = std::fs::remove_file(file);
+}
+
+/// Changes only the grinder's address.
+fn to(host: HostChange) -> SettingsChange {
+    SettingsChange {
+        grinder_host: Some(host),
+        ..SettingsChange::default()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changing_the_address_while_pairing_hands_over_at_once() {
+    let file = temp_file("relink-pairing");
+    // A person who never accepts: the link keeps waiting.
+    let fake = Fake {
+        slow_accept: u32::MAX / 2,
+        ..Fake::default()
+    };
+    let (base, fake) = fake_grinder(fake).await;
+    let server = Server::new(MachineConfig::default());
+    let startup = Startup {
+        grinder_host: Some(base),
+        pairing_file: Some(file.clone()),
+        ..Startup::default()
+    };
+    server.start_settings(startup, None).unwrap();
+    wait_for("pairing", || wifi(&server).state == WifiState::Pairing).await;
+    let device = saved(&file)["brew_device_id"].clone();
+
+    server
+        .change_settings(to(HostChange::Set("127.0.0.1:9".into())))
+        .unwrap();
+    // Right away, before the new link's task ran: the app sees the new
+    // address, and a pairing ID typed now goes to the new link rather than
+    // to none.
+    let w = wifi(&server);
+    assert_eq!(w.grinder, "https://127.0.0.1:9");
+    assert!(!w.needs_pairing_id);
+    assert_eq!(
+        server.use_grinder_pairing_id(PAIRING_ID),
+        Err(PairingIdRefusal::NotNeeded),
+        "the new link is attached"
+    );
+    wait_for("the new link's own report", || {
+        wifi(&server).state == WifiState::Failing
+    })
+    .await;
+    let sent = fake.lock().unwrap().requests.len();
+
+    // Back to the fake: still the same gbs-anywhere to it, asking anew.
+    server.change_settings(to(HostChange::Reset)).unwrap();
+    wait_for("pairing again", || {
+        wifi(&server).state == WifiState::Pairing
+    })
+    .await;
+    assert!(fake.lock().unwrap().requests.len() > sent);
+    assert_eq!(saved(&file)["brew_device_id"], device, "the pairing stayed");
+    assert_eq!(saved_id(&file), Value::Null);
+    let _ = std::fs::remove_file(file);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changing_the_address_keeps_the_saved_pairing() {
+    let file = temp_file("relink-paired");
+    let paired_file = json!({ "brew_device_id": "dev-1", "pairing_id": PAIRING_ID });
+    std::fs::write(&file, paired_file.to_string()).unwrap();
+    let fake = Fake {
+        paired: Some(PAIRING_ID),
+        ..Fake::default()
+    };
+    let (base, fake) = fake_grinder(fake).await;
+    let server = Server::new(MachineConfig::default());
+    let startup = Startup {
+        grinder_host: Some(base),
+        pairing_file: Some(file.clone()),
+        ..Startup::default()
+    };
+    server.start_settings(startup, None).unwrap();
+    wait_for("paired", || paired(&server)).await;
+
+    // Back and forth, faster than the links get going.
+    for _ in 0..5 {
+        server
+            .change_settings(to(HostChange::Set("127.0.0.1:9".into())))
+            .unwrap();
+        assert_eq!(wifi(&server).pairing_id, Some(PAIRING_ID));
+        server.change_settings(to(HostChange::Reset)).unwrap();
+    }
+    wait_for("paired again", || paired(&server)).await;
+    assert_eq!(fake.lock().unwrap().applications(), 0, "no new pairing");
+    assert_eq!(saved(&file), paired_file);
+    let _ = std::fs::remove_file(file);
 }

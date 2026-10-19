@@ -223,6 +223,9 @@ reads `shot.last.weight_g`. One that only reacts to `shot_reported` and
 
 ### Fixed
 
+- gbs-anywhere stops at once on `docker stop` (SIGTERM) or Ctrl-C: it
+  closes the app's live connections and lets open requests finish for up
+  to 5 s, where Docker used to wait 10 s and then kill it.
 - Requests on port 80 outside the grinder's `/api/v2/` paths, such as other
   devices on the network probing the port, no longer count as grinder
   traffic and are logged at debug level only, so they no longer fill the

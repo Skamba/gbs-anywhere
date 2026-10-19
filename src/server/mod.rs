@@ -63,6 +63,8 @@ pub struct Server {
     icons_dir: OnceLock<PathBuf>,
     /// The shot window and grinder address, and the E65/E80 link.
     settings: Mutex<settings::Live>,
+    /// Held by the E65/E80 link that may write the pairing file.
+    pairing_lock: wifi_grinder::PairingLock,
     history: History,
     update: Mutex<update_check::UpdateState>,
     /// Wakes the update check when it is turned on or off.
@@ -70,6 +72,8 @@ pub struct Server {
     log: Arc<LogBook>,
     /// New on every start: event and log numbers start over with it.
     boot_id: String,
+    /// Set once the server stops: the live streams end.
+    stopping: tokio::sync::watch::Sender<bool>,
 }
 
 struct Inner {
@@ -124,11 +128,13 @@ impl Server {
             integrations: Integrations::new(),
             icons_dir: OnceLock::new(),
             settings: Mutex::default(),
+            pairing_lock: wifi_grinder::PairingLock::default(),
             history: History::default(),
             update: Mutex::default(),
             update_wake: tokio::sync::Notify::new(),
             log: LogBook::global(),
             boot_id: uuid::Uuid::new_v4().simple().to_string(),
+            stopping: tokio::sync::watch::channel(false).0,
         })
     }
 
@@ -210,12 +216,15 @@ impl Server {
     }
 
     /// A new E65/E80 link starts: it takes the pairing IDs typed in the app
-    /// from now on. Returns its owner number for [`Server::set_wifi`].
-    fn attach_wifi(&self, ids: mpsc::Sender<u32>) -> u64 {
+    /// from now on. Returns its owner number for [`Server::set_wifi`] and
+    /// where those IDs arrive.
+    fn attach_wifi(&self) -> (u64, mpsc::Receiver<u32>) {
+        // Room for one: only the latest typed ID matters.
+        let (tx, rx) = mpsc::channel(1);
         let mut inner = self.lock();
         inner.wifi_owner += 1;
-        inner.wifi_ids = Some(ids);
-        inner.wifi_owner
+        inner.wifi_ids = Some(tx);
+        (inner.wifi_owner, rx)
     }
 
     /// The E65/E80 link stopped: forget what it said. What an E64 WS told
@@ -227,11 +236,6 @@ impl Server {
         inner.wifi_ids = None;
         inner.grinder.wifi = None;
         inner.grinder.last_poll = None;
-    }
-
-    /// Shows a link that is about to start, until it reports for itself.
-    fn show_wifi(&self, link: WifiLink) {
-        self.lock().grinder.wifi = Some(link);
     }
 
     /// The link's state, unless that link was replaced meanwhile.
@@ -273,6 +277,20 @@ impl Server {
     async fn write_transcript(&self, line: &str) {
         if let Some(t) = &self.transcript {
             let _ = t.lock().await.write_all(line.as_bytes()).await;
+        }
+    }
+
+    /// Ends the live streams (`/api/events/stream`, `/api/log/stream`), so
+    /// that their connections close and the server can stop.
+    pub fn stop(&self) {
+        self.stopping.send_replace(true);
+    }
+
+    /// Done once [`Server::stop`] was called.
+    fn stopped(&self) -> impl Future<Output = ()> + Send + use<> {
+        let mut rx = self.stopping.subscribe();
+        async move {
+            let _ = rx.wait_for(|stopping| *stopping).await;
         }
     }
 
@@ -333,9 +351,48 @@ pub struct ServeConfig {
     pub accept_browser_headers: bool,
 }
 
-/// Binds all listeners and serves until one fails fatally or all stop. Ports
-/// that cannot be bound are logged and skipped; it fails if none bind.
-pub async fn serve(state: Arc<Server>, cfg: ServeConfig) -> anyhow::Result<()> {
+/// How long requests still open when the server stops get to finish.
+const STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// Done on Ctrl-C, or on unix on SIGTERM, which `docker stop` sends.
+pub async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            tracing::warn!("cannot wait for Ctrl-C: {e}");
+            std::future::pending::<()>().await;
+        }
+    };
+    #[cfg(unix)]
+    let term = async {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut term) => {
+                term.recv().await;
+            }
+            Err(e) => {
+                tracing::warn!("cannot wait for SIGTERM: {e}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {}
+        () = term => {}
+    }
+}
+
+/// Binds all listeners and serves until `shutdown` is done (say,
+/// [`shutdown_signal`]), or until they all fail. Ports that cannot be bound
+/// are logged and skipped; it fails if none bind. On `shutdown` it takes no
+/// new connections, ends the live streams ([`Server::stop`]) and gives the
+/// requests still open up to a few seconds to finish.
+pub async fn serve(
+    state: Arc<Server>,
+    cfg: ServeConfig,
+    shutdown: impl Future<Output = ()>,
+) -> anyhow::Result<()> {
     let mut tasks = Vec::new();
     let grinder_app = if cfg.app_on_grinder_ports {
         control_router(state.clone(), cfg.allowed_hosts.clone())
@@ -347,7 +404,7 @@ pub async fn serve(state: Arc<Server>, cfg: ServeConfig) -> anyhow::Result<()> {
         match TcpListener::bind(addr).await {
             Ok(l) => {
                 tracing::info!("grinder API on http://{addr}");
-                tasks.push(spawn_server(l, grinder_app.clone(), addr));
+                tasks.push(spawn_server(l, grinder_app.clone(), addr, &state));
             }
             Err(e) => tracing::warn!("cannot bind {addr}: {e} (in use or needs admin)"),
         }
@@ -362,21 +419,35 @@ pub async fn serve(state: Arc<Server>, cfg: ServeConfig) -> anyhow::Result<()> {
             l,
             control_router(state.clone(), cfg.allowed_hosts.clone()),
             addr,
+            &state,
         ));
     }
 
     // Time-based transitions (finishing -> ready, the shot window running out) publish their
     // events even when nobody polls.
     let ticker = state.clone();
-    tasks.push(tokio::spawn(async move {
+    let ticks = tokio::spawn(async move {
         let mut iv = tokio::time::interval(Duration::from_millis(250));
         loop {
             iv.tick().await;
             ticker.with(|m, now| m.tick(now));
         }
-    }));
+    });
 
-    futures_util::future::join_all(tasks).await;
+    let mut servers = std::pin::pin!(futures_util::future::join_all(tasks));
+    tokio::select! {
+        _ = &mut servers => {
+            ticks.abort();
+            anyhow::bail!("no server is running any more");
+        }
+        () = shutdown => {}
+    }
+    tracing::info!("stopping");
+    state.stop();
+    if tokio::time::timeout(STOP_GRACE, servers).await.is_err() {
+        tracing::info!("stopping without waiting longer for open requests");
+    }
+    ticks.abort();
     Ok(())
 }
 
@@ -384,12 +455,15 @@ fn spawn_server(
     listener: TcpListener,
     app: axum::Router,
     addr: SocketAddr,
+    state: &Server,
 ) -> tokio::task::JoinHandle<()> {
+    let stopped = state.stopped();
     tokio::spawn(async move {
         if let Err(e) = axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
+        .with_graceful_shutdown(stopped)
         .await
         {
             tracing::warn!("server on {addr} stopped: {e}");

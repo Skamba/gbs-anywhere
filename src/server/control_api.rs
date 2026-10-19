@@ -317,6 +317,8 @@ async fn stream_events(State(x): State<Arc<Server>>) -> impl IntoResponse {
             }
         }
     });
+    // Ends when the server stops, so it can close the connection.
+    let stream = futures_util::StreamExt::take_until(stream, x.stopped());
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
@@ -387,6 +389,8 @@ async fn stream_log(
             .data(serde_json::to_string(&line).unwrap_or_default());
         Some((Ok::<_, Infallible>(ev), s))
     });
+    // Ends when the server stops, so it can close the connection.
+    let stream = futures_util::StreamExt::take_until(stream, x.stopped());
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 

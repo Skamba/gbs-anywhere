@@ -248,7 +248,10 @@ async fn main() -> anyhow::Result<()> {
         println!("{HELP}");
         tokio::spawn(stdin_loop(x.clone()));
     }
-    server::serve(x, cfg).await
+    server::serve(x, cfg, server::shutdown_signal()).await?;
+    // Not a return: a read from stdin cannot be cancelled, and the runtime
+    // would wait for it (for Enter) before the process ends.
+    std::process::exit(0)
 }
 
 /// The address this host uses on the LAN (no packet is sent).

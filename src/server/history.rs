@@ -20,7 +20,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{AbortCause, GrindResult, MachineEvent, ShotResult};
 use crate::server::Server;
-use crate::server::settings::{make_private, write_private};
+use crate::server::settings::{make_private, save_private};
 
 /// Shots kept.
 pub const CAPACITY: usize = 200;
@@ -309,12 +309,7 @@ fn read_file(path: &Path) -> anyhow::Result<Result<VecDeque<Shot>, String>> {
 
 fn save(path: &Path, file: &HistoryFile) -> anyhow::Result<()> {
     let json = serde_json::to_vec_pretty(file)?;
-    // Write next to it and rename, so a crash never leaves half a file.
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    write_private(&tmp, &json).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))
+    save_private(path, &json)
 }
 
 /// What the last grind asked for.
