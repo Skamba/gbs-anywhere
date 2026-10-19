@@ -122,10 +122,10 @@ impl BrewJob {
         (mg.is_finite() && mg > 0.0).then(|| mg / 1000.0)
     }
 
-    /// The recipe's target time in milliseconds, if any.
+    /// The recipe's target time in milliseconds, if any (at least 1 ms).
     pub fn target_ms(&self) -> Option<u32> {
         let ms = self.duration_expected_ms?;
-        (ms.is_finite() && ms > 0.0).then(|| ms.min(f64::from(u32::MAX)) as u32)
+        (ms.is_finite() && ms >= 1.0).then(|| ms.min(f64::from(u32::MAX)) as u32)
     }
 }
 
@@ -280,6 +280,13 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(with_weight.target_grams(), Some(40.0), "floats are fine");
+        assert_eq!(with_weight.target_ms(), None, "no target time");
+        for none in [0.0, 0.5, -1.0] {
+            let job: BrewJob =
+                serde_json::from_value(json!({ "grindUuid": "g-1", "durationExpectedMs": none }))
+                    .unwrap();
+            assert_eq!(job.target_ms(), None, "{none}");
+        }
 
         let done = BrewDone::new(7, &job, BrewResult::Success, 27_600, 39.9, "e-1".into());
         assert_eq!(

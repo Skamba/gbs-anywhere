@@ -78,9 +78,10 @@ a minor release may change behaviour.
 - `grinder_range` in `GET /api/state`: the shot times the grinder adjusts
   from for its current or last request. For the E64 WS that is over 10 s
   and up to 80 s; for an E65/E80 GbS, within 15 s of the brew job's target
-  time (for a 28 s recipe: over 13 s, up to 43 s); `null` while it is not
-  known. And `in_grinder_range` on each shot in `GET /api/history` that
-  succeeded: whether the grinder adjusted from it, by that shot's window.
+  time and over 10 s (for a 28 s recipe: over 13 s, up to 43 s); `null`
+  while it is not known. And `in_grinder_range` on each shot in
+  `GET /api/history` that succeeded: whether the grinder adjusted from it,
+  by that shot's window.
   The History tab shows a shot the grinder ignored with a grey **Ignored**
   badge instead of a green **Success**, and the app's hint while you type
   the time follows the same window.
@@ -149,9 +150,8 @@ a minor release may change behaviour.
   space in it) at startup, instead of failing on every request.
 - A fractional `--brew-timeout-s` is rounded to whole seconds.
 - `in_grinder_range` on `shot_reported` events is now also false for a
-  shot of 10 s or less, which the E64 WS does not adjust from either. For
-  an E65/E80 GbS it follows the brew job's target time, and it is `null`
-  while that window is not known (see `grinder_range` above).
+  shot of 10 s or less, which the E64 WS does not adjust from either (for
+  an E65/E80 GbS, see `grinder_range` above).
 - The La Marzocco form calls its poll setting "Check interval (seconds)" and
   says what it does; the Half Decent Scale form asks for the scale's IP
   address.

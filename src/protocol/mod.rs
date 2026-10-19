@@ -43,11 +43,11 @@ pub const START_BREW_SCRIPT_ID: i64 = 9;
 /// `ACTIVE SERVING`, at most this many times.
 pub const START_BREW_MAX_SENDS: u32 = 3;
 
-/// The E64 WS does not adjust from a shot of 10 s or less
+/// The grinder does not adjust from a shot of 10 s or less
 /// (`REAL_EXTRACTION_TIME_MS <= 10000`) and leaves it to the person to grind
-/// finer. It still takes the result, so [`GrinderModel`] counts it as
-/// accepted. An E65/E80 GbS goes by the target time instead
-/// ([`MAX_OFF_TARGET_MS`]).
+/// finer. The E64 WS still takes the result, so [`GrinderModel`] counts it
+/// as accepted; the E65/E80 applies the 10 s minimum too, as the floor under
+/// its window around the target time ([`GrinderRange::around`]).
 pub const MIN_EXTRACTION_TIME_MS: u32 = 10_000;
 
 /// The E64 WS skips a shot with `REAL_EXTRACTION_TIME_MS > 80000` (see

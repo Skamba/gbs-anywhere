@@ -524,16 +524,10 @@ mod tests {
 
     /// A shot of `ms` and `grams`, checked against the E64 WS's window.
     fn reported(ms: u32, grams: f64) -> MachineEvent {
-        reported_in(Some(GrinderRange::E64), ms, grams)
-    }
-
-    /// A shot of `ms` and `grams`, checked against `range` as the machine
-    /// does.
-    fn reported_in(range: Option<GrinderRange>, ms: u32, grams: f64) -> MachineEvent {
         let result = ShotResult::new(Duration::from_millis(ms.into()), grams);
         MachineEvent::ShotReported {
             result,
-            in_grinder_range: range.map(|r| r.contains(result.time_ms)),
+            in_grinder_range: Some(GrinderRange::E64.contains(result.time_ms)),
         }
     }
 
@@ -610,17 +604,6 @@ mod tests {
             let shot = r.feed(&reported(ms, 36.0), at(100)).unwrap();
             assert_eq!(shot.kind, ShotKind::Succeeded, "{ms} ms");
             assert_eq!(shot.in_grinder_range, Some(adjusts), "{ms} ms");
-        }
-        // An E65/E80 shot by its brew job's window: 11 s is within 15 s of a
-        // 24 s target, and without a target the window is not known.
-        for (range, ms, adjusts) in [
-            (Some(GrinderRange::around(24_000)), 11_000, Some(true)),
-            (Some(GrinderRange::around(28_000)), 45_000, Some(false)),
-            (None, 28_000, None),
-        ] {
-            r.feed(&started(true), at(0));
-            let shot = r.feed(&reported_in(range, ms, 36.0), at(100)).unwrap();
-            assert_eq!(shot.in_grinder_range, adjusts, "{ms} ms in {range:?}");
         }
     }
 

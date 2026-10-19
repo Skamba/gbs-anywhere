@@ -932,7 +932,7 @@
       // No warning before the state (and with it the limits) is in.
       const range = grinderRange(), limit = (ms) => ({ limit: fmt.upToOne.format(ms / 1000) });
       if (range && typed * 1000 <= range.min_ms) { text = tv("start.form.tooShort", limit(range.min_ms)); isWarn = true; }
-      else if (range && typed * 1000 > range.max_ms) { text = tv("start.form.tooLong", limit(range.max_ms)); isWarn = true; }
+      else if (range && typed * 1000 > range.max_ms) { text = t("start.form.tooLong", limit(range.max_ms)); isWarn = true; }
     }
     h.textContent = text;
     h.className = "hint" + (isWarn ? " warn" : "");
@@ -1884,10 +1884,8 @@
     if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
     return parts.join(" · ");
   }
-  /** A success the grinder did not adjust from (too short or too long), as
-   *  the server recorded it by the shot's own window. Without that (a shot
-   *  saved before it was recorded, or an E65/E80 shot without a target
-   *  time) it shows as recorded: the current window may not be the shot's. */
+  /** A success the grinder did not adjust from, as the server recorded it.
+   *  Without a record the current window may not be the shot's: a success. */
   const ignoredShot = (s) => s.kind === "succeeded" && s.in_grinder_range === false;
 
   // Until it syncs, a computer's clock may still read the last shutdown

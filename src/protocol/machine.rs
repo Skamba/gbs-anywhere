@@ -72,9 +72,8 @@ pub struct ShotResult {
 }
 
 impl ShotResult {
-    /// Longest shot time a person can enter. Well past the times the grinder
-    /// adjusts from, so a slow shot still reaches it (and is skipped there);
-    /// more is a typo.
+    /// Longest shot time a person can enter. Well past the grinder's 80 s, so
+    /// a slow shot still reaches it (and is skipped there); more is a typo.
     pub const MAX_TIME: Duration = Duration::from_secs(600);
 
     /// A typed shot time in seconds, or `None` unless it is a number from 0
@@ -115,11 +114,13 @@ impl GrinderRange {
     };
 
     /// An E65/E80 GbS's, for a brew job that aims for `target_ms`: within
-    /// 15 s of it ([`MAX_OFF_TARGET_MS`]), with the same ends as the E64
-    /// WS's: over `min_ms`, up to `max_ms`.
+    /// 15 s of it ([`MAX_OFF_TARGET_MS`]), but never down to 10 s
+    /// ([`MIN_EXTRACTION_TIME_MS`]).
     pub fn around(target_ms: u32) -> Self {
         Self {
-            min_ms: target_ms.saturating_sub(MAX_OFF_TARGET_MS),
+            min_ms: target_ms
+                .saturating_sub(MAX_OFF_TARGET_MS)
+                .max(MIN_EXTRACTION_TIME_MS),
             max_ms: target_ms.saturating_add(MAX_OFF_TARGET_MS),
         }
     }
@@ -376,8 +377,8 @@ impl Machine {
 
     /// The shot times the grinder adjusts from, for its current or last
     /// request: the E64 WS's after a knob press, and within 15 s of the
-    /// target time after an E65/E80 brew job. `None` before the first
-    /// request, and after a brew job without a target time.
+    /// target time (over 10 s) after an E65/E80 brew job. `None` before the
+    /// first request, and after a brew job without a target time.
     pub fn grinder_range(&self) -> Option<GrinderRange> {
         self.range
     }
@@ -429,8 +430,6 @@ impl Machine {
         if !matches!(self.phase, Phase::Ready) {
             return false;
         }
-        // A target of 0 is none, for the event and the window alike.
-        let target_time_ms = target_time_ms.filter(|ms| *ms > 0);
         self.last_grind = Some(result.clone());
         self.range = target_time_ms.map(GrinderRange::around);
         self.push(
@@ -676,29 +675,26 @@ mod tests {
     }
 
     #[test]
-    fn an_e65_adjusts_from_shots_within_15_s_of_the_target() {
-        let range = GrinderRange::around(28_000);
-        assert_eq!(
-            range,
-            GrinderRange {
-                min_ms: 13_000,
-                max_ms: 43_000
-            }
-        );
-        for (ms, expected) in [
-            (13_000, false),
-            (13_001, true),
-            (28_000, true),
-            (43_000, true),
-            (43_001, false),
+    fn an_e65_adjusts_from_shots_within_15_s_of_the_target_over_10_s() {
+        let window = |target_ms| {
+            let r = GrinderRange::around(target_ms);
+            (r.min_ms, r.max_ms)
+        };
+        assert_eq!(window(28_000), (13_000, 43_000));
+        // Never down to 10 s, however short the target.
+        assert_eq!(window(20_000), (10_000, 35_000));
+        assert_eq!(window(12_000), (10_000, 27_000));
+        assert_eq!(window(5_000), (10_000, 20_000));
+        for (target_ms, ms, expected) in [
+            (28_000, 13_000, false),
+            (28_000, 43_000, true),
+            (24_000, 11_000, true),
+            (20_000, 10_000, false),
+            (20_000, 10_001, true),
         ] {
-            assert_eq!(range.contains(ms), expected, "{ms} ms");
+            let adjusts = GrinderRange::around(target_ms).contains(ms);
+            assert_eq!(adjusts, expected, "{ms} ms for {target_ms} ms");
         }
-        // Shorter than the E64 WS's minimum, but within 15 s of a 24 s target.
-        assert!(GrinderRange::around(24_000).contains(11_000));
-        // No wrap-around at either end.
-        assert_eq!(GrinderRange::around(9_000).min_ms, 0);
-        assert_eq!(GrinderRange::around(u32::MAX).max_ms, u32::MAX);
     }
 
     /// Reports a shot of `ms` and returns its `in_grinder_range`; `t` moves
@@ -732,11 +728,9 @@ mod tests {
         assert_eq!(reported(&mut m, &mut t, 11_000), Some(true));
 
         // Without a target time, the window is not known.
-        for none in [None, Some(0)] {
-            assert!(m.on_brew_job(t, job.clone(), none));
-            assert_eq!(m.grinder_range(), None, "{none:?}");
-            assert_eq!(reported(&mut m, &mut t, 50_000), None, "{none:?}");
-        }
+        assert!(m.on_brew_job(t, job.clone(), None));
+        assert_eq!(m.grinder_range(), None);
+        assert_eq!(reported(&mut m, &mut t, 50_000), None);
 
         m.on_start_request(t, Some(9));
         assert_eq!(m.grinder_range(), Some(GrinderRange::E64), "a knob press");
