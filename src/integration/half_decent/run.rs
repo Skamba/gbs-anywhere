@@ -512,7 +512,7 @@ mod tests {
 
         let shot = l.status.snapshot().last_report.unwrap();
         assert!((i64::from(shot.time_ms) - 18_000).abs() <= 400, "{shot:?}");
-        assert!((shot.volume_ml - 36.3).abs() <= 0.4, "{shot:?}");
+        assert!((shot.weight_g - 36.3).abs() <= 0.4, "{shot:?}");
         let snap = l.status.snapshot();
         assert_eq!(snap.health, Health::Connected);
         assert!(snap.detail.starts_with("last shot: "), "{}", snap.detail);
@@ -661,7 +661,7 @@ mod tests {
         let l = link();
         knob_press(&l);
         tokio::spawn(run(l.clone(), Config { host: host.clone() }));
-        wait_for("an error", || l.status.snapshot().health == Health::Error).await;
+        wait_for("an error", || l.status.snapshot().health == Health::Failing).await;
         let err = l.status.snapshot().last_error.unwrap();
         assert!(err.contains("closed the connection"), "{err}");
         // MIN_BACKOFF later it tries again.

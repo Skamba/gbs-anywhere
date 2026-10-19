@@ -266,7 +266,7 @@ fn brewing(server: &Server) -> bool {
     server.with(|m, now| {
         matches!(
             m.phase(now),
-            Phase::Brewing {
+            Phase::Running {
                 requested_by_grinder: true,
                 ..
             }
@@ -372,7 +372,7 @@ async fn pairs_takes_the_job_at_once_then_sends_the_shot() {
     fake.lock().unwrap().jobs.push(job("g-1", 40_000));
     wait_for("the brew", || brewing(&server)).await;
     let grind = server.with(|m, _| m.last_grind().cloned()).unwrap();
-    assert_eq!(grind.beverage_weight_g, Some(40.0), "the recipe weight");
+    assert_eq!(grind.target_weight_g, Some(40.0), "the recipe weight");
     wait_for("the job taken", || taken(&fake) == 1).await;
     assert!(
         fake.lock()
@@ -578,7 +578,7 @@ async fn the_app_sees_a_grinder_that_does_not_answer_until_it_does() {
         server
             .grinder_link()
             .wifi
-            .is_some_and(|w| w.state == WifiState::Error)
+            .is_some_and(|w| w.state == WifiState::Failing)
     })
     .await;
     assert!(wifi(&server).unreachable);
@@ -623,7 +623,7 @@ async fn an_aborted_shot_is_cancelled() {
 #[tokio::test]
 async fn no_shot_in_time_cancels_the_job() {
     let machine = MachineConfig {
-        brew_timeout: Some(Duration::from_millis(300)),
+        shot_window: Some(Duration::from_millis(300)),
         ..MachineConfig::default()
     };
     let (server, fake) = start_with(Fake::default(), machine, None, None).await;
@@ -663,7 +663,7 @@ async fn a_job_the_grinder_no_longer_has_ends_the_brew() {
     let late = ShotResult::from_grams(Duration::from_secs(30), 40.0);
     assert_eq!(
         server.with(|m, now| m.report_shot(now, late)),
-        Err(MachineError::NotBrewing),
+        Err(MachineError::NotRunning),
         "a late shot has nothing to answer"
     );
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -685,7 +685,7 @@ async fn the_newest_job_is_the_shot_being_pulled() {
         .extend([job("old", 36_000), job("new", 40_000)]);
     wait_for("the brew", || brewing(&server)).await;
     let grind = server.with(|m, _| m.last_grind().cloned()).unwrap();
-    assert_eq!(grind.beverage_weight_g, Some(40.0));
+    assert_eq!(grind.target_weight_g, Some(40.0));
 
     report(&server, 29.0, 40.0);
     wait_for("the answer", || {
@@ -711,7 +711,7 @@ async fn a_newer_grind_cancels_one_still_waiting() {
     fake.lock().unwrap().jobs.push(job("second", 40_000));
     wait_for("the second brew", || {
         brewing(&server)
-            && server.with(|m, _| m.last_grind().and_then(|g| g.beverage_weight_g)) == Some(40.0)
+            && server.with(|m, _| m.last_grind().and_then(|g| g.target_weight_g)) == Some(40.0)
     })
     .await;
     report(&server, 28.0, 40.0);
@@ -846,7 +846,7 @@ async fn a_pairing_request_still_open_after_the_quiet_time_is_kept() {
     let (server, fake) = start(fake, None, None).await;
     let link = || server.grinder_link().wifi;
     wait_for("the quiet time", || {
-        link().is_some_and(|w| w.state == WifiState::Error)
+        link().is_some_and(|w| w.state == WifiState::Failing)
     })
     .await;
     wait_for("the code again", || {

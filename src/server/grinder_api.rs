@@ -123,7 +123,7 @@ async fn handle(
         GrinderRequest::GrindResult(g) => {
             tracing::debug!(
                 "grinder grind result: beverage {:?} g, filter {:?}",
-                g.beverage_weight_g,
+                g.target_weight_g,
                 g.filter
             );
             x.with(|m, now| m.on_grind_result(now, g.clone()));

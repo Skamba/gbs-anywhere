@@ -98,11 +98,16 @@ impl Server {
         }
     }
 
+    /// Whether the check is on (`update_check` in the settings).
+    #[cfg(test)]
+    pub(super) fn update_check_on(&self) -> bool {
+        self.update_state().enabled
+    }
+
     /// `update` in `GET /api/state`.
     pub fn update_json(&self) -> Value {
         let s = self.update_state();
         json!({
-            "enabled": s.enabled,
             "current": crate::version(),
             "latest": s.latest,
             "available": s.latest.as_deref().is_some_and(is_newer),
@@ -368,7 +373,7 @@ mod tests {
         let url = fake(reply.clone(), agents.clone()).await;
         let server = Server::new(MachineConfig::default());
         let state = server.update_json();
-        assert_eq!(state["enabled"], false);
+        assert!(!server.update_check_on());
         assert_eq!(state["latest"], Value::Null);
 
         server.set_update_check(true);
@@ -384,7 +389,7 @@ mod tests {
         })
         .await;
         let state = server.update_json();
-        assert_eq!(state["enabled"], true);
+        assert!(server.update_check_on());
         assert_eq!(state["available"], true);
         assert_eq!(state["current"], crate::version());
         assert_eq!(state["url"], RELEASES_PAGE);
@@ -446,7 +451,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert_eq!(agents.lock().unwrap().len(), asked);
         let state = server.update_json();
-        assert_eq!(state["enabled"], false);
+        assert!(!server.update_check_on());
         assert_eq!(state["latest"], Value::Null, "an old result is not kept");
     }
 
@@ -476,7 +481,7 @@ mod tests {
         server.set_update_check(false);
         tokio::time::sleep(Duration::from_millis(400)).await;
         let state = server.update_json();
-        assert_eq!(state["enabled"], false);
+        assert!(!server.update_check_on());
         assert_eq!(state["latest"], Value::Null, "the late answer is dropped");
     }
 

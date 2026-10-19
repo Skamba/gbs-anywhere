@@ -26,13 +26,13 @@ use crate::protocol::AbortCause;
 use crate::server::wifi_grinder::grinder_address;
 use crate::server::{Server, WifiConfig, WifiGrinder};
 
-/// The machine's brew timeout unless set (`--brew-timeout-s`).
+/// The shot window unless set (`--shot-window-s`).
 pub const DEFAULT_SHOT_WINDOW_S: u32 = 180;
 
 /// The shortest shot window the app can set; 0 (no limit) is allowed too.
 pub const MIN_SHOT_WINDOW_S: u32 = 30;
 
-/// The longest shot window, an hour, as for `--brew-timeout-s`.
+/// The longest shot window, an hour, as for `--shot-window-s`.
 pub const MAX_SHOT_WINDOW_S: u32 = 3600;
 
 // ---------------------------------------------------------------------------
@@ -251,7 +251,7 @@ fn present<'de, D: Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Optio
 /// What the flags and environment variables say.
 #[derive(Debug, Clone, Default)]
 pub struct Startup {
-    /// `--brew-timeout-s`, when given.
+    /// `--shot-window-s`, when given.
     pub shot_window_s: Option<f64>,
     /// `--grinder` (`GRINDER_HOST`), when given.
     pub grinder_host: Option<String>,
@@ -311,7 +311,7 @@ impl SettingsChange {
         for (key, value) in obj {
             match key.as_str() {
                 "shot_window_s" => {
-                    // `null`: back to `--brew-timeout-s`, else the default.
+                    // `null`: back to `--shot-window-s`, else the default.
                     let secs = match value {
                         Value::Null => None,
                         v => Some(
@@ -385,6 +385,16 @@ impl std::fmt::Display for SettingsError {
 
 impl std::error::Error for SettingsError {}
 
+impl SettingsError {
+    /// As a fixed code, for `code` in the API's errors.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Save(_) => "settings_not_saved",
+            Self::Grinder(_) => "grinder_link_failed",
+        }
+    }
+}
+
 /// The settings as they are now, and the E65/E80 link they started.
 #[derive(Default)]
 pub(super) struct Live {
@@ -430,7 +440,7 @@ fn shot_window(startup: &Startup, app: &AppSettings) -> (u32, SettingSource) {
     }
 }
 
-/// `--brew-timeout-s` in whole seconds, as the app shows it; a limit stays
+/// `--shot-window-s` in whole seconds, as the app shows it; a limit stays
 /// a limit (0.4 s is 1 s, not "forever").
 fn whole_seconds(secs: f64) -> u32 {
     if secs > 0.0 {
@@ -460,8 +470,8 @@ fn update_check(startup: &Startup, app: &AppSettings) -> (bool, SettingSource) {
     }
 }
 
-/// The machine's brew timeout for a shot window.
-fn brew_timeout(secs: u32) -> Option<Duration> {
+/// The machine's limit for a shot window of `secs` (0: none).
+fn window_limit(secs: u32) -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs.into()))
 }
 
@@ -533,10 +543,10 @@ impl Server {
         if from == SettingSource::App && live.startup.shot_window_s.is_some() {
             tracing::info!(
                 "settings: the shot window set in the app ({window} s) is used instead of \
-                 --brew-timeout-s"
+                 --shot-window-s"
             );
         }
-        self.with(|m, _| m.set_brew_timeout(brew_timeout(window)));
+        self.with(|m, _| m.set_shot_window(window_limit(window)));
         let (update, from) = update_check(&live.startup, &live.app);
         if from == SettingSource::App && live.startup.update_check.is_some() {
             tracing::info!(
@@ -642,7 +652,7 @@ impl Server {
             );
         }
         if window.0 != old_window.0 {
-            self.with(|m, _| m.set_brew_timeout(brew_timeout(window.0)));
+            self.with(|m, _| m.set_shot_window(window_limit(window.0)));
         }
         // (With no address left, the link's line below says it.)
         if old_host_from == SettingSource::App
@@ -811,7 +821,7 @@ mod tests {
         };
         let (secs, from) = shot_window(&startup, &AppSettings::default());
         assert_eq!((secs, from), (151, SettingSource::CommandLine));
-        assert_eq!(brew_timeout(secs), Some(Duration::from_secs(151)));
+        assert_eq!(window_limit(secs), Some(Duration::from_secs(151)));
     }
 
     #[test]
@@ -992,7 +1002,7 @@ mod tests {
         assert_eq!(s["shot_window_s"], 90);
         assert_eq!(s["source"]["shot_window_s"], "app");
         assert_eq!(s["start"]["shot_window_s"], 150, "the flag");
-        let limit = x.with(|m, _| m.config().brew_timeout);
+        let limit = x.with(|m, _| m.config().shot_window);
         assert_eq!(limit, Some(Duration::from_secs(90)));
 
         // Next start, same flags: the app's value is used.
@@ -1001,7 +1011,7 @@ mod tests {
             .unwrap();
         assert_eq!(y.settings_json()["shot_window_s"], 90);
         assert_eq!(
-            y.with(|m, _| m.config().brew_timeout),
+            y.with(|m, _| m.config().shot_window),
             Some(Duration::from_secs(90))
         );
 
@@ -1011,7 +1021,7 @@ mod tests {
             ..SettingsChange::default()
         })
         .unwrap();
-        assert_eq!(y.with(|m, _| m.config().brew_timeout), None);
+        assert_eq!(y.with(|m, _| m.config().shot_window), None);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1044,10 +1054,10 @@ mod tests {
         assert_eq!(s["update_check"], false);
         assert_eq!(s["source"]["update_check"], "command_line");
         assert_eq!(
-            x.with(|m, _| m.config().brew_timeout),
+            x.with(|m, _| m.config().shot_window),
             Some(Duration::from_secs(150))
         );
-        assert_eq!(x.update_json()["enabled"], false);
+        assert!(!x.update_check_on());
         let text: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert!(text.get("settings").is_none(), "forgotten: {text}");
 
@@ -1146,7 +1156,7 @@ mod tests {
         let s = x.settings_json();
         assert_eq!(s["update_check"], true);
         assert_eq!(s["source"]["update_check"], "default");
-        assert_eq!(x.update_json()["enabled"], true);
+        assert!(x.update_check_on());
 
         // Off by the flag, then on again in the app.
         let x = Server::new(MachineConfig::default());
@@ -1155,14 +1165,14 @@ mod tests {
             ..Startup::default()
         };
         x.start_settings(off, None).unwrap();
-        assert_eq!(x.update_json()["enabled"], false);
+        assert!(!x.update_check_on());
         assert_eq!(x.settings_json()["source"]["update_check"], "command_line");
         let s = x
             .change_settings(change(json!({ "update_check": true })).unwrap())
             .unwrap();
         assert_eq!(s["update_check"], true);
         assert_eq!(s["source"]["update_check"], "app");
-        assert_eq!(x.update_json()["enabled"], true);
+        assert!(x.update_check_on());
         assert!(change(json!({ "update_check": "off" })).is_err());
     }
 

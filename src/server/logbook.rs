@@ -25,7 +25,7 @@ pub struct LogLine {
     /// Counts up from 1 for every line since the start.
     pub seq: u64,
     /// UTC, RFC 3339 with milliseconds.
-    pub ts: String,
+    pub at: String,
     /// `error`, `warn` or `info`, lower case like the API's other codes.
     pub level: &'static str,
     /// The message as printed, without colour codes.
@@ -72,7 +72,7 @@ impl LogBook {
         lines.seq += 1;
         let line = LogLine {
             seq: lines.seq,
-            ts: super::utc::with_millis(SystemTime::now()),
+            at: super::utc::with_millis(SystemTime::now()),
             level: level_name(level),
             text: shorten(strip_ansi(text)),
         };
@@ -250,9 +250,9 @@ mod tests {
         assert_eq!(book.after(4).0.len(), 1);
         assert!(book.after(5).0.is_empty());
         assert!(
-            lines[0].ts.ends_with('Z') && lines[0].ts.len() == 24,
+            lines[0].at.ends_with('Z') && lines[0].at.len() == 24,
             "{}",
-            lines[0].ts
+            lines[0].at
         );
     }
 

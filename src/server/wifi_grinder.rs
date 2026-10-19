@@ -9,7 +9,7 @@
 //! taken job back out about every 50 s while no result follows. So a job is
 //! taken as soon as it shows up, and again whenever it is listed again: that
 //! keeps it open for as long as the machine waits for the shot
-//! (`--brew-timeout-s`), after which it is answered as cancelled. Until the
+//! (`--shot-window-s`), after which it is answered as cancelled. Until the
 //! grinder has the result, it is retried on every poll, so a short network
 //! outage loses no shot.
 //!
@@ -230,7 +230,7 @@ pub enum WifiState {
     Pairing,
     Paired,
     /// A request failed; retrying.
-    Error,
+    Failing,
 }
 
 /// Why a pairing ID from the app was not taken.
@@ -254,6 +254,17 @@ impl std::fmt::Display for PairingIdRefusal {
             Self::NotNeeded => "gbs-anywhere is paired with the grinder and needs no pairing ID",
             Self::Busy => "another pairing ID is being checked, try again in a moment",
         })
+    }
+}
+
+impl PairingIdRefusal {
+    /// As a fixed code, for `code` in the API's errors.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NoLink => "grinder_not_set_up",
+            Self::NotNeeded => "grinder_already_paired",
+            Self::Busy => "grinder_pairing_busy",
+        }
     }
 }
 
@@ -467,7 +478,7 @@ impl WifiGrinder {
                     tracing::warn!("grinder: {e:#}");
                 }
                 self.unreachable = unreachable;
-                self.status(&server, WifiState::Error, None, format!("{e:#}"));
+                self.status(&server, WifiState::Failing, None, format!("{e:#}"));
                 backoff.wait().await;
             } else {
                 backoff.reset();
@@ -562,7 +573,7 @@ impl WifiGrinder {
             tracing::debug!("grinder: {detail}: {}", failure(outcome));
         }
         self.unreachable = true;
-        self.status(server, WifiState::Error, None, detail);
+        self.status(server, WifiState::Failing, None, detail);
         tokio::time::sleep(self.cfg.restart_quiet).await;
     }
 
@@ -678,7 +689,7 @@ impl WifiGrinder {
                             return self.forget_pairing(server);
                         }
                         let detail = "the grinder refused the pairing, checking again";
-                        self.status(server, WifiState::Error, None, detail);
+                        self.status(server, WifiState::Failing, None, detail);
                         continue;
                     }
                     reply.ok().context("asking for brew jobs")?;
@@ -890,7 +901,7 @@ impl WifiGrinder {
     fn on_event(&mut self, pairing_id: u32, event: &MachineEvent) -> bool {
         let (result, time_ms, grams, reason) = match event {
             MachineEvent::ShotReported { result, .. } => {
-                (BrewResult::Success, result.time_ms, result.volume_ml, "")
+                (BrewResult::Success, result.time_ms, result.weight_g, "")
             }
             MachineEvent::ShotAborted { reason, .. } => (BrewResult::Canceled, 0, 0.0, *reason),
             _ => return false,
@@ -1054,7 +1065,7 @@ impl WifiGrinder {
             self.owner,
             WifiLink {
                 grinder: self.cfg.base_url.clone(),
-                state: WifiState::Error,
+                state: WifiState::Failing,
                 pairing_code: None,
                 needs_pairing_id: true,
                 unknown_pairing_id: unknown,
@@ -1101,7 +1112,7 @@ fn unreachable(e: &anyhow::Error) -> bool {
 /// The job as the grind result the app and the shot rules read (recipe weight).
 fn grind_result(job: &BrewJob) -> GrindResult {
     GrindResult {
-        beverage_weight_g: job.target_grams(),
+        target_weight_g: job.target_grams(),
         filter: None,
         raw: serde_json::to_value(job).unwrap_or_default(),
     }

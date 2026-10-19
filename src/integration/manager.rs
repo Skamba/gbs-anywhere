@@ -81,6 +81,20 @@ impl std::fmt::Display for ChangeError {
 
 impl std::error::Error for ChangeError {}
 
+impl ChangeError {
+    /// As a fixed code, for `code` in the API's errors.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Invalid(_) => "integration_settings_invalid",
+            Self::NotFound => "integration_not_found",
+            Self::CommandLine => "integration_on_command_line",
+            Self::InApp => "integration_in_app",
+            Self::NotPersistent => "settings_file_missing",
+            Self::Save(_) => "settings_not_saved",
+        }
+    }
+}
+
 struct Entry {
     status: Status,
     source: Source,
@@ -580,7 +594,7 @@ mod tests {
         );
         assert_eq!(ids(&y), ["scale", "scale-3", "gone"]);
         let gone = &y.integrations().list()[2];
-        assert_eq!(gone.status.health, Health::Error);
+        assert_eq!(gone.status.health, Health::Failing);
         assert!(std::fs::read_to_string(&path).unwrap().contains("gone"));
         y.integrations().remove("gone").unwrap();
         assert!(!std::fs::read_to_string(&path).unwrap().contains("gone"));
