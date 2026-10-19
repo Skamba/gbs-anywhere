@@ -33,9 +33,17 @@ Each integration is one folder under `src/integration/`; `la_marzocco/` is a
 complete example, and the rules are in the
 [`integration` module docs](src/integration/mod.rs). Test against a local fake
 of the vendor's service, not the real one. Its texts are English in the code,
-with their German in the app's catalog (see AGENTS.md); `cargo test` checks
-that none is missing. If German is not your language, say so in the pull
-request and ask for help.
+with their German in `web/strings/de.json` (see AGENTS.md); `cargo test`
+checks that none is missing. If German is not your language, say so in the
+pull request and ask for help.
+
+## Translating the app
+
+The app's texts are in `web/strings/`, one JSON file per language with the
+keys of `en.json` (`de.json` also has the integrations' German). To change a
+wording, change it there; to add a language, see "Web app" in AGENTS.md.
+`cargo test` checks that every language has every text, with the same
+`{placeholders}`.
 
 ## License
 
