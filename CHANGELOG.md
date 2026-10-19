@@ -11,8 +11,9 @@ a minor release may change behaviour.
 - Web pages can no longer use gbs-anywhere through a browser in the home
   network. The app answers only to its IP address and home-network host
   names (`--allow-host` / `ALLOW_HOST` adds more, each by its full name;
-  `*` alone allows any) and refuses changes requested from other sites. The
-  grinder's routes refuse what a browser sends with its headers, which
+  `*` alone allows any) and refuses changes requested from other sites,
+  with an error like its others (`request_host_refused`,
+  `request_from_other_site`). The grinder's routes refuse what a browser sends with its headers, which
   every change from a page does, and no longer let other sites read their
   replies. A page that re-points its own name to gbs-anywhere's address can
   still read the machine state the grinder polls, which holds nothing
@@ -114,7 +115,7 @@ a minor release may change behaviour.
   apps to match on, next to the English `reason`. Shots saved by earlier
   builds get theirs from `reason`.
 - `detail_key` and `detail_vars` on each integration in `GET /api/state`:
-  its status line as a key and values (such as `time_s`, `weight_g`), next
+  its status line as a key and values (such as `time_ms`, `weight_g`), next
   to the English `detail`. The app uses them, and its own catalog for the
   integrations' setup forms, to show both in German.
 - A redesigned app with three tabs: Start (the three steps of a shot, with
@@ -146,20 +147,23 @@ word, and units are in the name (`_ms`, `_s`, `_g`). Scripts and
 automations written for 0.2.1 need the changes below; the app, the grinder
 and shots typed in on the phone are not affected. `--brew-timeout-s` and
 `volume_ml` in `POST /api/shot/result` are still accepted, and a shot
-history saved by a nightly build is read as before.
+history saved by a nightly build is read as before. Going back to a nightly
+build from before this change loses the shot history, as those builds
+can't read the names it is now saved with.
 
-`GET /api/state`:
+`GET /api/state`, and the same state as the reply of `POST /api/shot/*`,
+`POST /api/machine` and `PUT`/`DELETE /api/overrides`:
 
 | 0.2.1 | now |
 |---|---|
 | `phase.phase`: `ready`, `brewing`, `finishing` (with `requested_by_grinder`, `result`, `aborted`) | `shot.phase`: `ready`, `running`, `finishing` (with the same fields in `shot`) |
 | `last_shot` | `shot.last` |
-| `volume_ml` in a shot's result | `weight_g` |
+| `volume_ml` in a shot's result (`phase.result`, `last_shot`, `integrations[].last_report`) | `weight_g` |
 | `last_grind` (`beverage_weight_g`, `filter`, `raw`) | `grinder.last_grind` (`target_weight_g`, `filter`, `raw`) |
 | `grind_blocked.reason`: `standby`, `eco`, `brewing`, `testing`, `fault`, `warming_up`, `tank_empty`, `not_connected` | `grinder.grind_blocked.cause`: `machine_in_standby`, `machine_in_eco`, `shot_running`, `machine_testing`, `machine_faulty`, `machine_warming_up`, `machine_tank_empty` (`not_connected` was never sent) |
 | `grinder` (`peer`, `polls`, `requests`, `last_poll_age_ms`) | the same, in `grinder` |
 | `mako`, `overrides`, `config` | `machine.mako`, `machine.overrides`, `machine.config` |
-| `config.brew_timeout`, `config.finishing_hold` (`{"secs":…,"nanos":…}`) | `machine.config.shot_window_s` (whole seconds, `null` for no limit), `machine.config.finishing_hold_ms` |
+| `config.brew_timeout`, `config.finishing_hold` (`{"secs":…,"nanos":…}`) | `machine.config.shot_window_s` (whole seconds, 0 for no limit, as in `settings`), `machine.config.finishing_hold_s` (seconds, as `--finishing-hold-s` takes them) |
 | `health` of an integration: `error` | `failing` |
 | `since_ms` of an integration | `health_age_ms` |
 | `last_seq`, `version` | `server.last_event_seq`, `server.version` |
@@ -181,7 +185,7 @@ Elsewhere:
 |---|---|
 | `POST /api/shot/result` with `volume_ml` | `weight_g` (`volume_ml` still works) |
 | `DELETE /api/integrations/<id>` replies `{"removed":"<id>"}` | `{"id":"<id>"}`, as adding one does |
-| errors reply `{"error":"<sentence>"}` | `{"error":"<sentence>","code":"<code>"}`: match on `code` (`shot_not_running`, `shot_already_running`, `integration_not_found`, …), as the words may change; "no brew is running" now reads "no shot is running" |
+| errors reply `{"error":"<sentence>"}`, or plain text for a body or query that can't be read | `{"error":"<sentence>","code":"<code>"}` for both: match on `code` (`shot_not_running`, `shot_already_running`, `integration_not_found`, `request_invalid`, …), as the words may change; "no brew is running" now reads "no shot is running", and "a brew is already running" "a shot is already running" |
 | `--brew-timeout-s` | `--shot-window-s` (the old name still works) |
 
 For example, an automation that waits for `brew_started` now waits for

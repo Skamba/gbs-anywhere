@@ -8,14 +8,17 @@
 //!
 //! An error replies `{"error":"<sentence>","code":"<code>"}`: the words are
 //! for people, the code (`shot_not_running`, `integration_not_found`, …) for
-//! apps to match on.
+//! apps to match on. That holds for every route below, also for a body or
+//! query it can't read (`request_invalid`) and for a request refused as one a
+//! web page made (`request_host_refused`, `request_from_other_site`). Only a
+//! path or method not in the table gets a bare 404 or 405.
 //!
 //! | method | path | what |
 //! |---|---|---|
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80 with its `state`), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and the grinder's `grinder_message`), and `shot_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, `finishing_hold_ms`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq` |
+//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80 with its `state`), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and the grinder's `grinder_message`), and `shot_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, 0 for no limit, `finishing_hold_s`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq` |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them; they win over flags from then on. `null` goes back to the start setting (the flag or environment variable, else the default); `"grinder_host":""` removes the address (without a start address, the same as `null`). Replies with the settings as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
@@ -42,12 +45,14 @@ use std::time::{Duration, Instant};
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{MachineError, MakoState, ShotResult};
 use axum::Json;
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequest, FromRequestParts, Path, Query, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
@@ -268,7 +273,7 @@ struct After {
     after: u64,
 }
 
-async fn get_events(State(x): State<Arc<Server>>, Query(q): Query<After>) -> Json<Value> {
+async fn get_events(State(x): State<Arc<Server>>, Params(q): Params<After>) -> Json<Value> {
     Json(x.with(|m, now| {
         Value::Array(
             m.events_after(q.after)
@@ -315,7 +320,7 @@ async fn stream_events(State(x): State<Arc<Server>>) -> impl IntoResponse {
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-async fn put_settings(State(x): State<Arc<Server>>, Json(body): Json<Value>) -> Response {
+async fn put_settings(State(x): State<Arc<Server>>, Body(body): Body<Value>) -> Response {
     let change = match SettingsChange::parse(&body) {
         Ok(c) => c,
         Err(e) => return error(StatusCode::BAD_REQUEST, "settings_invalid", &e),
@@ -335,7 +340,7 @@ async fn get_history(State(x): State<Arc<Server>>) -> Json<Value> {
     }))
 }
 
-async fn get_log(State(x): State<Arc<Server>>, Query(q): Query<After>) -> Json<Value> {
+async fn get_log(State(x): State<Arc<Server>>, Params(q): Params<After>) -> Json<Value> {
     let (lines, last_seq) = x.log().after(q.after);
     Json(json!({
         "lines": lines,
@@ -350,7 +355,7 @@ async fn get_log(State(x): State<Arc<Server>>, Query(q): Query<After>) -> Json<V
 /// an `N` beyond the last line (the server restarted since) sends them all.
 async fn stream_log(
     State(x): State<Arc<Server>>,
-    Query(q): Query<AfterMaybe>,
+    Params(q): Params<AfterMaybe>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
     // A reconnecting browser sends the same URL again, so its
@@ -437,7 +442,7 @@ struct AddIntegration {
 
 async fn add_integration(
     State(x): State<Arc<Server>>,
-    Json(req): Json<AddIntegration>,
+    Body(req): Body<AddIntegration>,
 ) -> Response {
     let Some(kind) = integration::KINDS
         .iter()
@@ -472,7 +477,7 @@ struct UpdateIntegration {
 async fn update_integration(
     State(x): State<Arc<Server>>,
     Path(id): Path<String>,
-    Json(req): Json<UpdateIntegration>,
+    Body(req): Body<UpdateIntegration>,
 ) -> Response {
     match x.integrations().update(&x, &id, req.settings) {
         Ok(()) => Json(json!({ "id": id })).into_response(),
@@ -503,7 +508,7 @@ struct PairingInput {
 /// 65535, as `--grinder-pairing-id` takes).
 async fn grinder_pairing(
     State(x): State<Arc<Server>>,
-    Json(input): Json<PairingInput>,
+    Body(input): Body<PairingInput>,
 ) -> Response {
     let id = input.pairing_id;
     if !(1..=u32::from(u16::MAX)).contains(&id) {
@@ -537,10 +542,11 @@ fn change_error(e: &ChangeError) -> Response {
 pub struct ShotInput {
     pub time_s: Option<f64>,
     pub time_ms: Option<u32>,
-    /// Also taken as `volume_ml`, its name in 0.2.1 and before, so a client
-    /// that still sends it does not fall back to the recipe weight.
-    #[serde(alias = "volume_ml")]
     pub weight_g: Option<f64>,
+    /// `weight_g`'s name in 0.2.1 and before, so a client that still sends
+    /// it does not fall back to the recipe weight. `weight_g` wins when both
+    /// are there.
+    pub volume_ml: Option<f64>,
 }
 
 impl ShotInput {
@@ -553,11 +559,12 @@ impl ShotInput {
         let time = time
             .filter(|t| *t <= ShotResult::MAX_TIME)
             .ok_or("time must be between 0 and 600 seconds")?;
-        Ok(ShotResult::new(time, self.weight_g.unwrap_or(0.0)))
+        let weight = self.weight_g.or(self.volume_ml).unwrap_or(0.0);
+        Ok(ShotResult::new(time, weight))
     }
 }
 
-async fn shot_result(State(x): State<Arc<Server>>, Json(input): Json<ShotInput>) -> Response {
+async fn shot_result(State(x): State<Arc<Server>>, Body(input): Body<ShotInput>) -> Response {
     let result = match input.into_result() {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_REQUEST, "shot_result_invalid", e),
@@ -589,7 +596,7 @@ pub fn patch_ready(x: &Server, patch: &Map<String, Value>) -> Result<(), String>
 
 async fn patch_machine(
     State(x): State<Arc<Server>>,
-    Json(patch): Json<Map<String, Value>>,
+    Body(patch): Body<Map<String, Value>>,
 ) -> Response {
     match patch_ready(&x, &patch) {
         Ok(()) => Json(state_json(&x)).into_response(),
@@ -599,7 +606,7 @@ async fn patch_machine(
 
 async fn put_overrides(
     State(x): State<Arc<Server>>,
-    Json(o): Json<Map<String, Value>>,
+    Body(o): Body<Map<String, Value>>,
 ) -> Json<Value> {
     x.with(|m, _| m.overrides = o);
     Json(state_json(&x))
@@ -620,8 +627,39 @@ fn machine_reply(r: Result<(), MachineError>, x: &Server) -> Response {
 
 /// An error reply: `error` in words for people, `code` for apps to match on
 /// (`<group>_<what is wrong>`, e.g. `shot_not_running`).
-fn error(status: StatusCode, code: &str, msg: &str) -> Response {
+pub(super) fn error(status: StatusCode, code: &str, msg: &str) -> Response {
     (status, Json(json!({ "error": msg, "code": code }))).into_response()
+}
+
+/// A JSON body, as `Json` reads it, but one it can't read (malformed, of the
+/// wrong shape, without `Content-Type: application/json`) gets the API's
+/// error reply with `request_invalid`.
+struct Body<T>(T);
+
+impl<T: DeserializeOwned, S: Send + Sync> FromRequest<S> for Body<T> {
+    type Rejection = Response;
+
+    async fn from_request(req: axum::extract::Request, state: &S) -> Result<Self, Response> {
+        match Json::<T>::from_request(req, state).await {
+            Ok(Json(body)) => Ok(Self(body)),
+            Err(e) => Err(error(e.status(), "request_invalid", &e.body_text())),
+        }
+    }
+}
+
+/// The query string, as `Query` reads it, but one it can't read gets the
+/// API's error reply with `request_invalid`.
+struct Params<T>(T);
+
+impl<T: DeserializeOwned, S: Send + Sync> FromRequestParts<S> for Params<T> {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Response> {
+        match Query::<T>::from_request_parts(parts, state).await {
+            Ok(Query(params)) => Ok(Self(params)),
+            Err(e) => Err(error(e.status(), "request_invalid", &e.body_text())),
+        }
+    }
 }
 
 #[cfg(test)]

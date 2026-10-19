@@ -624,6 +624,27 @@ async fn the_jobs_target_time_sets_the_shot_window() {
         max_ms: 35_000,
     };
     assert_eq!(server.with(|m, _| m.grinder_range()), Some(window));
+    // The API shows the job as an E64 WS's grind and knob press: the grind,
+    // then the request with the job's target time.
+    let events: Vec<Value> = server.with(|m, _| {
+        m.events_after(0)
+            .map(|e| serde_json::to_value(e).unwrap())
+            .collect()
+    });
+    let kinds: Vec<_> = events.iter().map(|e| e["kind"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "grinder_grind_finished",
+            "grinder_shot_requested",
+            "shot_started"
+        ]
+    );
+    assert_eq!(events[0]["result"]["target_weight_g"], 40.0);
+    assert_eq!(
+        (&events[1]["target_time_ms"], &events[1]["script_id"]),
+        (&json!(20_000), &Value::Null)
+    );
     // Within the E64 WS's 80 s, but more than 15 s over this target.
     report(&server, 36.0, 40.0);
     assert_eq!(last_verdict(), Some(Some(false)));
@@ -948,6 +969,7 @@ async fn a_lost_pairing_id_is_asked_for_and_checked() {
         Err(PairingIdRefusal::NotNeeded),
         "a working pairing cannot be replaced from the app"
     );
+    assert_eq!(PairingIdRefusal::NotNeeded.code(), "grinder_already_paired");
     let _ = std::fs::remove_file(file);
 }
 

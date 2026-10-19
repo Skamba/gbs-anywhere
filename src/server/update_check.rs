@@ -108,7 +108,6 @@ impl Server {
     pub fn update_json(&self) -> Value {
         let s = self.update_state();
         json!({
-            "current": crate::version(),
             "latest": s.latest,
             "available": s.latest.as_deref().is_some_and(is_newer),
             "failing": s.enabled && s.failing,
@@ -391,7 +390,7 @@ mod tests {
         let state = server.update_json();
         assert!(server.update_check_on());
         assert_eq!(state["available"], true);
-        assert_eq!(state["current"], crate::version());
+        assert!(state.get("current").is_none(), "server.version says it");
         assert_eq!(state["url"], RELEASES_PAGE);
         assert_eq!(state["failing"], false);
         let agent = agents.lock().unwrap()[0].clone();

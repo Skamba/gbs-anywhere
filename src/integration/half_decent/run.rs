@@ -112,7 +112,7 @@ fn idle_line(last: Option<Shot>) -> Detail {
         "half_decent.last_shot",
         format!("last shot: {time:.1} s, {grams:.1} g"),
     )
-    .var("time_s", time)
+    .var("time_ms", (time * 1000.0).round() as u64)
     .var("weight_g", grams)
 }
 
@@ -518,10 +518,10 @@ mod tests {
         assert!(snap.detail.starts_with("last shot: "), "{}", snap.detail);
         // The same numbers for the app's own wording, as reported.
         assert_eq!(snap.detail_key, Some("half_decent.last_shot"));
-        let time_s = snap.detail_vars["time_s"].as_f64().unwrap();
+        let time_ms = snap.detail_vars["time_ms"].as_f64().unwrap();
         assert!(
-            (time_s * 1000.0 - f64::from(shot.time_ms)).abs() < 50.0,
-            "{time_s}"
+            (time_ms - f64::from(shot.time_ms)).abs() < 50.0,
+            "{time_ms}"
         );
         assert!(snap.detail_vars["weight_g"].as_f64().unwrap() > 30.0);
     }
@@ -551,7 +551,7 @@ mod tests {
         assert_eq!(snap.detail, "last shot: 25.1 s, 38.0 g");
         assert_eq!(
             serde_json::Value::Object(snap.detail_vars),
-            serde_json::json!({"time_s": 25.1, "weight_g": 38.0})
+            serde_json::json!({"time_ms": 25_100, "weight_g": 38.0})
         );
         assert_eq!(shown(idle_line(None)).detail_key, Some("half_decent.idle"));
         for (line, key) in [

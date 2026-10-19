@@ -37,10 +37,10 @@ pub struct MachineConfig {
     pub identity: MachineIdentity,
     /// How long `ACTIVE FINISHING` is shown before going back to `ON`. The
     /// grinder polls about every 2 s, so this must span at least one poll.
-    #[serde(rename = "finishing_hold_ms", serialize_with = "as_millis")]
+    #[serde(rename = "finishing_hold_s", serialize_with = "as_secs_f64")]
     pub finishing_hold: Duration,
     /// The shot window: a shot with no reported result is aborted after this
-    /// long. `None` for no limit.
+    /// long. `None` for no limit, sent as 0 as in the settings.
     #[serde(rename = "shot_window_s", serialize_with = "as_secs")]
     pub shot_window: Option<Duration>,
     /// Enter `ACTIVE SERVING` as soon as the grinder asks to start. The grinder
@@ -51,15 +51,12 @@ pub struct MachineConfig {
     pub extraction_status_finished: i64,
 }
 
-fn as_millis<S: serde::Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_u64(u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+fn as_secs_f64<S: serde::Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_f64(d.as_secs_f64())
 }
 
 fn as_secs<S: serde::Serializer>(d: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
-    match d {
-        Some(d) => s.serialize_some(&d.as_secs()),
-        None => s.serialize_none(),
-    }
+    s.serialize_u64(d.map_or(0, |d| d.as_secs()))
 }
 
 impl Default for MachineConfig {

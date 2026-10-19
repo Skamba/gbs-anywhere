@@ -19,7 +19,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use axum::extract::{ConnectInfo, MatchedPath, Request, State};
 use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::Next;
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
+
+use crate::server::control_api::error;
 
 /// Names home networks give their devices, besides IP addresses, `localhost`
 /// and names without a dot. None of them resolves in public DNS, except that
@@ -234,12 +236,12 @@ pub async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) 
         } else {
             tracing::debug!("refused a request for {host:?}");
         }
-        return (
+        return error(
             StatusCode::MISDIRECTED_REQUEST,
+            "request_host_refused",
             "gbs-anywhere answers only to its IP address or a home-network name; see \
-                 --allow-host",
-        )
-            .into_response();
+             --allow-host",
+        );
     }
     let reads = matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS);
     if !reads && from_other_site(req.headers(), authority) {
@@ -257,7 +259,11 @@ pub async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) 
         } else {
             tracing::debug!("refused {method} {path} requested by another site");
         }
-        return StatusCode::FORBIDDEN.into_response();
+        return error(
+            StatusCode::FORBIDDEN,
+            "request_from_other_site",
+            "gbs-anywhere takes no changes from another site",
+        );
     }
     next.run(req).await
 }

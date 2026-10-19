@@ -1168,8 +1168,9 @@
   /** An integration's status line in the current language: the catalog's
    *  wording for its detail_key (integ.detail.<key>), filled from
    *  detail_vars, else the server's English `detail`. A value's name ends in
-   *  its unit, which the wording leaves out: ago_ms is {ago} ("5 h ago", in
-   *  ageOf's steps), time_s {time} and weight_g {weight} with one decimal,
+   *  its unit, which the wording leaves out: age_ms is {age} ("5 h ago", in
+   *  ageOf's steps), time_ms {time} in seconds and weight_g {weight} with
+   *  one decimal,
    *  other numbers ({every}) with up to one, text ({host}) as it is. */
   function integDetail(i) {
     if (!i.detail_key) return i.detail;
@@ -1177,7 +1178,7 @@
     for (const [name, x] of Object.entries(i.detail_vars || {})) {
       if (x == null || typeof x === "object") continue;   // only numbers and text are filled in
       vars[name.replace(/_(ms|s|g)$/, "")] = typeof x !== "number" ? String(x)
-        : name === "ago_ms" ? ageOf(x) : name === "time_s" ? secs(x) : name === "weight_g" ? grams(x)
+        : name === "age_ms" ? ageOf(x) : name === "time_ms" ? secs(x / 1000) : name === "weight_g" ? grams(x)
         : fmt.upToOne.format(x);
     }
     const text = serverText("integ.detail." + i.detail_key, i.detail, vars);

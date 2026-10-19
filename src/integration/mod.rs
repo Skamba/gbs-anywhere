@@ -275,7 +275,7 @@ impl Detail {
     }
 
     /// Adds a value the app fills into its wording. Numbers are in plain
-    /// units, with the unit in the name (`ago_ms`, `time_s`, `weight_g`,
+    /// units, with the unit in the name (`age_ms`, `time_ms`, `weight_g`,
     /// `every_s`); text goes in as it is (`host`).
     pub fn var(mut self, name: &str, value: impl Into<serde_json::Value>) -> Self {
         self.vars.insert(name.to_owned(), value.into());
@@ -330,7 +330,7 @@ pub struct StatusSnapshot {
     /// `None` when the integration gives no key for it.
     pub detail_key: Option<&'static str>,
     /// The values the app fills into its wording for `detail_key`, as of
-    /// when `detail` was set: e.g. `{"ago_ms": 180000, "time_s": 25.1}`.
+    /// when `detail` was set: e.g. `{"age_ms": 180000, "time_ms": 25100}`.
     pub detail_vars: DetailVars,
     pub last_error: Option<String>,
     /// How long the current health has been in place.

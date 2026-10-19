@@ -199,13 +199,21 @@ async fn grinder_accepts_a_shot_entered_in_the_app() {
 #[tokio::test]
 async fn a_weight_sent_as_volume_ml_still_counts() {
     // Its name in 0.2.1: without it, the shot would get the recipe weight.
-    let base = start().await;
-    let post = reqwest::Method::POST;
-    call(post.clone(), format!("{base}/api/shot/start"), None).await;
-    let shot = json!({ "time_s": 30, "volume_ml": 38.5 });
-    let (code, state) = call(post, format!("{base}/api/shot/result"), Some(shot)).await;
-    assert_eq!(code, 200);
-    assert_eq!(state["shot"]["last"]["weight_g"], 38.5);
+    // Sent with `weight_g`, as a client in between might, `weight_g` wins.
+    for (shot, weight) in [
+        (json!({ "time_s": 30, "volume_ml": 38.5 }), 38.5),
+        (
+            json!({ "time_s": 30, "weight_g": 36, "volume_ml": 38.5 }),
+            36.0,
+        ),
+    ] {
+        let base = start().await;
+        let post = reqwest::Method::POST;
+        call(post.clone(), format!("{base}/api/shot/start"), None).await;
+        let (code, state) = call(post, format!("{base}/api/shot/result"), Some(shot)).await;
+        assert_eq!(code, 200);
+        assert_eq!(state["shot"]["last"]["weight_g"], weight);
+    }
 }
 
 /// The app is one HTML document with its styles, script and texts inline,
@@ -402,8 +410,29 @@ async fn control_api_rejects_what_it_cannot_do() {
     assert_eq!(code_of(reply), expect(400, "settings_invalid"));
 
     let patch = Some(json!({ "MA_STATUS": "not a number" }));
-    let reply = call(post, format!("{base}/api/machine"), patch).await;
+    let reply = call(post.clone(), format!("{base}/api/machine"), patch).await;
     assert_eq!(code_of(reply), expect(400, "machine_patch_invalid"));
+
+    // A body or query it can't read: malformed, of the wrong shape, or not
+    // said to be JSON.
+    let http = reqwest::Client::new();
+    let result = format!("{base}/api/shot/result");
+    for req in [
+        http.post(&result)
+            .header("content-type", "application/json")
+            .body("{"),
+        http.post(&result).json(&json!({ "time_s": "thirty" })),
+        http.post(&result).body(r#"{"time_s":30}"#),
+        http.get(format!("{base}/api/events?after=x")),
+        http.get(format!("{base}/api/log?after=-1")),
+    ] {
+        let res = req.send().await.unwrap();
+        let status = res.status().as_u16();
+        let body: Value = res.json().await.unwrap();
+        assert!((400..500).contains(&status), "{status}");
+        assert_eq!(body["code"], "request_invalid", "{body}");
+        assert!(body["error"].is_string());
+    }
 }
 
 #[tokio::test]
@@ -452,6 +481,17 @@ async fn settings_change_in_the_app_and_are_saved() {
         state["machine"]["config"]["shot_window_s"], 120,
         "the machine uses it"
     );
+    // No limit is 0 in both places.
+    put(json!({ "shot_window_s": 0 })).await;
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(
+        (
+            &state["settings"]["shot_window_s"],
+            &state["machine"]["config"]["shot_window_s"]
+        ),
+        (&json!(0), &json!(0))
+    );
+    put(json!({ "shot_window_s": 120 })).await;
 
     for bad in [
         json!({ "shot_window_s": 20 }),
@@ -464,7 +504,11 @@ async fn settings_change_in_the_app_and_are_saved() {
         json!({ "nope": 1 }),
     ] {
         let (code, body) = put(bad.clone()).await;
-        assert_eq!(code, 400, "{bad}");
+        assert_eq!(
+            (code, &body["code"]),
+            (400, &json!("settings_invalid")),
+            "{bad}"
+        );
         assert!(body["error"].is_string());
     }
 
@@ -499,8 +543,8 @@ async fn settings_change_in_the_app_and_are_saved() {
     assert_eq!(settings["source"]["grinder_host"], "default");
     wait_for("the link to stop", || x.grinder_link().wifi.is_none()).await;
     let url = format!("{base}/api/grinder/pairing");
-    let (code, _) = call(reqwest::Method::POST, url, Some(json!({ "pairing_id": 7 }))).await;
-    assert_eq!(code, 409);
+    let (code, body) = call(reqwest::Method::POST, url, Some(json!({ "pairing_id": 7 }))).await;
+    assert_eq!((code, &body["code"]), (409, &json!("grinder_not_set_up")));
 
     // `null` goes back to the start settings, here the defaults: the app's
     // values are forgotten.
@@ -822,8 +866,8 @@ async fn the_state_comes_in_groups() {
     assert_eq!(state["grinder"]["grind_blocked"], Value::Null);
     let config = &state["machine"]["config"];
     assert_eq!(
-        (&config["shot_window_s"], &config["finishing_hold_ms"]),
-        (&json!(180), &json!(300))
+        (&config["shot_window_s"], &config["finishing_hold_s"]),
+        (&json!(180), &json!(0.3))
     );
     assert_eq!(state["machine"]["mako"]["MA_STATUS"], 1);
     assert_eq!(state["machine"]["overrides"], json!({}));
@@ -945,19 +989,23 @@ async fn integrations_are_edited_and_moved_into_the_app() {
     let key = entry["detail_key"].as_str().unwrap();
     assert!(key.starts_with("half_decent."), "{key}");
     assert!(entry["detail_vars"].is_object());
-    let (code, _) = call(reqwest::Method::POST, url("/adopt"), None).await;
-    assert_eq!(code, 409, "no settings file");
+    let (code, body) = call(reqwest::Method::POST, url("/adopt"), None).await;
+    assert_eq!(
+        (code, &body["code"]),
+        (409, &json!("settings_file_missing"))
+    );
 
     x.integrations()
         .load(&x, file, crate::integration::KINDS)
         .unwrap();
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
     assert_eq!(state["integrations"][0]["adoptable"], true);
-    let (code, _) = call(reqwest::Method::GET, url("/settings"), None).await;
-    assert_eq!(code, 409, "command line");
+    let on_command_line = (409, json!("integration_on_command_line"));
+    let (code, body) = call(reqwest::Method::GET, url("/settings"), None).await;
+    assert_eq!((code, body["code"].clone()), on_command_line);
     let edit = json!({ "settings": { "host": "127.0.0.1:10" } });
-    let (code, _) = call(reqwest::Method::PUT, url(""), Some(edit.clone())).await;
-    assert_eq!(code, 409, "command line");
+    let (code, body) = call(reqwest::Method::PUT, url(""), Some(edit.clone())).await;
+    assert_eq!((code, body["code"].clone()), on_command_line);
 
     let (code, view) = call(reqwest::Method::POST, url("/adopt"), None).await;
     assert_eq!(code, 200);
@@ -965,8 +1013,8 @@ async fn integrations_are_edited_and_moved_into_the_app() {
         (&view["id"], &view["source"], &view["adoptable"]),
         (&json!("half_decent"), &json!("app"), &json!(false))
     );
-    let (code, _) = call(reqwest::Method::POST, url("/adopt"), None).await;
-    assert_eq!(code, 409, "already in the app");
+    let (code, body) = call(reqwest::Method::POST, url("/adopt"), None).await;
+    assert_eq!((code, &body["code"]), (409, &json!("integration_in_app")));
 
     let (code, form) = call(reqwest::Method::GET, url("/settings"), None).await;
     assert_eq!(code, 200);
@@ -979,15 +1027,19 @@ async fn integrations_are_edited_and_moved_into_the_app() {
     let (_, form) = call(reqwest::Method::GET, url("/settings"), None).await;
     assert_eq!(form["settings"]["host"], "127.0.0.1:10");
     let bad = json!({ "settings": { "host": "not an address" } });
-    let (code, _) = call(reqwest::Method::PUT, url(""), Some(bad)).await;
-    assert_eq!(code, 400);
+    let (code, body) = call(reqwest::Method::PUT, url(""), Some(bad)).await;
+    assert_eq!(
+        (code, &body["code"]),
+        (400, &json!("integration_settings_invalid"))
+    );
     let unknown = format!("{base}/api/integrations/nope");
-    let (code, _) = call(reqwest::Method::PUT, unknown.clone(), Some(json!({}))).await;
-    assert_eq!(code, 404);
-    let (code, _) = call(reqwest::Method::GET, format!("{unknown}/settings"), None).await;
-    assert_eq!(code, 404);
-    let (code, _) = call(reqwest::Method::POST, format!("{unknown}/adopt"), None).await;
-    assert_eq!(code, 404);
+    let not_found = (404, json!("integration_not_found"));
+    let (code, body) = call(reqwest::Method::PUT, unknown.clone(), Some(json!({}))).await;
+    assert_eq!((code, body["code"].clone()), not_found);
+    let (code, body) = call(reqwest::Method::GET, format!("{unknown}/settings"), None).await;
+    assert_eq!((code, body["code"].clone()), not_found);
+    let (code, body) = call(reqwest::Method::POST, format!("{unknown}/adopt"), None).await;
+    assert_eq!((code, body["code"].clone()), not_found);
 
     let saved: Value =
         serde_json::from_slice(&std::fs::read(dir.join("settings.json")).unwrap()).unwrap();
@@ -1065,7 +1117,13 @@ async fn the_app_answers_home_names_only_and_refuses_other_sites() {
             .send()
     };
     // DNS rebinding: a page on its own, public name.
-    assert_eq!(get_state("attacker.example").await.unwrap().status(), 421);
+    let res = get_state("attacker.example").await.unwrap();
+    assert_eq!(res.status(), 421);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(
+        body["code"], "request_host_refused",
+        "an error as any other"
+    );
     assert_eq!(get_state("gbs.fritz.box").await.unwrap().status(), 200);
     assert_eq!(get_state("kitchen-pi").await.unwrap().status(), 200);
     assert_eq!(get_state("").await.unwrap().status(), 421, "an empty Host");
@@ -1123,6 +1181,8 @@ async fn the_app_answers_home_names_only_and_refuses_other_sites() {
         .await
         .unwrap();
     assert_eq!(res.status(), 403);
+    let body: Value = res.json().await.unwrap();
+    assert_eq!(body["code"], "request_from_other_site");
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
     assert_ne!(state["shot"]["phase"], "running");
 
