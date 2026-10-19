@@ -176,7 +176,7 @@ impl Detector {
         }
         if let Some(first) = &mut self.tare {
             let first = *first.get_or_insert(r.ms);
-            if r.grams.abs() > TARE_ZERO_G && r.ms < first + TARE_MAX_MS {
+            if r.grams.abs() > TARE_ZERO_G && r.ms < first.saturating_add(TARE_MAX_MS) {
                 return Progress::Settling;
             }
             self.tare = None;
@@ -268,7 +268,7 @@ impl Detector {
                     return Progress::Ready;
                 }
                 let stopped = s.grams - baseline >= self.min_grams
-                    && s.ms >= start_ms + STOP_WINDOW_MS
+                    && s.ms >= start_ms.saturating_add(STOP_WINDOW_MS)
                     && self
                         .grams_at(s.ms - STOP_WINDOW_MS)
                         .is_some_and(|old| s.grams - old < STOP_RISE_G);
@@ -288,7 +288,7 @@ impl Detector {
             .history
             .iter()
             .rev()
-            .filter(|r| r.ms <= until_ms && r.ms >= start_ms + FLOW_WINDOW_MS)
+            .filter(|r| r.ms <= until_ms && r.ms >= start_ms.saturating_add(FLOW_WINDOW_MS))
             .find(|r| {
                 self.grams_at(r.ms - FLOW_WINDOW_MS)
                     .is_some_and(|old| r.grams - old >= FLOW_RISE_G)
@@ -297,7 +297,7 @@ impl Detector {
         let mut last: Vec<f64> = self
             .history
             .iter()
-            .filter(|r| r.ms <= until_ms && r.ms + FLOW_WINDOW_MS >= until_ms)
+            .filter(|r| r.ms <= until_ms && r.ms.saturating_add(FLOW_WINDOW_MS) >= until_ms)
             .map(|r| r.grams)
             .collect();
         last.sort_by(f64::total_cmp);

@@ -6,6 +6,24 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Security
+
+- Web pages can no longer use gbs-anywhere through a browser in the home
+  network. The app answers only to its IP address and home-network host
+  names (`--allow-host` / `ALLOW_HOST` adds more, each by its full name;
+  `*` alone allows any) and refuses changes requested from other sites. The
+  grinder's routes refuse what a browser sends with its headers, which
+  every change from a page does, and no longer let other sites read their
+  replies. A page that re-points its own name to gbs-anywhere's address can
+  still read the machine state the grinder polls, which holds nothing
+  private. Requests to the grinder's routes are limited to 4 KiB. A refused
+  request is logged once per device; should an E64 WS ever be refused,
+  `--accept-browser-headers` lets it through.
+- The E65/E80 pairing file is readable by its owner only, like the settings
+  file and the shot history; any of them that others could read, say one
+  from an earlier version, is made so when gbs-anywhere starts. Messages
+  from the Half Decent Scale are limited in size.
+
 ### Added
 
 - E65/E80 GbS grinders (E65W, E65T, E80W, E80T): `--grinder <address>`

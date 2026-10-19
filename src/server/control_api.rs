@@ -42,10 +42,13 @@ use serde_json::{Map, Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::integration::{self, ChangeError, Settings};
+use crate::server::browser::{self, AllowedHosts};
 use crate::server::logbook::{self, LogLine};
 use crate::server::{Server, SettingsChange, history};
 
-pub fn control_router(state: Arc<Server>) -> axum::Router {
+/// The app's routes, answering only to home-network host names (`hosts`
+/// adds more) and refusing writes from other sites.
+pub fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::Router {
     axum::Router::new()
         .route("/", get(app_page))
         .route("/icons/{name}", get(icon))
@@ -73,6 +76,7 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
         .route("/api/machine", post(patch_machine))
         .route("/api/grinder/pairing", post(grinder_pairing))
         .route("/api/overrides", put(put_overrides).delete(clear_overrides))
+        .route_layer(axum::middleware::from_fn_with_state(hosts, browser::guard))
         .with_state(state)
 }
 
@@ -112,8 +116,14 @@ pub fn state_json(x: &Server) -> Value {
     })
 }
 
-async fn app_page() -> axum::response::Html<&'static str> {
-    axum::response::Html(include_str!("../../web/index.html"))
+async fn app_page() -> impl IntoResponse {
+    (
+        [
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ],
+        axum::response::Html(include_str!("../../web/index.html")),
+    )
 }
 
 /// Browsers ask for these by themselves; not answered here, they would reach

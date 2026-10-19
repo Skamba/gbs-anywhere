@@ -221,9 +221,17 @@ async fn brew(
     }
 }
 
+/// Largest message taken from the scale.
+const MAX_MESSAGE_BYTES: usize = 64 * 1024;
+
 async fn connect(host: &str) -> anyhow::Result<Socket> {
     let url = format!("ws://{host}/snapshot");
-    let (mut ws, _) = tokio::time::timeout(CONNECT_TIMEOUT, tokio_tungstenite::connect_async(url))
+    // Readings are a few dozen bytes; a host that sends more is not the scale.
+    let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+        .max_message_size(Some(MAX_MESSAGE_BYTES))
+        .max_frame_size(Some(MAX_MESSAGE_BYTES));
+    let connect = tokio_tungstenite::connect_async_with_config(url, Some(config), false);
+    let (mut ws, _) = tokio::time::timeout(CONNECT_TIMEOUT, connect)
         .await
         .map_err(|_| anyhow!("no answer"))
         .and_then(|r| r.map_err(anyhow::Error::from))

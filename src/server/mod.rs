@@ -12,13 +12,14 @@
 //! An E65/E80 GbS grinder works the other way round: [`wifi_grinder`] asks it
 //! for brew jobs and drives the same machine from them.
 //!
-//! Around them: [`settings`] (what people change in the app, and the settings
-//! file), [`logbook`] (the server's log for the app), the shot history and
-//! [`update_check`].
+//! Around them: [`browser`] (keeps web pages out), [`settings`] (what people
+//! change in the app, and the settings file), [`logbook`] (the server's log
+//! for the app), the shot history and [`update_check`].
 //!
 //! The `gbs-anywhere` binary is a thin wrapper: build a [`Server`], then
 //! [`serve`] it or mount the routers in another app.
 
+mod browser;
 mod control_api;
 mod grinder_api;
 pub mod history;
@@ -38,6 +39,7 @@ use std::time::{Duration, Instant};
 use crate::integration::Integrations;
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{Machine, MachineConfig};
+pub use browser::AllowedHosts;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
@@ -325,6 +327,10 @@ pub struct ServeConfig {
     /// ports, so a phone can open `http://<this host>/`. The grinder only
     /// uses `/api/v2/*`, which the control routes do not overlap.
     pub app_on_grinder_ports: bool,
+    /// Host names the app answers to besides home-network ones.
+    pub allowed_hosts: AllowedHosts,
+    /// Let requests with browser headers reach the grinder's routes.
+    pub accept_browser_headers: bool,
 }
 
 /// Binds all listeners and serves until one fails fatally or all stop. Ports
@@ -332,9 +338,10 @@ pub struct ServeConfig {
 pub async fn serve(state: Arc<Server>, cfg: ServeConfig) -> anyhow::Result<()> {
     let mut tasks = Vec::new();
     let grinder_app = if cfg.app_on_grinder_ports {
-        control_router(state.clone()).merge(grinder_router(state.clone()))
+        control_router(state.clone(), cfg.allowed_hosts.clone())
+            .merge(grinder_router(state.clone(), cfg.accept_browser_headers))
     } else {
-        grinder_router(state.clone())
+        grinder_router(state.clone(), cfg.accept_browser_headers)
     };
     for addr in cfg.grinder {
         match TcpListener::bind(addr).await {
@@ -351,7 +358,11 @@ pub async fn serve(state: Arc<Server>, cfg: ServeConfig) -> anyhow::Result<()> {
     if let Some(addr) = cfg.control {
         let l = TcpListener::bind(addr).await?;
         tracing::info!("control API on http://{addr}/api/state");
-        tasks.push(spawn_server(l, control_router(state.clone()), addr));
+        tasks.push(spawn_server(
+            l,
+            control_router(state.clone(), cfg.allowed_hosts.clone()),
+            addr,
+        ));
     }
 
     // Time-based transitions (finishing -> ready, brew timeout) publish their
