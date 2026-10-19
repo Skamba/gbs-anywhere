@@ -1,7 +1,7 @@
 # gbs-anywhere
 
 Grind-by-Sync for the Mahlkönig **E64/E65/E80** GbS grinders
-(**E64WS, E65W, E65T, E80W, E80T**) with any espresso machine
+(**E64 WS, E65W, E65T, E80W, E80T**) with any espresso machine
 
 Grind-by-Sync (GbS) lets the grinder dial itself in: after each shot it
 compares the extraction time with the recipe's target and adjusts its grind
@@ -34,8 +34,13 @@ with Docker:
 
 ```sh
 docker run -d --name gbs-anywhere --restart unless-stopped \
-  -p 80:80 -v gbs-anywhere:/data ghcr.io/skamba/gbs-anywhere
+  -p 80:80 -v gbs-anywhere:/data ghcr.io/skamba/gbs-anywhere:nightly
 ```
+
+Until 0.3.0 is released, E65/E80 support and the app as described here
+(settings, History and Status tabs) are only in `:nightly`; `latest`
+(0.2.1) is for the E64 WS and has an older app. Once 0.3.0 is out, leave
+`:nightly` off to run the newest release.
 
 For an E65/E80 GbS, enter the grinder's IP address in the app's settings
 later, or add `-e GRINDER_HOST=<the grinder's IP>` before the image name (see
@@ -44,11 +49,22 @@ later, or add `-e GRINDER_HOST=<the grinder's IP>` before the image name (see
 The `/data` volume keeps what you set up in the app (integrations and
 [settings](#settings-in-the-app)), the shot history and the E65/E80 pairing
 across restarts, so keep it. From source, with Rust installed,
-`cargo run --release -- --config gbs-anywhere.json` does the same.
+`cargo run --release -- --config gbs-anywhere.json` does the same, with two
+differences: on Linux, port 80 needs root or `CAP_NET_BIND_SERVICE` (or pick
+another port with `-p`, for an E65/E80), and the console prompt and a
+second copy of the app and API on `127.0.0.1:8787`, for this computer
+only, are on; the image turns both off (`--no-stdin --control off`).
 
-Give the computer, and an E65/E80 grinder, a fixed IP or a DHCP reservation
-in your router: the grinder and your phone need the computer's address (e.g.
-`192.168.1.20`). Port 80 must be free and allowed in the firewall.
+Give the computer a fixed IP or a DHCP reservation in your router, as your
+phone needs its address (e.g. `192.168.1.20`). Then, depending on the
+grinder:
+
+- **E64 WS:** the grinder needs the computer's address too, and polls it
+  on port 80, so port 80 must be free and allowed in the firewall.
+- **E65/E80 GbS:** gbs-anywhere polls the grinder (on its port 30001), so
+  give the grinder a fixed IP or reservation as well. The app can then run
+  on any port (`-p 8080:80` in Docker, `-p 8080` from source), which only
+  your phone needs to reach.
 
 gbs-anywhere is for your home network: the app has no login, so don't make
 it reachable from the internet (no port forwarding to it). `-p 80:80` opens
@@ -75,7 +91,8 @@ gbs-anywhere version. Turn it off under **Status → Settings**, or with
 if `HTTPS_PROXY` is set; the link to an E65/E80 grinder never does.
 
 **To update** with Docker, get the new image and re-create the container
-with the same command and volume: `docker pull ghcr.io/skamba/gbs-anywhere`,
+with the same command and volume:
+`docker pull ghcr.io/skamba/gbs-anywhere:nightly` (or the tag you run),
 `docker rm -f gbs-anywhere`, then the `docker run` above. The `/data` volume
 keeps everything you set up, and an app left open reloads itself once the
 new version answers and nothing is being typed in it.
@@ -172,7 +189,10 @@ WiFi → Configuration** on the grinder:
   **Diagnosis**, after the serial number. `GRINDER_PAIRING_ID` sets it from
   the command line, unchecked.)
 - **Start Pairing and no gbs-anywhere entry:** the pairing was lost. Switch
-  Generic WiFi on again if needed, then pair once more.
+  the grinder off and on (also when it has just restarted by itself),
+  switch Generic WiFi on again if needed, then pair once more. If the
+  pairing still doesn't stick, switch the grinder off and on right before
+  you start pairing.
 
 To start over, tap **Clear Pairing** on the grinder, which also switches
 Generic WiFi off, and switch it on again. After about a minute gbs-anywhere
@@ -303,8 +323,13 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings, integrations moved from the command line); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
 | `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
-| `-p, --ports <list>` | 80 | ports to serve on |
+| `-p, --ports <list>` | 80 | ports to serve on, comma-separated; the E64 WS polls port 80 |
+| `-b, --bind <addr>` | `0.0.0.0` | address to serve those ports on |
+| `--control <addr>` | `127.0.0.1:8787` (Docker: `off`) | a second address for the app and its API, besides the ports above; `off` turns it off |
+| `--no-stdin` | off (Docker: on) | no console prompt, for running as a service |
 | `--allow-host <names>` | off | also open the app by these host names, each in full (e.g. `gbs.tail1234.ts.net`), comma-separated; `*` alone allows any name, even that of a web page that re-points its own name to this address; the IP address and home-network names always work; also `ALLOW_HOST` |
+| `--finishing-hold-s <s>` | 6 | how long the machine shows a shot as finishing before it is ready again (up to 3600); keep it at least one E64 WS poll |
+| `--serial <sn>` | built in | the machine serial number the E64 WS is shown |
 | `--accept-browser-headers` | off | let requests with browser headers reach the E64 WS's routes; only if the log says your E64 WS was refused (then please report it) |
 | `--grinder <host>` | off | pair with this E65/E80 GbS over its "Generic WiFi" option; also `GRINDER_HOST`; an address set in the app wins |
 | `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing across restarts; also `GRINDER_PAIRING_FILE` |
@@ -313,7 +338,7 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
 | `--hds-*` | off | Half Decent Scale, see [its README](src/integration/half_decent/README.md) |
 
-`gbs-anywhere --help` lists the rest, such as `--bind` and `--no-app`.
+`gbs-anywhere --help` lists the rest, such as `--no-app`.
 
 Without Docker you can also type the shot into the console: `30 36` means
 30 s, 36 g. `h` lists the other commands.
@@ -328,7 +353,7 @@ e.g. `POST /api/shot/result` with `{"time_s":30,"weight_g":36}`, or follow
 `integrations`, `settings`, `update`, `server`), and an error replies
 `{"error":"<sentence>","code":"<code>"}`, with a fixed `code` to match on.
 Coming from 0.2.1, whose names were different, the
-[changelog](CHANGELOG.md) lists what was renamed.
+[changelog](CHANGELOG.md#changed-breaking) lists what was renamed.
 
 The API has no login: anyone on your network who can open the app can add,
 change or remove integrations, change the settings, including the grinder

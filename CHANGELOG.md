@@ -176,6 +176,7 @@ Events (`GET /api/events`, `GET /api/events/stream`):
 | `start_requested` | `grinder_shot_requested` (for an E65/E80 too, with `target_time_ms`) |
 | `brew_started` | `shot_started` |
 | `shot_reported` (`result.volume_ml`) | `shot_reported` (`result.weight_g`) |
+| `shot_reported`: `in_grinder_range`, `true` or `false` (`false` only over 80 s) | `true`, `false` or `null`: by the window of the grinder's request (for the E64 WS over 10 s and up to 80 s, see `grinder.shot_range`), `null` when that is not known |
 | `shot_aborted` | unchanged, with `cause` added |
 | `ready` | `shot_finished` |
 
@@ -192,7 +193,8 @@ For example, an automation that waits for `brew_started` now waits for
 `shot_started`; one that checks `phase.phase == "brewing"` now checks
 `shot.phase == "running"`; and one that reads `last_shot.volume_ml` now
 reads `shot.last.weight_g`. One that only reacts to `shot_reported` and
-`shot_aborted` keeps working, unless it reads the weight.
+`shot_aborted` keeps working, unless it reads the weight or
+`in_grinder_range`.
 
 ### Changed
 

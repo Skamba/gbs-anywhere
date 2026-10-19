@@ -20,11 +20,14 @@ cup. Nothing needs to be typed, and the Decent app keeps working alongside.
    Scale**, and enter that address, e.g. `192.168.1.40`. Outside Docker the
    scale's own name `hds.local` usually works too; inside Docker, use the IP.
 
-Or on the command line / in Docker:
+Or on the command line / in Docker, with the `docker run` from
+[Run it](../../../README.md#run-it) (adding it in the app is simpler, and an
+integration set up this way can be moved there later):
 
 ```sh
-docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
-  -e HDS_HOST=192.168.1.40 ghcr.io/skamba/gbs-anywhere
+docker run -d --name gbs-anywhere --restart unless-stopped \
+  -p 80:80 -v gbs-anywhere:/data \
+  -e HDS_HOST=192.168.1.40 ghcr.io/skamba/gbs-anywhere:nightly
 ```
 
 | setting | flag | env | default |
@@ -33,31 +36,33 @@ docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
 
 ## How it works
 
-After the knob press, gbs-anywhere tares the scale, waits for a steady
-weight, then for the first drops. The shot ends when the weight stops
-rising; the time from the first drops to that moment and the coffee in the
-cup go to the grinder a few seconds later.
+After the knob press (on an E65/E80 GbS: after the Grind-by-Sync grind),
+gbs-anywhere tares the scale, waits for a steady weight, then for the first
+drops. The shot ends when the weight stops rising; the time from the first
+drops to that moment and the coffee in the cup go to the grinder a few
+seconds later.
 
 - **Times start at the first drops, not at pump start.** They come out
   shorter than a timer started with the pump, by the time before coffee
   reaches the cup. Set your recipes' target times to match.
 - **Put the cup on before the coffee comes.** Placing or lifting the cup is
-  recognised and not counted as coffee; press the knob and start the shot
-  before the first drops reach the cup.
+  recognised and not counted as coffee; press the knob (on an E65/E80 GbS:
+  finish the grind) and start the shot before the first drops reach the
+  cup.
 - **A pause is not the end.** The shot only ends once at least half the
   recipe weight is in the cup, so the flow pausing after pre-infusion is
   timed as part of the shot.
 - **Lifting the cup ends the shot** at the last moment coffee was flowing.
-- **The scale is tared at the knob press,** so its display counts the
-  coffee from zero. Put the cup on before pressing the knob. Avoid taring
-  during the shot.
-- **Only after a knob press.** Weighing at other times is never reported.
-- **On an E65/E80 GbS** the end of the Grind-by-Sync grind counts as the
-  knob press, so the scale is tared then: put the cup on before the grind
-  ends. Not tested with these grinders yet.
+- **The scale is tared at the knob press** (on an E65/E80 GbS: when the
+  Grind-by-Sync grind ends), so its display counts the coffee from zero.
+  Put the cup on before then. Avoid taring during the shot.
+- **Only while the grinder waits for the shot,** after a knob press (on an
+  E65/E80 GbS: after the Grind-by-Sync grind). Weighing at other times is
+  never reported.
+- **Not tested with an E65/E80 GbS yet.**
 - **The scale still switches itself off.** A connected app keeps the scale
-  awake, so gbs-anywhere only connects from the knob press until the shot
-  is reported. If the scale is off at the knob press, turn it on:
+  awake, so gbs-anywhere only connects while the grinder waits for the
+  shot, until it is reported. If the scale is off by then, turn it on:
   gbs-anywhere looks for it every few seconds while the grinder waits and
   watches the shot without the tare.
 - Up to four apps can read the scale at once.

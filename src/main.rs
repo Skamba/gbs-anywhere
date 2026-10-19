@@ -12,8 +12,8 @@
 //! `--lm-username` for the La Marzocco cloud.
 //!
 //! An E65/E80 GbS grinder is paired with `--grinder <its address>` instead:
-//! gbs-anywhere then asks it for each grind's brew job and answers with the
-//! shot.
+//! after each Grind-by-Sync grind, gbs-anywhere asks it for the shot it
+//! waits for and answers with that shot's time and weight.
 //!
 //! Settings changed in the app (shot window, grinder address) are saved in
 //! `--config` and win over their flags from then on.
@@ -265,8 +265,8 @@ fn in_container() -> bool {
 
 const HELP: &str = "\
 commands:  <seconds> [grams]   report the shot (e.g. `30 36`)
-           a                   abort the running brew
-           s                   start a brew by hand (grinder counts it as a flush)
+           a                   abort the running shot
+           s                   start a shot by hand (grinder counts it as a flush)
            set KEY=VALUE ...   change ON-state mako fields, e.g. `set TANK_LEVEL=0`
            ?                   show state      h  this help";
 

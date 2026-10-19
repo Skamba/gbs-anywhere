@@ -15,14 +15,22 @@ cloud**, then enter your La Marzocco Home e-mail address and password. Add the
 machine's serial number (e.g. `MI000000`) if the account has more than one
 machine.
 
-Or on the command line / in Docker:
+Setting it up in the app is the better way: the password is then kept in
+the settings file on the `/data` volume, readable by its owner only, rather
+than in the container's environment, which `docker inspect` shows.
+Or on the command line / in Docker, with the `docker run` from
+[Run it](../../../README.md#run-it):
 
 ```sh
-docker run -d --name gbs-anywhere --restart unless-stopped -p 80:80 \
+docker run -d --name gbs-anywhere --restart unless-stopped \
+  -p 80:80 -v gbs-anywhere:/data \
   -e LM_USERNAME=you@example.com \
   -e LM_PASSWORD='your La Marzocco Home password' \
-  ghcr.io/skamba/gbs-anywhere
+  ghcr.io/skamba/gbs-anywhere:nightly
 ```
+
+An integration set up this way can be moved into the app later, with all
+its settings.
 
 | setting | flag | env | default |
 |---|---|---|---|
@@ -40,7 +48,8 @@ The first coffee logged after the knob press is the shot: its extraction time
 and its weight go to the grinder. Without a scale reading it uses the recipe
 weight the grinder sent. The log says which.
 
-- **Only after a knob press.** Coffees made while the grinder is not waiting
+- **Only while the grinder waits for the shot,** after a knob press (on an
+  E65/E80 GbS: after the Grind-by-Sync grind). Coffees made at other times
   are never reported.
 - **A few seconds late.** The machine uploads the coffee when the shot ends;
   expect the grinder to react some seconds after the pump stops.
