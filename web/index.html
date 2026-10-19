@@ -386,7 +386,14 @@
     color: var(--ink); display: grid; place-items: center;
   }
   .step-btn[aria-disabled="true"] { opacity: .4; cursor: default; }
-  #set-window-msg:not(:empty) { margin-top: 8px; }
+  /* A setting with the line saying where its value comes from below it. */
+  .set-block { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  /* An empty note takes no room, but stays in place for screen readers. */
+  #set-window-msg:empty { margin-top: -8px; }
+  .win-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+  .set-from { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; font-size: 12px; color: var(--muted); }
+  .set-from .link-btn { margin-left: auto; font-size: 13px; }
+  .set-from .link-btn[aria-disabled="true"] { opacity: .45; cursor: default; }
   .win-field { width: 116px; justify-content: center; gap: 4px; }
   .win-field input { flex: 1 1 auto; width: 0; min-width: 0; font-size: 17px; text-align: right; }
   .win-field .unit { font-size: 15px; }
@@ -422,9 +429,11 @@
     min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--cs); color: var(--ci); font-size: 11px;
     font-weight: 700; text-align: center;
   }
-  .k-success { --cc: var(--ok-solid); --cs: var(--ok-bg); --ci: var(--ok-fg); }
+  .k-succeeded { --cc: var(--ok-solid); --cs: var(--ok-bg); --ci: var(--ok-fg); }
   .k-aborted { --cc: var(--warn-solid); --cs: var(--warn-soft); --ci: var(--warn-fg); }
-  .k-error { --cc: var(--bad-solid); --cs: var(--bad-bg); --ci: var(--bad-fg); }
+  .k-failed { --cc: var(--bad-solid); --cs: var(--bad-bg); --ci: var(--bad-fg); }
+  /* A success the grinder ignored: listed under Success, with a neutral badge. */
+  .k-ignored { --cs: var(--neutral-bg); --ci: var(--neutral-fg); }
   .day { display: flex; flex-direction: column; gap: 8px; }
   .day h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
   .day ul { margin: 0; padding: 0; list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
@@ -727,21 +736,29 @@
           <button type="button" data-lang-choice="de" aria-pressed="false" lang="de">Deutsch</button>
         </span>
       </div>
-      <!-- The shot window: − and + in 15 s steps, or typed into the field. -->
-      <div class="stack-8" id="set-window-row" hidden>
-        <div class="set-row wrap">
-          <label class="set-text" for="set-window"><span class="set-name" data-i18n="settings.window">Time to pull the shot</span><span class="set-sub"><span data-i18n="settings.windowSub">after the grind, before a timeout</span> · <span id="set-window-range"></span></span></label>
+      <!-- The shot window: − and + (15 s steps, whole minutes above 10:00),
+           typed into the field, or No limit. Below each setting the app
+           saves on the server: where its value comes from. -->
+      <div class="set-block" id="set-window-row" hidden>
+        <label class="set-text" for="set-window"><span class="set-name" id="set-window-name" data-i18n="settings.window">Time to pull the shot</span><span class="set-sub"><span data-i18n="settings.windowSub">after the grind, before a timeout</span> · <span id="set-window-range"></span></span></label>
+        <div class="win-controls">
           <span class="stepper">
-            <button type="button" class="step-btn" id="set-window-down" data-i18n-attr="aria-label:settings.windowLess;title:settings.windowLess" aria-label="15 s shorter" title="15 s shorter"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 12h12"/></svg></button>
+            <button type="button" class="step-btn" id="set-window-down" aria-label="15 s shorter" title="15 s shorter"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 12h12"/></svg></button>
             <span class="field win-field" id="set-window-field"><input id="set-window" inputmode="decimal" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" aria-describedby="set-window-msg"><span class="unit" id="set-window-unit">min</span></span>
-            <button type="button" class="step-btn" id="set-window-up" data-i18n-attr="aria-label:settings.windowMore;title:settings.windowMore" aria-label="15 s longer" title="15 s longer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
+            <button type="button" class="step-btn" id="set-window-up" aria-label="15 s longer" title="15 s longer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 6v12M6 12h12"/></svg></button>
           </span>
+          <button type="button" class="tool" id="set-window-none" aria-pressed="false" data-i18n="settings.noLimit">No limit</button>
         </div>
         <p class="hint" id="set-window-msg" role="status"></p>
+        <div class="set-from" id="set-window-from" hidden><span id="set-window-from-text" tabindex="-1"></span><button type="button" class="link-btn" id="set-window-reset" aria-describedby="set-window-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
       </div>
-      <div class="set-row" id="set-host-row" hidden>
-        <span class="set-text"><span class="set-name" data-i18n="settings.host">Grinder IP address</span><span class="set-sub" id="set-host-value"></span></span>
-        <button type="button" class="btn-plain sm" id="set-host-change" aria-controls="set-host-form" aria-expanded="false" data-i18n="common.change">Change</button>
+      <div class="set-block" id="set-host-row" hidden>
+        <div class="set-row">
+          <span class="set-text"><span class="set-name" id="set-host-name" data-i18n="settings.host">Grinder IP address</span><span class="set-sub" id="set-host-value"></span></span>
+          <button type="button" class="btn-plain sm" id="set-host-change" aria-controls="set-host-form" aria-expanded="false" data-i18n="common.change">Change</button>
+        </div>
+        <div class="set-from" id="set-host-from" hidden><span id="set-host-from-text" tabindex="-1"></span><button type="button" class="link-btn" id="set-host-reset" aria-describedby="set-host-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
+        <p class="hint warn" id="set-host-reset-error" role="alert" hidden></p>
       </div>
       <form class="stack" id="set-host-form" autocomplete="off" hidden>
         <label class="field-label" for="f-host" data-i18n="settings.host">Grinder IP address</label>
@@ -753,14 +770,17 @@
           <button type="submit" class="btn-send" id="set-host-save" data-i18n="common.save">Save</button>
         </div>
       </form>
-      <div class="set-row wrap" id="set-update-row" hidden>
-        <span class="set-text"><span class="set-name" id="update-name" data-i18n="settings.update">Update check</span><span class="set-sub" data-i18n="settings.updateSub">asks GitHub once a day</span></span>
-        <span class="seg two" role="group" aria-labelledby="update-name" id="set-update">
-          <button type="button" data-update="on" aria-pressed="true" data-i18n="settings.on">On</button>
-          <button type="button" data-update="off" aria-pressed="false" data-i18n="settings.off">Off</button>
-        </span>
+      <div class="set-block" id="set-update-row" hidden>
+        <div class="set-row wrap">
+          <span class="set-text"><span class="set-name" id="update-name" data-i18n="settings.update">Update check</span><span class="set-sub" data-i18n="settings.updateSub">asks GitHub once a day</span></span>
+          <span class="seg two" role="group" aria-labelledby="update-name" id="set-update">
+            <button type="button" data-update="on" aria-pressed="true" data-i18n="settings.on">On</button>
+            <button type="button" data-update="off" aria-pressed="false" data-i18n="settings.off">Off</button>
+          </span>
+        </div>
+        <div class="set-from" id="set-update-from" hidden><span id="set-update-from-text" tabindex="-1"></span><button type="button" class="link-btn" id="set-update-reset" aria-describedby="update-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
+        <p class="hint warn" id="set-update-error" role="alert" hidden></p>
       </div>
-      <p class="hint warn" id="set-update-error" role="alert" hidden></p>
       <p class="foot" id="set-foot" hidden></p>
     </section>
 
@@ -1028,8 +1048,8 @@
       "start.step2.send": "Send",
       "start.step2.byHand": "Entered by hand",
       "start.step2.reportedBy": "Reported by {title}",
-      "start.form.tooShort": "10 s or less: the grinder ignores this shot and asks you to go finer yourself.",
-      "start.form.tooLong": "Over 80 s: the grinder ignores this shot.",
+      "start.form.tooShort": "{limit}\u00a0s or less: the grinder ignores this shot and asks you to go finer yourself.",
+      "start.form.tooLong": "Over {limit}\u00a0s: the grinder ignores this shot.",
       "start.form.enterTime": "Enter the time.",
       "start.form.notSent": "Not sent: {error}",
       "start.abort.title": "Abort the shot?",
@@ -1135,18 +1155,27 @@
       "settings.window": "Time to pull the shot",
       "settings.windowSub": "after the grind, before a timeout",
       "settings.windowRange": "{min}–{max} min",
-      "settings.windowLess": "15 s shorter",
-      "settings.windowMore": "15 s longer",
+      "settings.windowLess": "{step} shorter",
+      "settings.windowMore": "{step} longer",
+      "settings.step15s": "15 s",
+      "settings.step1min": "1 min",
       "settings.windowIs": "That is {time} min.",
+      "settings.windowIsNone": "That means no limit.",
+      "settings.windowToMax": "Limit to {time} min",
       "settings.windowMax": "At most {time} min.",
       "settings.windowMin": "At least {time} min.",
-      "settings.windowInvalid": "Type a time from {min} to {max} min, e.g. 2:30, {decimal} (minutes) or 150 (seconds).",
+      "settings.windowInvalid": "Type a time from {min} to {max} min: a whole number is minutes up to 60 and seconds above (3 or 150), one with decimals is minutes ({decimal}); or write 2:30 or 150 s. 0 is no limit.",
       "settings.noLimit": "No limit",
+      "settings.from.default": "Default",
+      "settings.from.start": "From the start settings",
+      "settings.from.app": "Set in the app · start setting: {value}",
+      "settings.useStart": "Use start setting",
+      "settings.none": "none",
       "settings.host": "Grinder IP address",
       "settings.hostNone": "None · E64 WS",
       "settings.hostHelp": "The address of an E65/E80 GbS (Generic WiFi). Leave it empty when you use an E64 WS.",
-      "settings.saved": "The settings for time to pull the shot, the grinder IP address and the update check are saved on the computer (gbs-anywhere host) and kept after a restart. Appearance and language apply to this device only.",
-      "settings.notPersistent": "The settings for time to pull the shot, the grinder IP address and the update check apply until the next restart: gbs-anywhere runs without a settings file (--config). Appearance and language apply to this device only.",
+      "settings.saved": "The settings for time to pull the shot, the grinder IP address and the update check are saved on the computer (gbs-anywhere host) and kept after a restart. “Use start setting” goes back to the value of the environment variable or flag, else the default. Appearance and language apply to this device only.",
+      "settings.notPersistent": "The settings for time to pull the shot, the grinder IP address and the update check apply until the next restart: gbs-anywhere runs without a settings file (--config). “Use start setting” goes back to the value of the environment variable or flag, else the default. Appearance and language apply to this device only.",
       "settings.update": "Update check",
       "settings.updateSub": "asks GitHub once a day",
       "settings.on": "On",
@@ -1165,9 +1194,9 @@
       "version.github": "gbs-anywhere on GitHub (opens in a new tab)",
 
       "history.filter": "Filter by status",
-      "history.kind.success": "Success",
+      "history.kind.succeeded": "Success",
       "history.kind.aborted": "Aborted",
-      "history.kind.error": "Error",
+      "history.kind.failed": "Error",
       "history.chip": { one: "{label}, {n} shot", other: "{label}, {n} shots" },
       "history.today": "Today",
       "history.yesterday": "Yesterday",
@@ -1178,15 +1207,16 @@
       "history.stoppedWaiting": "The grinder stopped waiting",
       "history.refused": "The grinder refused the shot",
       "history.address": "Ended: grinder address changed",
+      "history.endMissed": "Ended: next shot started",
       "history.target": "Target {targets}",
-      "history.ignored": "ignored by the grinder",
+      "history.ignored": "Ignored",
       "history.unsupported": "This gbs-anywhere server keeps no shot history. Update gbs-anywhere to see your shots here.",
       "history.failed": "Could not load the history: {error} Trying again…",
       "history.loading": "Loading…",
       "history.empty": "No shots yet. Each shot shows up here once it is done.",
       "history.noMatch": "No shots match the filter. Tap a status above to show it again.",
       "history.kept": { one: "The last shot is kept on this computer.", other: "The last {n} shots are kept on this computer." },
-      "history.keptMemory": { one: "The last shot is kept in memory only, until gbs-anywhere restarts.", other: "The last {n} shots are kept in memory only, until gbs-anywhere restarts." },
+      "history.keptMemory": { one: "The last shot is kept in memory for now, not saved on this computer.", other: "The last {n} shots are kept in memory for now, not saved on this computer." },
 
       "log.follow": "Follow",
       "log.warnOnly": "Warnings only",
@@ -1351,8 +1381,8 @@
       "start.step2.send": "Senden",
       "start.step2.byHand": "Von Hand eingegeben",
       "start.step2.reportedBy": "Gemeldet von {title}",
-      "start.form.tooShort": "10 s oder weniger: Die Mühle ignoriert diesen Bezug und bittet dich, selbst feiner zu stellen.",
-      "start.form.tooLong": "Über 80 s: Die Mühle ignoriert diesen Bezug.",
+      "start.form.tooShort": "{limit}\u00a0s oder weniger: Die Mühle ignoriert diesen Bezug und bittet dich, selbst feiner zu stellen.",
+      "start.form.tooLong": "Über {limit}\u00a0s: Die Mühle ignoriert diesen Bezug.",
       "start.form.enterTime": "Gib die Zeit ein.",
       "start.form.notSent": "Nicht gesendet: {error}",
       "start.abort.title": "Bezug abbrechen?",
@@ -1483,18 +1513,27 @@
       "settings.window": "Zeit für den Bezug",
       "settings.windowSub": "nach dem Mahlen, vor einem Timeout",
       "settings.windowRange": "{min}–{max} min",
-      "settings.windowLess": "15 s kürzer",
-      "settings.windowMore": "15 s länger",
+      "settings.windowLess": "{step} kürzer",
+      "settings.windowMore": "{step} länger",
+      "settings.step15s": "15 s",
+      "settings.step1min": "1 min",
       "settings.windowIs": "Das sind {time} min.",
+      "settings.windowIsNone": "Das heißt: kein Limit.",
+      "settings.windowToMax": "Auf {time} min begrenzen",
       "settings.windowMax": "Höchstens {time} min.",
       "settings.windowMin": "Mindestens {time} min.",
-      "settings.windowInvalid": "Gib eine Zeit von {min} bis {max} min ein, z.\u00a0B. 2:30, {decimal} (Minuten) oder 150 (Sekunden).",
+      "settings.windowInvalid": "Gib eine Zeit von {min} bis {max} min ein: Eine ganze Zahl gilt bis 60 als Minuten, darüber als Sekunden (3 oder 150), eine Dezimalzahl als Minuten ({decimal}); oder schreib 2:30 oder 150 s. 0 heißt kein Limit.",
       "settings.noLimit": "Kein Limit",
+      "settings.from.default": "Standard",
+      "settings.from.start": "Aus den Starteinstellungen",
+      "settings.from.app": "In der App eingestellt · Starteinstellung: {value}",
+      "settings.useStart": "Starteinstellung verwenden",
+      "settings.none": "keine",
       "settings.host": "IP-Adresse der Mühle",
       "settings.hostNone": "Keine · E64 WS",
       "settings.hostHelp": "Die Adresse einer E65/E80 GbS (Generic WiFi). Leer lassen, wenn du eine E64 WS nutzt.",
-      "settings.saved": "Die Einstellungen „Zeit für den Bezug“, „IP-Adresse der Mühle“ und „Update-Prüfung“ sind auf dem Computer (gbs-anywhere-Host) gespeichert und bleiben nach einem Neustart erhalten. Darstellung und Sprache gelten nur für dieses Gerät.",
-      "settings.notPersistent": "Die Einstellungen „Zeit für den Bezug“, „IP-Adresse der Mühle“ und „Update-Prüfung“ gelten bis zum nächsten Neustart: gbs-anywhere läuft ohne Einstellungsdatei (--config). Darstellung und Sprache gelten nur für dieses Gerät.",
+      "settings.saved": "Die Einstellungen „Zeit für den Bezug“, „IP-Adresse der Mühle“ und „Update-Prüfung“ sind auf dem Computer (gbs-anywhere-Host) gespeichert und bleiben nach einem Neustart erhalten. „Starteinstellung verwenden“ nimmt wieder den Wert aus der Umgebungsvariable oder dem Flag, sonst den Standardwert. Darstellung und Sprache gelten nur für dieses Gerät.",
+      "settings.notPersistent": "Die Einstellungen „Zeit für den Bezug“, „IP-Adresse der Mühle“ und „Update-Prüfung“ gelten bis zum nächsten Neustart: gbs-anywhere läuft ohne Einstellungsdatei (--config). „Starteinstellung verwenden“ nimmt wieder den Wert aus der Umgebungsvariable oder dem Flag, sonst den Standardwert. Darstellung und Sprache gelten nur für dieses Gerät.",
       "settings.update": "Update-Prüfung",
       "settings.updateSub": "fragt einmal am Tag bei GitHub nach",
       "settings.on": "An",
@@ -1513,9 +1552,9 @@
       "version.github": "gbs-anywhere auf GitHub (öffnet einen neuen Tab)",
 
       "history.filter": "Nach Status filtern",
-      "history.kind.success": "Erfolgreich",
+      "history.kind.succeeded": "Erfolgreich",
       "history.kind.aborted": "Abgebrochen",
-      "history.kind.error": "Fehler",
+      "history.kind.failed": "Fehler",
       "history.chip": { one: "{label}, {n} Bezug", other: "{label}, {n} Bezüge" },
       "history.today": "Heute",
       "history.yesterday": "Gestern",
@@ -1526,15 +1565,16 @@
       "history.stoppedWaiting": "Die Mühle hat aufgehört zu warten",
       "history.refused": "Die Mühle hat den Bezug abgelehnt",
       "history.address": "Beendet: Mühlenadresse geändert",
+      "history.endMissed": "Beendet: nächster Bezug gestartet",
       "history.target": "Ziel {targets}",
-      "history.ignored": "von der Mühle ignoriert",
+      "history.ignored": "Ignoriert",
       "history.unsupported": "Dieser gbs-anywhere-Server führt keine Historie. Aktualisiere gbs-anywhere, um deine Bezüge hier zu sehen.",
       "history.failed": "Die Historie konnte nicht geladen werden: {error} Neuer Versuch…",
       "history.loading": "Lädt…",
       "history.empty": "Noch keine Bezüge. Jeder Bezug erscheint hier, sobald er fertig ist.",
       "history.noMatch": "Kein Bezug passt zum Filter. Tippe oben auf einen Status, um ihn wieder anzuzeigen.",
       "history.kept": { one: "Der letzte Bezug wird auf diesem Computer gespeichert.", other: "Die letzten {n} Bezüge werden auf diesem Computer gespeichert." },
-      "history.keptMemory": { one: "Der letzte Bezug wird nur im Speicher gehalten, bis gbs-anywhere neu startet.", other: "Die letzten {n} Bezüge werden nur im Speicher gehalten, bis gbs-anywhere neu startet." },
+      "history.keptMemory": { one: "Der letzte Bezug wird vorerst nur im Arbeitsspeicher gehalten, nicht auf diesem Computer gespeichert.", other: "Die letzten {n} Bezüge werden vorerst nur im Arbeitsspeicher gehalten, nicht auf diesem Computer gespeichert." },
 
       "log.follow": "Folgen",
       "log.warnOnly": "Nur Warnungen",
@@ -1741,8 +1781,6 @@
   }
 
   // --- App state ---------------------------------------------------------------
-  const MIN_MS = 10000;          // the grinder ignores shots up to 10 s
-  const MAX_MS = 80000;          // and shots over 80 s
   const FRESH_MS = 10 * 60000;   // a finished shot stays on the Start tab this long
   const ON_TARGET_S = 1.0;       // within this of the recipe time counts as on target
   const KNOB_MS = 5 * 60000;     // E64: how long a grind shows "press the knob"
@@ -1784,13 +1822,38 @@
     return t && typeof t.secs === "number" ? t.secs : 0;
   }
   const windowLabel = () => clock(windowS() * 1000);
+  /** The shot times the grinder adjusts from (`grinder_range`: over min_ms,
+   *  up to max_ms), or null before the state is in. */
+  const grinderRange = () => (S && S.grinder_range) || null;
+  /** Whether the grinder adjusts from a shot of `ms`, or null when that is
+   *  not known yet. */
+  function inGrinderRange(ms) {
+    const r = grinderRange();
+    return r && ms != null ? ms > r.min_ms && ms <= r.max_ms : null;
+  }
   function lastOf(kindsWanted) {
     for (let i = events.length - 1; i >= 0; i--) if (kindsWanted.includes(events[i].kind)) return events[i];
     return null;
   }
-  // Ends of a brew that are no failure (history kind "aborted").
-  const ABORTS = ["aborted by user", "a newer Grind-by-Sync grind replaced it", "the grinder address changed"];
-  const isAbort = (r) => ABORTS.includes(r);
+  // Why a brew ended without a result, by its `cause` (the server's
+  // AbortCause): on purpose (history kind "aborted") or a failure, the text
+  // on the Start tab and the history title. A timeout's texts say how long
+  // it waited (errorTitle, shotTitle). A test in control_api.rs checks this
+  // table against the server.
+  const CAUSES = {
+    shot_aborted_by_user: { onPurpose: true, text: "start.aborted.user", title: "history.abortedUser" },
+    grinder_shot_replaced: { onPurpose: true, text: "start.aborted.replaced", title: "history.replaced" },
+    grinder_address_changed: { onPurpose: true, text: "start.aborted.address", title: "history.address" },
+    shot_timed_out: { onPurpose: false },
+    grinder_shot_dropped: { onPurpose: false, text: "start.error.stoppedWaiting", title: "history.stoppedWaiting" },
+    grinder_shot_refused: { onPurpose: false, text: "start.error.refused", title: "history.refused" },
+    grinder_unpaired: { onPurpose: false, text: "start.error.unknownApp", title: "start.error.unknownApp" },
+    shot_end_missed: { onPurpose: false, title: "history.endMissed" },
+  };
+  /** The cause of a shot_aborted event or a history entry, or null. */
+  const causeOf = (x) => (x && x.cause) || null;
+  const causeInfo = (cause) => CAUSES[cause] || {};
+  const isAbort = (cause) => !!causeInfo(cause).onPurpose;
   /** An E65/E80 setup: a Generic WiFi link, or an address it is starting with. */
   const wifiSetup = () => !!(wifiOf() || (S && S.settings && S.settings.grinder_host));
   /** The E65/E80 link is (re)starting and has not reached the grinder yet. */
@@ -1833,9 +1896,9 @@
     const h = hist && hist.shots && hist.shots[0];
     if (!h || !ev) return null;
     if (ev.kind === "shot_reported") {
-      return h.kind === "success" && h.time_s != null && Math.abs(h.time_s * 1000 - ev.result.time_ms) < 60 ? h : null;
+      return h.kind === "succeeded" && h.time_s != null && Math.abs(h.time_s * 1000 - ev.result.time_ms) < 60 ? h : null;
     }
-    return h.kind !== "success" && h.reason === ev.reason ? h : null;
+    return h.kind !== "succeeded" && h.cause === ev.cause ? h : null;
   }
   /** When the brew ended with this event. */
   function endTime(ev) {
@@ -1868,19 +1931,25 @@
     const phase = S.phase.phase;
     const outcome = lastOf(["shot_reported", "shot_aborted"]);
     const last = lastOf(["grind_result", "brew_job", "shot_reported", "shot_aborted"]);
-    let sc = "ready", reason = null;
+    // `reason` is the server's words for `cause`, shown for a cause this
+    // app does not know.
+    let sc = "ready", reason = null, cause = null;
     if (phase === "brewing") sc = "running";
     else if (phase === "finishing") {
       if (!S.phase.aborted) sc = "checking";
       else {
-        reason = outcome && outcome.kind === "shot_aborted" ? outcome.reason : null;
-        sc = isAbort(reason) ? "aborted" : "error";
+        const ended = outcome && outcome.kind === "shot_aborted" ? outcome : null;
+        reason = ended ? ended.reason : null;
+        cause = causeOf(ended);
+        sc = isAbort(cause) ? "aborted" : "error";
       }
     } else if (last && last.kind === "grind_result" && knobFresh(last)) sc = "knob";
     else if (last && last.kind === "shot_reported") sc = fresh(last) ? "done" : "ready";
-    else if (last && last.kind === "shot_aborted" && !isAbort(last.reason) && fresh(last)) { sc = "error"; reason = last.reason; }
+    else if (last && last.kind === "shot_aborted" && !isAbort(causeOf(last)) && fresh(last)) {
+      sc = "error"; reason = last.reason; cause = causeOf(last);
+    }
     if (sc === "error" && outcome && outcome.seq <= ui.dismissed) sc = "ready";
-    return { sc, reason, outcome, started: lastOf(["brew_started"]), job: lastOf(["grind_result", "brew_job"]) };
+    return { sc, reason, cause, outcome, started: lastOf(["brew_started"]), job: lastOf(["grind_result", "brew_job"]) };
   }
 
   // Per state: the tone and badge (catalog key under badge.) of each step.
@@ -1932,9 +2001,10 @@
   $("to-settings").addEventListener("click", (e) => {
     e.preventDefault();
     goTab("status");
-    // To the + of Time to pull the shot (rendered now), or the − at the longest.
+    // To the + of Time to pull the shot (rendered now), or at the longest to
+    // the field, next to No limit.
     const up = $("set-window-up");
-    const b = up.getAttribute("aria-disabled") === "true" ? $("set-window-down") : up;
+    const b = up.getAttribute("aria-disabled") === "true" ? $("set-window") : up;
     b.scrollIntoView({ block: "center" });
     b.focus();
   });
@@ -1980,7 +2050,7 @@
     const s = (tone, icon, label, text, detail) => ({
       key: label, tone, icon, text, detail: detail || "", label: t("sys.label." + label),
       short: hasText("sys.label." + label + "Short") ? t("sys.label." + label + "Short") : "",
-      big: t(label === "ready" ? "sys.label.readyLong" : "sys.label." + label),
+      big: label === "ready" ? t("sys.label.readyLong") : t("sys.label." + label),
     });
     if (!online) return s("error", "alert", "offline", t("sys.text.offline"));
     if (!S) return s("none", "clock", "connecting", "");
@@ -1999,7 +2069,7 @@
       return s("error", "alert", "noGrinder", missing.text, missing.detail);
     }
     if (blocked) return s("warn", "alert", "blocked", t("sys.text.blocked", { message: blocked.grinder_message }));
-    if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f.reason, f.outcome));
+    if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f));
     // Shots can still be made, but something needs a look: not green.
     if (wifi && wifi.problem) return s("warn", "alert", "problem", t("sys.text.problem"), sentence(wifi.problem));
     const failing = (S.integrations || []).find((i) => i.health === "error" || i.health === "stopped");
@@ -2036,7 +2106,7 @@
         const title = { title: i.title };
         if (i.health === "connected" || i.health === "watching") items.push(["ok", "check", t("check.integReady", title)]);
         else if (i.health === "starting") items.push(["wait", "clock", t("check.integConnecting", title)]);
-        else items.push(["bad", "alert", t(i.health === "stopped" ? "check.integStopped" : "check.integError", title)]);
+        else items.push(["bad", "alert", i.health === "stopped" ? t("check.integStopped", title) : t("check.integError", title)]);
       }
       if (list.length === 0) items.push(["muted", null, t("check.noIntegration")]);
       // The grinder alone on a line says nothing System status doesn't.
@@ -2285,17 +2355,14 @@
     }
     $("s2-error").hidden = f.sc !== "error";
     if (f.sc === "error") {
-      const timeout = f.reason === "no result reported in time";
-      $("s2-err-title").textContent = errorTitle(f.reason, f.outcome);
+      const timeout = f.cause === "shot_timed_out";
+      $("s2-err-title").textContent = errorTitle(f);
       $("s2-err-info-btn").hidden = !timeout;
       $("s2-err-info-btn").setAttribute("aria-expanded", String(ui.errInfo));
       $("s2-err-info").hidden = !(timeout && ui.errInfo);
     }
     $("s2-aborted").hidden = f.sc !== "aborted";
-    if (f.sc === "aborted") {
-      $("s2-aborted").textContent = t(f.reason === "aborted by user" ? "start.aborted.user"
-        : f.reason === "the grinder address changed" ? "start.aborted.address" : "start.aborted.replaced");
-    }
+    if (f.sc === "aborted") $("s2-aborted").textContent = t(causeInfo(f.cause).text);
 
     // Step 3
     $("s3-wait").hidden = !(f.sc === "ready" || f.sc === "knob" || f.sc === "running");
@@ -2313,33 +2380,33 @@
     return i ? t("start.step2.reportedBy", { title: i.title }) : t("start.step2.byHand");
   }
 
-  // The machine's reasons for ending a brew that failed, and their texts.
-  const ERROR_REASONS = {
-    "the grinder stopped waiting before the shot came": "start.error.stoppedWaiting",
-    "the grinder refused the job": "start.error.refused",
-    "the grinder no longer knows this gbs-anywhere": "start.error.unknownApp",
-  };
-  function errorTitle(reason, outcome) {
-    if (reason === "no result reported in time") {
+  /** Why the shot of flow() `f` failed. */
+  function errorTitle(f) {
+    if (f.cause === "shot_timed_out") {
       // How long it waited, from the history; else the current setting.
-      const h = histFor(outcome);
+      const h = histFor(f.outcome);
       const ms = h ? Date.parse(h.ended_at) - Date.parse(h.at) : NaN;
       if (isFinite(ms) && ms > 0) return t("start.error.timeout", { window: clock(ms) });
       return windowS() > 0 ? t("start.error.timeout", { window: windowLabel() }) : t("start.error.timeoutNoLimit");
     }
-    if (ERROR_REASONS[reason]) return t(ERROR_REASONS[reason]);
-    // A reason this app does not know: as the server says it.
-    return reason ? cap(reason) : t("start.error.generic");
+    const text = causeInfo(f.cause).text;
+    if (text) return t(text);
+    // A cause this app does not know: as the server says it.
+    return f.reason ? cap(f.reason) : t("start.error.generic");
   }
 
-  /** Green when the grinder takes the shot and may adjust; grey when it
-   *  ignores the shot or (as in the design) the shot was on target. */
+  /** Green when the grinder adjusts from the shot; grey when it ignores
+   *  the shot or (as in the design) the shot was on target. */
   function renderOutcome(res, tg, ev) {
     const secsShot = res.time_ms / 1000;
     const box = $("s3-outcome");
-    const inRange = ev && typeof ev.in_grinder_range === "boolean" ? ev.in_grinder_range : res.time_ms <= MAX_MS;
+    const range = grinderRange();
+    const inRange = (ev ? ev.in_grinder_range : inGrinderRange(res.time_ms)) !== false;
     let result, change = "", good = false;
-    if (res.time_ms <= MIN_MS) {
+    // in_grinder_range does not say on which side a shot missed, so the
+    // time picks the wording, with every server: a shot too short also
+    // gets the hint to grind finer by hand.
+    if (range && res.time_ms <= range.min_ms) {
       result = t("outcome.tooShort", { time: secs(secsShot) });
       change = t("outcome.finerByHand");
     } else if (!inRange) {
@@ -2353,8 +2420,9 @@
       if (Math.abs(d) <= ON_TARGET_S) result = t("outcome.onTarget", { time: secs(secsShot), target: secs(tg.t) });
       else {
         good = true;
-        result = t(d < 0 ? "outcome.fast" : "outcome.slow", { diff: secs(Math.abs(d)) });
-        change = t(d < 0 ? "outcome.finer" : "outcome.coarser");
+        const diff = { diff: secs(Math.abs(d)) };
+        result = d < 0 ? t("outcome.fast", diff) : t("outcome.slow", diff);
+        change = d < 0 ? t("outcome.finer") : t("outcome.coarser");
       }
     }
     box.classList.toggle("good", good);
@@ -2397,8 +2465,10 @@
     $("send").disabled = !ok || busy;
     let text = message || "", isWarn = !!warn;
     if (!message && ok) {
-      if (typed * 1000 <= MIN_MS) { text = t("start.form.tooShort"); isWarn = true; }
-      else if (typed * 1000 > MAX_MS) { text = t("start.form.tooLong"); isWarn = true; }
+      // No warning before the state (and with it the limits) is in.
+      const range = grinderRange(), limit = (ms) => ({ limit: fmt.upToOne.format(ms / 1000) });
+      if (range && typed * 1000 <= range.min_ms) { text = t("start.form.tooShort", limit(range.min_ms)); isWarn = true; }
+      else if (range && typed * 1000 > range.max_ms) { text = t("start.form.tooLong", limit(range.max_ms)); isWarn = true; }
     }
     h.textContent = text;
     h.className = "hint" + (isWarn ? " warn" : "");
@@ -2711,7 +2781,7 @@
       returnTo: () => focusKebab(i.id),
       title: t("integ.adopt.title", { title: i.title }),
       body: [
-        el("p", { class: "body-text", text: t(hasPassword(k) ? "integ.adopt.textPassword" : "integ.adopt.text") }),
+        el("p", { class: "body-text", text: hasPassword(k) ? t("integ.adopt.textPassword") : t("integ.adopt.text") }),
         el("p", { class: "body-text", text: t("integ.adopt.after") }),
       ],
       actions: [
@@ -2742,7 +2812,7 @@
       returnTo: () => focusKebab(i.id),
       title: t("integ.delete.title", { title: i.title }),
       body: [
-        el("p", { class: "body-text", text: t(hasPassword(k) ? "integ.delete.textPassword" : "integ.delete.text") }),
+        el("p", { class: "body-text", text: hasPassword(k) ? t("integ.delete.textPassword") : t("integ.delete.text") }),
         ...(i.from_command_line ? [el("p", { class: "body-text", text: t("integ.delete.moved") })] : []),
         el("label", { class: "sheet-label" }, t("integ.delete.type"), input),
       ],
@@ -2887,21 +2957,50 @@
     renderLanguage();
     const st = S.settings;
     // An older server has no settings API: only the appearance is shown.
-    for (const id of ["set-window-row", "set-foot"]) $(id).hidden = !st;
+    $("set-foot").hidden = !st;
+    // The shot window needs its range from the server.
+    $("set-window-row").hidden = !winRange();
     if (!st) { $("set-host-row").hidden = true; $("set-host-form").hidden = true; $("set-update-row").hidden = true; return; }
     if ($("set-host-form").hidden) $("set-host-row").hidden = false;
     renderWindow();
+    renderFrom("set-window", "shot_window_s", (v) => (v === 0 ? t("settings.noLimit") : clock(v * 1000) + " min"));
     renderUpdateSetting();
     $("set-host-value").textContent = st.grinder_host ? st.grinder_host : t("settings.hostNone");
-    $("set-foot").textContent = t(st.persistent ? "settings.saved" : "settings.notPersistent");
+    renderFrom("set-host", "grinder_host", (v) => v || t("settings.none"));
+    renderFrom("set-update", "update_check", (v) => (v ? t("settings.on") : t("settings.off")));
+    $("set-foot").textContent = st.persistent ? t("settings.saved") : t("settings.notPersistent");
   }
 
-  // Time to pull the shot: − and + in 15 s steps (saved a moment after the
-  // last tap), or typed into the field (saved on Enter or when leaving it).
-  // The server takes 0 (no limit) or 30 to 3600 s; the app offers 0:30 to
-  // 10:00 and shows a longer time or no limit set elsewhere as it is.
-  const WIN_MIN = 30, WIN_MAX = 600, WIN_STEP = 15;
-  const win = { pending: null, saved: null, seq: 0, timer: null, msg: "", warn: false };
+  /** The line under a setting saved on the server: where its value comes
+   *  from (`settings.source`), and when it was set in the app, the start
+   *  setting it would go back to (`settings.start`, shown by `show`) with
+   *  Use start setting. */
+  function renderFrom(id, key, show) {
+    const st = S.settings;
+    const from = st.source && st.source[key];
+    const start = st.start && key in st.start ? show(st.start[key]) : "";
+    const text = from === "app" ? t("settings.from.app", { value: start })
+      : from === "command_line" ? t("settings.from.start")
+      : from === "default" ? t("settings.from.default") : "";
+    const line = $(id + "-from-text");
+    if (line.textContent !== text) line.textContent = text;
+    $(id + "-from").hidden = !text;
+    $(id + "-reset").hidden = from !== "app" || !st.start;
+  }
+
+  // Time to pull the shot: − and + (saved a moment after the last tap) in
+  // 15 s steps, in whole minutes above 10:00; typed into the field (saved
+  // on Enter or when leaving it); or No limit, which turned off again goes
+  // back to the limit before. The range is the server's (0:30 to 60:00, and
+  // 0 for no limit). A shorter time from --brew-timeout-s shows as it is.
+  const WIN_FINE = 600;   // − and + take whole minutes above this
+  /** The shot windows the server takes besides 0 (no limit), in seconds:
+   *  `settings.shot_window_range` from /api/state; null until it came. */
+  function winRange() {
+    const r = S && S.settings && S.settings.shot_window_range;
+    return r && typeof r.min_s === "number" && typeof r.max_s === "number" ? r : null;
+  }
+  const win = { pending: null, saved: null, seq: 0, timer: null, msg: "", warn: false, lastLimit: 0 };
   /** The shot window as shown: the one waiting to be saved, else the one
    *  just saved (a state poll that left before the save still brings the
    *  old one, for a moment), else the server's. */
@@ -2914,6 +3013,8 @@
   }
   const winText = (v) => (v === 0 ? t("settings.noLimit") : clock(v * 1000));
   function renderWindow() {
+    const r = winRange();
+    if (!r) return;
     const v = winValue();
     const input = $("set-window");
     if (document.activeElement !== input) {
@@ -2923,10 +3024,17 @@
       $("set-window-field").classList.remove("editing");
       $("set-window-unit").hidden = v === 0;
     }
+    if (v > 0) win.lastLimit = v;
     // aria-disabled rather than disabled: the button keeps the focus.
-    $("set-window-down").setAttribute("aria-disabled", String(v !== 0 && v <= WIN_MIN));
-    $("set-window-up").setAttribute("aria-disabled", String(v === 0 || v >= WIN_MAX));
-    $("set-window-range").textContent = t("settings.windowRange", { min: clock(WIN_MIN * 1000), max: clock(WIN_MAX * 1000) });
+    const down = $("set-window-down"), up = $("set-window-up");
+    down.setAttribute("aria-disabled", String(v !== 0 && v <= r.min_s));
+    up.setAttribute("aria-disabled", String(v === 0 || v >= r.max_s));
+    const less = v === 0 ? t("settings.windowToMax", { time: clock(r.max_s * 1000) }) : t("settings.windowLess", { step: stepText(v, -1) });
+    const more = t("settings.windowMore", { step: stepText(v, 1) });
+    if (down.title !== less) { down.title = less; down.setAttribute("aria-label", less); }
+    if (up.title !== more) { up.title = more; up.setAttribute("aria-label", more); }
+    $("set-window-none").setAttribute("aria-pressed", String(v === 0));
+    $("set-window-range").textContent = t("settings.windowRange", { min: clock(r.min_s * 1000), max: clock(r.max_s * 1000) });
     $("set-window-field").classList.toggle("bad", win.warn && document.activeElement === input);
     const msg = $("set-window-msg");
     if (msg.textContent !== win.msg) msg.textContent = win.msg;
@@ -2934,46 +3042,61 @@
   }
   function windowNote(text, warn) { win.msg = text || ""; win.warn = !!warn; }
 
-  /** Seconds from what was typed, or NaN: "2:30"; "150 s", "2 min"; a
-   *  number with decimals is minutes ("2,5"), except two decimals under 60,
-   *  which are seconds ("2,30" is 2:30, for keypads without a colon); a
-   *  whole number is minutes up to 10 and seconds from 30 (in between it
-   *  could be either). */
+  /** Seconds from what was typed, or NaN. Three forms: m:ss ("2:30"), a
+   *  number with a unit ("150 s", "2,5 min"), or a number alone: a whole
+   *  number is minutes up to 60 and seconds above ("3" is 3:00, "150" is
+   *  2:30), one with decimals is minutes ("2,5" is 2:30). 0 is no limit. */
   function parseWindow(text) {
-    let s = String(text || "").trim().toLowerCase();
-    let unit = "";
-    const u = /^(.*?)\s*(min|m|sek|sec|s)\.?$/.exec(s);
-    if (u) { s = u[1]; unit = u[2].charAt(0) === "m" ? "min" : "s"; }
-    let m = /^(\d{1,2}):(\d{1,2})$/.exec(s);
-    if (m) return unit !== "s" && Number(m[2]) < 60 ? Number(m[1]) * 60 + Number(m[2]) : NaN;
-    m = /^(\d{1,4})(?:[.,](\d{1,3}))?$/.exec(s);
+    const s = String(text || "").trim().toLowerCase().replace(",", ".");
+    let m = /^(\d{1,2}):([0-5]\d)(?:\s*min\.?)?$/.exec(s);
+    if (m) return Number(m[1]) * 60 + Number(m[2]);
+    m = /^(\d+(?:\.\d+)?)\s*(s|sec|sek|m|min)?\.?$/.exec(s);
     if (!m) return NaN;
-    const n = Number(m[1] + (m[2] ? "." + m[2] : ""));
-    if (unit === "s") return Math.round(n);
-    if (unit === "min") return Math.round(n * 60);
-    if (m[2] && m[2].length === 2 && Number(m[2]) < 60) return Number(m[1]) * 60 + Number(m[2]);
-    if (m[2] || n <= 10) return Math.round(n * 60);
-    return n >= WIN_MIN ? n : NaN;
+    const n = Number(m[1]);
+    // Decimals as typed ("60.0" too) are always minutes.
+    const minutes = m[2] ? m[2].charAt(0) === "m" : n <= 60 || m[1].includes(".");
+    const secs = minutes ? n * 60 : n;
+    // Whole seconds, as the server takes them; a limit stays a limit.
+    return secs > 0 ? Math.max(1, Math.round(secs)) : 0;
   }
-  /** `secs` within the offered range, with a note when it was moved into it. */
+  /** `secs` within the server's range, with a note when it was moved into it. */
   function clampWindow(secs) {
-    if (secs > WIN_MAX) return { secs: WIN_MAX, note: t("settings.windowMax", { time: clock(WIN_MAX * 1000) }) };
-    if (secs < WIN_MIN) return { secs: WIN_MIN, note: t("settings.windowMin", { time: clock(WIN_MIN * 1000) }) };
+    const r = winRange();
+    if (secs === 0 || !r) return { secs, note: "" };
+    if (secs > r.max_s) return { secs: r.max_s, note: t("settings.windowMax", { time: clock(r.max_s * 1000) }) };
+    if (secs < r.min_s) return { secs: r.min_s, note: t("settings.windowMin", { time: clock(r.min_s * 1000) }) };
     return { secs, note: "" };
   }
+  /** What − (`dir` -1) or + (1) does from `cur`: 15 s steps up to 10:00,
+   *  whole minutes above; from no limit, − gives the longest. */
+  function stepUnit(cur, dir) { return (dir > 0 ? cur >= WIN_FINE : cur > WIN_FINE) ? 60 : 15; }
+  function stepFrom(cur, dir, r) {
+    if (cur === 0) return dir < 0 ? r.max_s : 0;
+    const unit = stepUnit(cur, dir);
+    const next = dir > 0 ? Math.floor(cur / unit) * unit + unit : Math.ceil(cur / unit) * unit - unit;
+    return Math.min(r.max_s, Math.max(r.min_s, next));
+  }
+  const stepText = (cur, dir) => (stepUnit(cur, dir) === 60 ? t("settings.step1min") : t("settings.step15s"));
 
+  /** Saves the shot window (null: the start setting); true once saved. */
   async function saveWindow(value) {
     clearTimeout(win.timer);
     // Only the newest save's answer counts; an older one may come back later.
     const seq = ++win.seq;
+    let saved = false;
     try {
       const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shot_window_s: value }) });
-      if (seq !== win.seq) return;
-      if (st && typeof st.shot_window_s === "number") {
-        S.settings = st;
-        win.saved = { value: st.shot_window_s, at: Date.now() };
+      if (seq === win.seq) {
+        if (st && typeof st.shot_window_s === "number") {
+          S.settings = st;
+          win.saved = { value: st.shot_window_s, at: Date.now() };
+          // A state poll that left before this answer would bring back the
+          // old source line; one more poll after it puts it right.
+          tick();
+        }
+        if (win.warn) windowNote("");   // an earlier failure is past
+        saved = true;
       }
-      if (win.warn) windowNote("");   // an earlier failure is past
     } catch (x) {
       if (seq === win.seq) windowNote(t("common.notSaved", { error: x.message }), true);
     } finally {
@@ -2981,14 +3104,14 @@
       if (win.pending === value) win.pending = null;
       renderAll();
     }
+    return saved;
   }
   function stepWindow(dir) {
+    const r = winRange();
+    if (!r) return;
     const cur = winValue();
-    if (dir > 0 ? cur === 0 || cur >= WIN_MAX : cur !== 0 && cur <= WIN_MIN) return;   // at the end
-    let next;
-    if (cur === 0) next = WIN_MAX;   // from no limit, − gives the longest
-    else next = dir > 0 ? Math.floor(cur / WIN_STEP) * WIN_STEP + WIN_STEP : Math.ceil(cur / WIN_STEP) * WIN_STEP - WIN_STEP;
-    next = Math.min(WIN_MAX, Math.max(WIN_MIN, next));
+    if (dir > 0 ? cur === 0 || cur >= r.max_s : cur !== 0 && cur <= r.min_s) return;   // at the end
+    const next = stepFrom(cur, dir, r);
     if (next === cur) return;
     win.pending = next;
     windowNote("");
@@ -2998,6 +3121,43 @@
   }
   $("set-window-down").addEventListener("click", () => stepWindow(-1));
   $("set-window-up").addEventListener("click", () => stepWindow(1));
+  // No limit, saved at once; pressed again, the limit from before (else the
+  // start setting's, else the longest).
+  $("set-window-none").addEventListener("click", () => {
+    const r = winRange();
+    if (!r) return;
+    const start = S.settings.start ? S.settings.start.shot_window_s : 0;
+    // A flag may have set less than the app can (0:10): at least 0:30.
+    const next = winValue() !== 0 ? 0 : clampWindow(win.lastLimit || start || r.max_s).secs;
+    win.pending = next;
+    windowNote("");
+    renderWindow();
+    saveWindow(next);
+  });
+
+  /** Use start setting under the setting `id`: `save` sends null and says
+   *  whether it was saved. While it runs the button is aria-disabled, not
+   *  disabled, so it keeps the focus; once saved, the button goes, and the
+   *  focus moves to the line saying where the value comes from now, which
+   *  a screen reader then reads. */
+  function resetButton(id, save) {
+    const b = $(id + "-reset");
+    b.addEventListener("click", async () => {
+      if (b.getAttribute("aria-disabled") === "true") return;
+      b.setAttribute("aria-disabled", "true");
+      let saved = false;
+      try { saved = await save(); } finally { b.removeAttribute("aria-disabled"); }
+      const at = document.activeElement;
+      if (saved && b.hidden && (!at || at === b || at === document.body)) $(id + "-from-text").focus();
+    });
+  }
+  // The server's answer says what the start setting is.
+  resetButton("set-window", () => {
+    clearTimeout(win.timer);
+    win.pending = null;
+    windowNote("");
+    return saveWindow(null);
+  });
 
   /** Takes what was typed; `leaving`: the field lost focus. Returns false
    *  when it cannot be read (the note says how to write it). */
@@ -3007,7 +3167,8 @@
     if (!typed || typed === input.dataset.shown) return true;
     const secs = parseWindow(typed);
     if (!isFinite(secs)) {
-      windowNote(t("settings.windowInvalid", { min: clock(WIN_MIN * 1000), max: clock(WIN_MAX * 1000), decimal: fmt.upToOne.format(2.5) }), true);
+      const r = winRange() || { min_s: 0, max_s: 0 };
+      windowNote(t("settings.windowInvalid", { min: clock(r.min_s * 1000), max: clock(r.max_s * 1000), decimal: fmt.upToOne.format(2.5) }), true);
       if (leaving) input.value = input.dataset.shown;
       renderWindow();
       return false;
@@ -3022,7 +3183,7 @@
   }
   $("set-window").addEventListener("focus", (e) => {
     // An empty field with the time as placeholder: what is typed replaces
-    // it, and leaving it empty keeps it. No unit: 150 is seconds, 2,5 minutes.
+    // it, and leaving it empty keeps it. No unit: 3 is minutes, 150 seconds.
     const input = e.target;
     $("set-window-unit").hidden = true;
     $("set-window-field").classList.remove("none");
@@ -3033,13 +3194,14 @@
     renderWindow();
   });
   $("set-window").addEventListener("input", (e) => {
-    // What the typing comes to, so "2,30" or "150" can be checked before it is saved.
+    // What the typing comes to, so "3" or "150" can be checked before it is saved.
     const typed = e.target.value.trim();
     const secs = parseWindow(typed);
     if (!typed || !isFinite(secs)) windowNote("");
     else {
       const c = clampWindow(secs);
-      windowNote(c.note || (winText(c.secs) !== typed ? t("settings.windowIs", { time: winText(c.secs) }) : ""));
+      const is = c.secs === 0 ? t("settings.windowIsNone") : winText(c.secs) !== typed ? t("settings.windowIs", { time: winText(c.secs) }) : "";
+      windowNote(c.note || is);
     }
     renderWindow();
   });
@@ -3098,48 +3260,74 @@
     for (const b of $("set-update").querySelectorAll("button")) b.setAttribute("aria-pressed", String((b.dataset.update === "on") === on));
   }
   let updateSaving = false;
+  /** Saves the update check: true, false, or null for the start setting;
+   *  true once saved. */
+  async function saveUpdateCheck(on) {
+    if (updateSaving || !S || !S.settings) return false;
+    updateSaving = true;
+    $("set-update").setAttribute("aria-busy", "true");
+    $("set-update-error").hidden = true;
+    try {
+      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ update_check: on }) });
+      if (st && "update_check" in st) S.settings = st;
+      renderSettings();
+      tick();
+      return true;
+    } catch (x) {
+      $("set-update-error").textContent = t("common.notSaved", { error: x.message }); $("set-update-error").hidden = false;
+      return false;
+    } finally {
+      updateSaving = false;
+      $("set-update").removeAttribute("aria-busy");
+    }
+  }
   for (const b of $("set-update").querySelectorAll("button")) {
-    b.addEventListener("click", async () => {
+    b.addEventListener("click", () => {
       const on = b.dataset.update === "on";
-      if (updateSaving || !S || !S.settings || S.settings.update_check === on) return;
-      updateSaving = true;
-      $("set-update").setAttribute("aria-busy", "true");
-      $("set-update-error").hidden = true;
-      try {
-        const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ update_check: on }) });
-        if (st && "update_check" in st) S.settings = st;
-        renderSettings();
-        await tick();
-      } catch (x) {
-        $("set-update-error").textContent = t("common.notSaved", { error: x.message }); $("set-update-error").hidden = false;
-      } finally {
-        updateSaving = false;
-        $("set-update").removeAttribute("aria-busy");
-      }
+      if (S && S.settings && S.settings.update_check !== on) saveUpdateCheck(on);
     });
   }
+  resetButton("set-update", () => saveUpdateCheck(null));
 
   function hostEditor(open) {
     $("set-host-form").hidden = !open;
     $("set-host-row").hidden = open;
     $("set-host-change").setAttribute("aria-expanded", String(open));
     $("set-host-error").hidden = true;
+    $("set-host-reset-error").hidden = true;
     if (open) { $("f-host").value = (S.settings && S.settings.grinder_host) || ""; $("f-host").focus(); }
   }
   $("set-host-change").addEventListener("click", () => hostEditor(true));
   $("set-host-cancel").addEventListener("click", () => hostEditor(false));
+  // An empty field removes the address ("" to the server, which without a
+  // start address only forgets the app's one); Use start setting (null)
+  // goes back to the start address.
   $("set-host-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const v = $("f-host").value.trim();
+    if (v === (S.settings.grinder_host || "")) { hostEditor(false); return; }   // unchanged
     $("set-host-save").disabled = true; $("set-host-error").hidden = true;
     try {
-      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: v || null }) });
+      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: v }) });
       if (st && "grinder_host" in st) S.settings = st;
       hostEditor(false);
       await tick();
     } catch (x) {
       $("set-host-error").textContent = t("common.notSaved", { error: x.message }); $("set-host-error").hidden = false;
     } finally { $("set-host-save").disabled = false; }
+  });
+  resetButton("set-host", async () => {
+    $("set-host-reset-error").hidden = true;
+    try {
+      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: null }) });
+      if (st && "grinder_host" in st) S.settings = st;
+      renderSettings();
+      tick();
+      return true;
+    } catch (x) {
+      $("set-host-reset-error").textContent = t("common.notSaved", { error: x.message }); $("set-host-reset-error").hidden = false;
+      return false;
+    }
   });
 
   function renderVersion() {
@@ -3153,10 +3341,10 @@
     const failing = on && !!u.failing;
     // A known newer release stays news when GitHub fails later; "up to date"
     // does not.
-    const word = !on ? null : u.available ? ["run", "version.updateAvailable"]
-      : failing ? ["none", "version.failing"] : u.latest ? ["ok", "version.upToDate"] : null;
+    const word = !on ? null : u.available ? ["run", t("version.updateAvailable")]
+      : failing ? ["none", t("version.failing")] : u.latest ? ["ok", t("version.upToDate")] : null;
     badge.hidden = !word;
-    if (word) { setTone(badge, word[0]); badge.textContent = t(word[1]); }
+    if (word) { setTone(badge, word[0]); badge.textContent = word[1]; }
     $("v-latest-box").hidden = !on;
     $("v-latest").textContent = !on ? "–" : u.latest || (failing ? "–" : t("version.notChecked"));
     $("v-note").hidden = !on;
@@ -3173,7 +3361,7 @@
   }
 
   // --- History tab -----------------------------------------------------------------
-  const HKINDS = ["success", "aborted", "error"];
+  const HKINDS = ["succeeded", "aborted", "failed"];
   const kindLabel = (k) => (HKINDS.includes(k) ? t("history.kind." + k) : k);
   let hHidden = {};
   try { hHidden = JSON.parse(store.get("historyHidden") || "{}") || {}; } catch (_) {}
@@ -3210,36 +3398,44 @@
     return name + " · " + date;
   }
 
-  // The machine's reasons for ending a brew, and their short history titles.
-  const HISTORY_REASONS = {
-    "aborted by user": "history.abortedUser",
-    "a newer Grind-by-Sync grind replaced it": "history.replaced",
-    "the grinder stopped waiting before the shot came": "history.stoppedWaiting",
-    "the grinder refused the job": "history.refused",
-    "the grinder address changed": "history.address",
-    "the grinder no longer knows this gbs-anywhere": "start.error.unknownApp",
-  };
   function shotTitle(s) {
-    if (s.kind === "success") {
+    if (s.kind === "succeeded") {
       if (s.time_s == null) return "–";
       return s.weight_g != null ? t("unit.shot", { time: secs(s.time_s), weight: grams(s.weight_g) }) : t("unit.seconds", { time: secs(s.time_s) });
     }
-    const r = s.reason || "";
-    if (r === "no result reported in time") {
+    const cause = causeOf(s);
+    if (cause === "shot_timed_out") {
       const ms = Date.parse(s.ended_at) - Date.parse(s.at);
       return t("history.timeout", { time: isFinite(ms) ? clock(ms) : windowLabel() });
     }
-    if (HISTORY_REASONS[r]) return t(HISTORY_REASONS[r]);
-    // A reason this app does not know: as the server says it.
-    return r ? cap(r) : kindLabel(s.kind);
+    const title = causeInfo(cause).title;
+    if (title) return t(title);
+    // A cause this app does not know: as the server says it.
+    return s.reason ? cap(s.reason) : kindLabel(s.kind);
   }
   function shotSub(s) {
     const parts = [];
     const tgt = [s.target_time_s != null ? t("unit.seconds", { time: secs(s.target_time_s) }) : null,
       s.target_weight_g != null ? t("unit.grams", { weight: gramsShort(s.target_weight_g) }) : null].filter(Boolean);
     if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
-    if (s.kind === "success" && s.time_s != null && (s.time_s * 1000 <= MIN_MS || s.time_s * 1000 > MAX_MS)) parts.push(t("history.ignored"));
     return parts.join(" · ");
+  }
+  /** A success the grinder did not adjust from (too short or too long): as
+   *  the server recorded it, or for a shot saved before it did, by the same
+   *  rule from its time (once the limits are known). */
+  const ignoredShot = (s) => s.kind === "succeeded"
+    && (s.in_grinder_range ?? inGrinderRange(s.time_s == null ? null : s.time_s * 1000)) === false;
+
+  // Until it syncs, a computer's clock may still read the last shutdown
+  // time, or 1970 or the system's build date. A shot dated before the shot
+  // history existed (2026) was recorded in one of the last two cases: its
+  // day and time are not known. One dated by a last shutdown time looks
+  // right and is not caught here.
+  const CLOCK_SET_MS = Date.UTC(2026, 0, 1);
+  /** When the shot started, or null when that is not known. */
+  function shotDate(s) {
+    const d = new Date(s.at);
+    return isNaN(d) || d.getTime() < CLOCK_SET_MS ? null : d;
   }
 
   function renderHistory() {
@@ -3269,29 +3465,35 @@
         onclick: () => { hHidden[k] = on; store.set("historyHidden", JSON.stringify(hHidden)); renderHistory(); },
       }, el("span", { class: "chip" }, kindLabel(k), el("span", { class: "chip-count", text: fmt.int.format(n) })));
     }));
-    const visible = shots.filter((s) => !hHidden[s.kind]);
+    // Newest first by the time shown, so a shot dated wrongly (the clock
+    // was not set, or stepped) cannot split the days; those without a
+    // known day come last, newest recorded first.
+    const time = (x) => (x.d ? x.d.getTime() : 0);
+    const visible = shots.filter((s) => !hHidden[s.kind])
+      .map((s, i) => ({ s, d: shotDate(s), i }))
+      .sort((a, b) => time(b) - time(a) || a.i - b.i);
     const byDay = new Map();
-    for (const s of visible) {
-      const d = new Date(s.at);
-      const label = isNaN(d) ? t("history.unknownDay") : dayLabel(d);
+    for (const x of visible) {
+      const label = x.d ? dayLabel(x.d) : t("history.unknownDay");
       if (!byDay.has(label)) byDay.set(label, { label, items: [] });
-      byDay.get(label).items.push(s);
+      byDay.get(label).items.push(x);
     }
     const days = [...byDay.values()];
     groups.replaceChildren(...days.map((g) => el("section", { class: "day" },
       el("h2", { text: g.label }),
-      el("ul", null, g.items.map((s) => {
-        const d = new Date(s.at);
+      el("ul", null, g.items.map(({ s, d }) => {
         const sub = shotSub(s);
-        return el("li", { class: "k-" + s.kind },
-          el("p", { class: "h-time", text: isNaN(d) ? "–" : hhmm(d) }),
+        const ignored = ignoredShot(s);
+        return el("li", { class: "k-" + (ignored ? "ignored" : s.kind) },
+          el("p", { class: "h-time", text: d ? hhmm(d) : "–" }),
           el("div", { class: "h-main" }, el("p", { class: "h-title", text: shotTitle(s) }), sub ? el("p", { class: "h-sub", text: sub }) : null),
-          el("span", { class: "h-badge", text: kindLabel(s.kind) }));
+          el("span", { class: "h-badge", text: ignored ? t("history.ignored") : kindLabel(s.kind) }));
       })))));
     empty.hidden = visible.length > 0;
-    empty.textContent = t(shots.length === 0 ? "history.empty" : "history.noMatch");
+    empty.textContent = shots.length === 0 ? t("history.empty") : t("history.noMatch");
     foot.hidden = false;
-    foot.textContent = t(hist.persistent === false ? "history.keptMemory" : "history.kept", { n: hist.capacity || 200 });
+    const kept = { n: hist.capacity || 200 };
+    foot.textContent = hist.persistent === false ? t("history.keptMemory", kept) : t("history.kept", kept);
   }
 
   // --- Log ---------------------------------------------------------------------
@@ -3422,7 +3624,7 @@
     $("log-lines").classList.toggle("warn-only", log.warnOnly);
     const live = window.EventSource ? log.connected : log.state === "live" && online;
     $("log-live-block").classList.toggle("on", log.follow && live);
-    $("log-live-text").textContent = t(!live ? "log.reconnecting" : log.follow ? "log.live" : "log.paused");
+    $("log-live-text").textContent = !live ? t("log.reconnecting") : log.follow ? t("log.live") : t("log.paused");
     // A status region announces every change, so only real ones.
     if (!log.done && $("log-note").textContent !== LOG_NOTE()) $("log-note").textContent = LOG_NOTE();
     if (!log.done) $("log-note").classList.remove("done");
@@ -3543,12 +3745,12 @@
     let lines = log.lines.filter((l) => Date.parse(l.ts) >= since && (!log.warnOnly || l.level !== "info"));
     if (lines.length > 500) lines = lines.slice(-500);
     if (!lines.length) {
-      logDone("note", t(log.warnOnly ? "log.nothingWarnings" : "log.nothingLines"));
+      logDone("note", log.warnOnly ? t("log.nothingWarnings") : t("log.nothingLines"));
       return;
     }
     const filter = log.warnOnly ? "warnings only" : "all levels";
     const text = exportText(lines, filter);
-    const note = t(log.warnOnly ? "log.copiedWarn" : "log.copied", { n: lines.length });
+    const note = log.warnOnly ? t("log.copiedWarn", { n: lines.length }) : t("log.copied", { n: lines.length });
     if (await copyText(text)) { logDone("copy", note); return; }
     // Copying is blocked: show the text to copy by hand.
     const ta = el("textarea", { readonly: true, "aria-label": t("log.copySheet.label") });

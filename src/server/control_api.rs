@@ -5,18 +5,18 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations (each status line also as `detail_key` and `detail_vars`, for wording it in another language), settings, update check; `boot_id` changes on every start, so an app can tell its event and log numbers start over |
-//! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them; they win over flags from then on |
+//! | GET | `/api/state` | version, phase, current mako reply, grind gate, last shot/grind, grinder link, integrations (each status line also as `detail_key` and `detail_vars`, for wording it in another language), settings (with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit), update check; `boot_id` changes on every start, so an app can tell its event and log numbers start over; `grinder_range`: the shot times the grinder adjusts from, over `min_ms` and up to `max_ms` (10 000 and 80 000), as `in_grinder_range` checks them |
+//! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them; they win over flags from then on. `null` goes back to the start setting (the flag or environment variable, else the default); `"grinder_host":""` removes the address (without a start address, the same as `null`). Replies with the settings as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
 //! | GET | `/api/integrations/<id>/settings` | the settings of one added in the app, without passwords (`secrets_set` names the ones that are set) |
 //! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes one added in the app and restarts it; a password left out or empty stays |
 //! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app |
-//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first; `capacity` (200); `persistent`: whether they survive a restart |
+//! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first: how each ended as `kind` (`succeeded`, `aborted` or `failed`), `at` and `ended_at` (UTC, whole seconds; `ended_at` as the clock read when the shot ended, `at` counted back from it by the shot's length on a clock that does not jump), each that succeeded with `in_grinder_range` as on `shot_reported` (none on shots saved by earlier builds), each other with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart (false while saving fails) |
 //! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (`level`: `info`, `warn` or `error`) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
 //! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`); `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
-//! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened |
+//! | GET | `/api/events?after=N` | events with `seq > N`; `age_ms` says how long ago each happened; `shot_reported` says with `in_grinder_range` whether the grinder adjusts from its time (see `grinder_range`); `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` — ends the brew with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the brew as a user abort (grinder skips it) |
@@ -30,7 +30,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::protocol::machine::EventRecord;
-use crate::protocol::{MachineError, MakoState, ShotResult};
+use crate::protocol::{
+    MAX_EXTRACTION_TIME_MS, MIN_EXTRACTION_TIME_MS, MachineError, MakoState, ShotResult,
+};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode, header};
@@ -42,10 +44,13 @@ use serde_json::{Map, Value, json};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::integration::{self, ChangeError, Settings};
+use crate::server::browser::{self, AllowedHosts};
 use crate::server::logbook::{self, LogLine};
 use crate::server::{Server, SettingsChange, history};
 
-pub fn control_router(state: Arc<Server>) -> axum::Router {
+/// The app's routes, answering only to home-network host names (`hosts`
+/// adds more) and refusing writes from other sites.
+pub fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::Router {
     axum::Router::new()
         .route("/", get(app_page))
         .route("/icons/{name}", get(icon))
@@ -73,6 +78,7 @@ pub fn control_router(state: Arc<Server>) -> axum::Router {
         .route("/api/machine", post(patch_machine))
         .route("/api/grinder/pairing", post(grinder_pairing))
         .route("/api/overrides", put(put_overrides).delete(clear_overrides))
+        .route_layer(axum::middleware::from_fn_with_state(hosts, browser::guard))
         .with_state(state)
 }
 
@@ -93,6 +99,10 @@ pub fn state_json(x: &Server) -> Value {
             "grind_blocked": blocked,
             "last_shot": m.last_shot(),
             "last_grind": m.last_grind(),
+            "grinder_range": {
+                "min_ms": MIN_EXTRACTION_TIME_MS,
+                "max_ms": MAX_EXTRACTION_TIME_MS,
+            },
             "overrides": m.overrides,
             "grinder": {
                 "peer": link.peer,
@@ -112,8 +122,14 @@ pub fn state_json(x: &Server) -> Value {
     })
 }
 
-async fn app_page() -> axum::response::Html<&'static str> {
-    axum::response::Html(include_str!("../../web/index.html"))
+async fn app_page() -> impl IntoResponse {
+    (
+        [
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
+            (header::REFERRER_POLICY, "no-referrer"),
+        ],
+        axum::response::Html(include_str!("../../web/index.html")),
+    )
 }
 
 /// Browsers ask for these by themselves; not answered here, they would reach
@@ -666,6 +682,70 @@ mod tests {
         assert!(used.len() > 100, "the page's keys were found");
         let unknown: Vec<_> = used.iter().filter(|k| !known(k)).collect();
         assert!(unknown.is_empty(), "keys not in the catalog: {unknown:?}");
+    }
+
+    #[test]
+    fn the_page_knows_every_abort_cause() {
+        use crate::protocol::AbortCause;
+        // The page's `CAUSES` table, one `    <code>: { … },` line per cause.
+        let start = PAGE
+            .find("\n  const CAUSES = {\n")
+            .expect("the CAUSES table");
+        let table = &PAGE[start..];
+        let table = &table[..table.find("\n  };").expect("end of CAUSES")];
+        let rows: BTreeMap<_, _> = table
+            .lines()
+            .filter_map(|line| line.strip_prefix("    ")?.split_once(": {"))
+            .collect();
+        let en = catalog("en");
+        let mut codes = BTreeSet::new();
+        for cause in AbortCause::ALL {
+            let code = serde_json::to_value(cause).unwrap();
+            let code = code.as_str().unwrap().to_owned();
+            let row = rows
+                .get(code.as_str())
+                .unwrap_or_else(|| panic!("{code} is not in CAUSES"));
+            let on_purpose = format!("onPurpose: {}", cause.on_purpose());
+            assert!(row.contains(&on_purpose), "{code}: not {on_purpose}");
+            // A timeout's texts say how long it waited, and the history's
+            // own cause never reaches the Start tab.
+            if cause != AbortCause::ShotTimedOut {
+                assert!(row.contains("title: \""), "{code}: no history title");
+                if cause != AbortCause::ShotEndMissed {
+                    assert!(row.contains("text: \""), "{code}: no Start tab text");
+                }
+            }
+            for key in row.split('"').skip(1).step_by(2) {
+                assert!(en.contains_key(key), "{code}: {key} is not in the catalog");
+            }
+            codes.insert(code);
+        }
+        let stale: Vec<_> = rows.keys().filter(|k| !codes.contains(**k)).collect();
+        assert!(stale.is_empty(), "not a cause: {stale:?}");
+    }
+
+    #[test]
+    fn the_page_knows_every_shot_kind() {
+        use crate::server::history::ShotKind;
+        let all = [ShotKind::Succeeded, ShotKind::Aborted, ShotKind::Failed];
+        for kind in all {
+            // No wildcard, so a new kind has to be named here, next to
+            // `all`, as a reminder to add it there too.
+            match kind {
+                ShotKind::Succeeded | ShotKind::Aborted | ShotKind::Failed => {}
+            }
+        }
+        let en = catalog("en");
+        for kind in all {
+            let code = serde_json::to_value(kind).unwrap();
+            let code = code.as_str().unwrap();
+            assert!(
+                PAGE.contains(&format!("\n  .k-{code} {{")),
+                "no .k-{code} colours"
+            );
+            let key = format!("history.kind.{code}");
+            assert!(en.contains_key(key.as_str()), "{key} is not in the catalog");
+        }
     }
 
     #[test]

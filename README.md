@@ -50,6 +50,17 @@ Give the computer, and an E65/E80 grinder, a fixed IP or a DHCP reservation
 in your router: the grinder and your phone need the computer's address (e.g.
 `192.168.1.20`). Port 80 must be free and allowed in the firewall.
 
+gbs-anywhere is for your home network: the app has no login, so don't make
+it reachable from the internet (no port forwarding to it). `-p 80:80` opens
+the port on every network the computer is on; on a NAS or server with more
+than one, `-p 192.168.1.20:80:80` keeps it to the home network. Open the app
+by the computer's IP address or a home-network name: a name without a dot,
+or one ending in `.local`, `.localhost`, `.lan`, `.home`, `.home.arpa`,
+`.internal`, `.localdomain` or `.fritz.box`. Any other name, such as a Tailscale
+name like `gbs.tail1234.ts.net`, needs `--allow-host`, with the name given in
+full. Behind a reverse proxy, pass the `Host` header through and allow the
+proxy's name the same way.
+
 `latest` is the newest release; pin one with e.g. `:0.2`, or follow
 `:nightly`, built each night from `main`. The app shows its version under
 **Status** (and at the bottom of the other tabs); what changed is in
@@ -60,7 +71,8 @@ gbs-anywhere asks GitHub for its latest release, and the gbs-anywhere card
 under **Status** says when a newer one is out. GitHub sees the request like
 any other, including your IP address; it carries nothing but the
 gbs-anywhere version. Turn it off under **Status → Settings**, or with
-`--update-check off` (`UPDATE_CHECK=off` in Docker).
+`--update-check off` (`UPDATE_CHECK=off` in Docker). It goes through a proxy
+if `HTTPS_PROXY` is set; the link to an E65/E80 grinder never does.
 
 **To update** with Docker, get the new image and re-create the container
 with the same command and volume: `docker pull ghcr.io/skamba/gbs-anywhere`,
@@ -234,26 +246,44 @@ line can stay as it is:
 
 - **Time to pull the shot**: how long gbs-anywhere waits for a shot's time
   and weight before it gives up on that shot (`--brew-timeout-s`, 3 minutes
-  unless set). In the app it goes from 0:30 to 10:00 minutes.
+  unless set). In the app it goes from 0:30 to 60:00 minutes, or **No
+  limit**. − and + change it in 15 s steps (whole minutes above 10:00). To
+  type it, a whole number is minutes up to 60 and seconds above (`3` is
+  3:00, `150` is 2:30), and one with decimals is minutes (`2.5` is 2:30),
+  which works on a phone's number pad; `m:ss` (`2:30`) and a number with a
+  unit (`150 s`) work too. `0` is no limit.
 - **Grinder IP address**: the E65/E80 GbS to pair with (`--grinder`,
   `GRINDER_HOST`), optionally with `:port`. A new address takes effect at
-  once and keeps the pairing; removing it stops pairing, also when
-  `GRINDER_HOST` is set and after a restart.
+  once and keeps the pairing. Saving the field empty removes the address and
+  stops pairing, also when `GRINDER_HOST` is set and after a restart
+  (without `GRINDER_HOST`, it only forgets the app's address, so one set
+  later counts).
 - **Update check**: whether gbs-anywhere looks for a newer release once a
   day (see [Update check](#run-it); `--update-check`, `UPDATE_CHECK`, on
   unless set).
 
-A setting changed in the app is saved in the settings file and wins over its
+Under each one the app says where its value comes from: the default, the
+start settings (a flag or environment variable), or set in the app. A
+setting changed in the app is saved in the settings file and wins over its
 flag from then on; without a settings file it lasts until the next restart.
-To go back to the flags, stop gbs-anywhere and remove `settings` from the
-settings file (`/data/gbs-anywhere.json` in Docker).
+**Use start setting** forgets the app's value, so the flag or environment
+variable counts again, or the default when neither is set. For the grinder
+address, that is the way back to `GRINDER_HOST`; an empty field instead
+means no grinder, whatever `GRINDER_HOST` says.
+
+In the API (`PUT /api/settings`), `null` goes back to the start setting,
+like **Use start setting**. For `grinder_host` that is not the same as
+removing the address, which is `""`; without `GRINDER_HOST`, the two are
+the same.
+
 **Appearance** (System, Light, Dark) and **Language** (Auto, English,
 Deutsch) sit in the same card but are kept on each device: by default the app
 follows the device's light or dark mode and its language.
 
 The **History** tab shows the last 200 shots the grinder asked for, with
-their time, weight and target (kept in `history.json` next to the settings
-file). The **Log** card at the bottom of **Status** (also opened with **Log**
+their time, weight and target, and marks the ones the grinder ignored as
+too short or too long (kept in `history.json` next to the settings file).
+The **Log** card at the bottom of **Status** (also opened with **Log**
 next to the last error in System status) shows the last 1,000 lines of
 gbs-anywhere's log (INFO and up, as `docker logs` prints them by default),
 ready to copy into a bug report.
@@ -269,6 +299,8 @@ Extra flags go after the image name (Docker) or after `--` (cargo):
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
 | `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
 | `-p, --ports <list>` | 80 | ports to serve on |
+| `--allow-host <names>` | off | also open the app by these host names, each in full (e.g. `gbs.tail1234.ts.net`), comma-separated; `*` alone allows any name, even that of a web page that re-points its own name to this address; the IP address and home-network names always work; also `ALLOW_HOST` |
+| `--accept-browser-headers` | off | let requests with browser headers reach the E64 WS's routes; only if the log says your E64 WS was refused (then please report it) |
 | `--grinder <host>` | off | pair with this E65/E80 GbS over its "Generic WiFi" option; also `GRINDER_HOST`; an address set in the app wins |
 | `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing across restarts; also `GRINDER_PAIRING_FILE` |
 | `--grinder-pairing-id <id>` | off | the pairing ID the grinder shows, used when none is saved or the grinder refuses the saved one (the app can take it too); also `GRINDER_PAIRING_ID` |
@@ -292,6 +324,11 @@ The API has no login: anyone on your network who can open the app can add,
 change or remove integrations, change the settings, including the grinder
 address, and read the log, as they can report shots. Passwords are never
 sent back.
+A web page opened on a phone in your network cannot use the API: it answers
+only to home-network host names and refuses changes requested from other
+sites, and the grinder's routes refuse changes from browsers. Such a page
+can at most read the machine state the grinder polls, which holds nothing
+private.
 
 ## Build and contribute
 

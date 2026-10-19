@@ -6,6 +6,24 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Security
+
+- Web pages can no longer use gbs-anywhere through a browser in the home
+  network. The app answers only to its IP address and home-network host
+  names (`--allow-host` / `ALLOW_HOST` adds more, each by its full name;
+  `*` alone allows any) and refuses changes requested from other sites. The
+  grinder's routes refuse what a browser sends with its headers, which
+  every change from a page does, and no longer let other sites read their
+  replies. A page that re-points its own name to gbs-anywhere's address can
+  still read the machine state the grinder polls, which holds nothing
+  private. Requests to the grinder's routes are limited to 4 KiB. A refused
+  request is logged once per device; should an E64 WS ever be refused,
+  `--accept-browser-headers` lets it through.
+- The E65/E80 pairing file is readable by its owner only, like the settings
+  file and the shot history; any of them that others could read, say one
+  from an earlier version, is made so when gbs-anywhere starts. Messages
+  from the Half Decent Scale are limited in size.
+
 ### Added
 
 - E65/E80 GbS grinders (E65W, E65T, E80W, E80T): `--grinder <address>`
@@ -25,14 +43,23 @@ a minor release may change behaviour.
   standby, the log says so once rather than every minute. Tested with the
   E65W GbS.
 - Settings in the app: the shot window (how long gbs-anywhere waits for a
-  shot's numbers: 0:30 to 10:00 minutes in the app, with − and + in 15 s
-  steps or typed in) and the E65/E80 grinder's address (an IP
-  address or name, optionally with `:port`). A new address takes
-  effect at once and keeps the pairing. A setting changed in the app is
-  saved in the settings file and wins over `--brew-timeout-s` or
-  `--grinder` from then on (`PUT /api/settings`, `settings` in
-  `GET /api/state`). Going back to an earlier version forgets the settings
-  changed in the app.
+  shot's numbers: 0:30 to 60:00 minutes or no limit, as in the API, with −
+  and +, **No limit**, or typed as `2:30`, `150 s` or a number alone: a
+  whole number is minutes up to 60 and seconds above, one with decimals is
+  minutes) and the E65/E80 grinder's address (an IP address or name,
+  optionally with `:port`). A new address takes effect at once and keeps
+  the pairing. A setting changed in the app is saved in the settings file
+  and wins over `--brew-timeout-s` or `--grinder` from then on
+  (`PUT /api/settings`, `settings` in `GET /api/state`). The app shows
+  where each value comes from (default, start settings, or set in the
+  app), and **Use start setting** goes back to the flag or environment
+  variable, else the default. In `PUT /api/settings`, `null` does the same
+  for each setting, and `"grinder_host": ""` removes the address (without
+  a start address, the same as `null`); `null` does not remove it.
+  `settings` also carries the range the app can set (`shot_window_range`).
+  The settings file keeps settings it does not know, saved by a newer
+  version. Going back to an earlier version forgets the settings changed
+  in the app.
 - Integrations added in the app can be changed there; a password left empty
   keeps the saved one. An integration set with flags can be moved into the
   app, with all its settings, so nothing has to be typed again; its flags
@@ -40,8 +67,19 @@ a minor release may change behaviour.
   removed (`GET /api/integrations/<id>/settings`,
   `PUT /api/integrations/<id>`, `POST /api/integrations/<id>/adopt`).
 - Shot history: the last 200 shots the grinder asked for, with time, weight,
-  target and how they ended, kept in `history.json` next to the settings
-  file (`GET /api/history`).
+  target and how they ended (`kind`: `succeeded`, `aborted` or `failed`),
+  kept in `history.json` next to the settings file (`GET /api/history`).
+  A shot is dated by the clock when it ends, and its length is counted on
+  a clock that does not jump, so a computer that sets its clock from the
+  network during a shot keeps both right. Until it syncs, a clock may still
+  read the last shutdown time, or 1970 or the system's build date; shots
+  dated before 2026 are listed last, under "Unknown day". When the file can
+  no longer be saved, the app says the history is kept in memory for now.
+- `grinder_range` in `GET /api/state`: the shot times the grinder adjusts
+  from (over 10 s, up to 80 s); and `in_grinder_range` on each shot in
+  `GET /api/history` that succeeded: whether the grinder adjusted from it.
+  The History tab shows a shot the grinder ignored with a grey **Ignored**
+  badge instead of a green **Success**.
 - The app can show gbs-anywhere's log, in a card at the bottom of Status
   (also opened with **Log** next to the last error in System status): the
   last 1,000 lines it printed (INFO and up), and new ones as they come
@@ -64,6 +102,11 @@ a minor release may change behaviour.
 - `age_ms` on each event in `GET /api/events` and the event stream: how long
   ago it happened, so an app that catches up after a gap shows the right
   times.
+- `cause` on `shot_aborted` events and on each shot in `GET /api/history`
+  that was not a success: why it ended as a fixed code
+  (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, …) for
+  apps to match on, next to the English `reason`. Shots saved by earlier
+  builds get theirs from `reason`.
 - `detail_key` and `detail_vars` on each integration in `GET /api/state`:
   its status line as a key and values (such as `time_s`, `weight_g`), next
   to the English `detail`. The app uses them, and its own catalog for the
@@ -87,6 +130,9 @@ a minor release may change behaviour.
 
 ### Changed
 
+- The app tells a stop made on purpose from an error by `cause`, not by the
+  English words, and a shot still open when the next one started gets its
+  own title in the history.
 - What the machine does (grind received, brew started, shot shown to the
   grinder) is now logged with a time and level like every other line, so it
   also shows in the app's log. The grinder's requests behind a grind and a
@@ -98,6 +144,8 @@ a minor release may change behaviour.
 - `--grinder` refuses an address that cannot be one (for example with a
   space in it) at startup, instead of failing on every request.
 - A fractional `--brew-timeout-s` is rounded to whole seconds.
+- `in_grinder_range` on `shot_reported` events is now also false for a
+  shot of 10 s or less, which the grinder does not adjust from either.
 - The La Marzocco form calls its poll setting "Check interval (seconds)" and
   says what it does; the Half Decent Scale form asks for the scale's IP
   address.
