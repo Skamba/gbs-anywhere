@@ -210,6 +210,11 @@ pub struct WifiLink {
     /// While asking: the last pairing ID the grinder did not take, so the
     /// app can say so.
     pub unknown_pairing_id: Option<u32>,
+    /// The grinder restarted while pairing (as the E65W does on the accept)
+    /// and came back without the pairing request: a pairing accepted before
+    /// did not stick, and the app asks to accept again. Cleared once paired,
+    /// or once the grinder turns out to have the pairing after all.
+    pub pairing_lost: bool,
     /// What is going on, in one sentence.
     pub detail: String,
     /// What went wrong with the last shot, until the next one goes through.
@@ -409,6 +414,9 @@ pub struct WifiGrinder {
     /// further failures are not logged until it answers again, and the app
     /// says so (`WifiLink::unreachable`).
     unreachable: bool,
+    /// The grinder came back from a restart without the pairing request (see
+    /// `WifiLink::pairing_lost`).
+    pairing_lost: bool,
 }
 
 impl WifiGrinder {
@@ -456,6 +464,7 @@ impl WifiGrinder {
             polls: 0,
             problem: None,
             unreachable: false,
+            pairing_lost: false,
             owner: 0,
             lock,
             holding,
@@ -546,8 +555,14 @@ impl WifiGrinder {
         }
         let code = res.pairing_code;
         let detail = format!(
-            "on the grinder, open Generic WiFi, Configuration, start pairing and accept \
+            "{}on the grinder, open Generic WiFi, Configuration, start pairing and accept \
              gbs-anywhere{}",
+            if self.pairing_lost {
+                "the grinder restarted without the pairing request, so an accepted pairing did not \
+                 stick: "
+            } else {
+                ""
+            },
             code.map_or(String::new(), |c| format!(" (code {c})"))
         );
         tracing::info!("grinder: {detail}");
@@ -571,6 +586,7 @@ impl WifiGrinder {
                         "grinder: it no longer has the pairing request (it restarted?), asking \
                          again"
                     );
+                    self.pairing_lost = true;
                 } else {
                     tracing::info!("grinder: the pairing request expired, asking again");
                 }
@@ -633,6 +649,8 @@ impl WifiGrinder {
                           Pairing ID the grinder shows in its gbs-anywhere entry (Configuration)"
             .to_owned();
         let mut unknown = None;
+        // The grinder has the pairing: whatever restarted, it stuck.
+        self.pairing_lost = false;
         // The ID it refused for a while, in case it refused it only then.
         if let Some(id) = self.pairing.refused_pairing_id {
             let reply = self.post(wifi::PATH_BREW_JOBS, &Paired::new(id)).await?;
@@ -687,6 +705,7 @@ impl WifiGrinder {
     }
 
     fn use_pairing_id(&mut self, id: u32) -> anyhow::Result<()> {
+        self.pairing_lost = false;
         self.pairing.pairing_id = Some(id);
         self.pairing.refused_pairing_id = None;
         self.pairing.save(self.cfg.pairing_file.as_deref())
@@ -1086,6 +1105,7 @@ impl WifiGrinder {
             pairing_code,
             needs_pairing_id: false,
             unknown_pairing_id: None,
+            pairing_lost: self.pairing_lost,
             detail,
             problem: self.problem.clone(),
             pairing_id: self.pairing.pairing_id,
@@ -1110,6 +1130,7 @@ impl WifiGrinder {
                 pairing_code: None,
                 needs_pairing_id: true,
                 unknown_pairing_id: unknown,
+                pairing_lost: false,
                 detail: detail.to_owned(),
                 problem: None,
                 pairing_id: None,

@@ -84,6 +84,7 @@
   "pair.id.range": "The pairing ID is a number from 1 to 65535.",
   "pair.id.unknown": "The grinder did not take pairing ID {id}. Check the number it shows and enter it again.",
   "pair.accept.text": "On the grinder, open Connectivity → Machine To Machine → Generic WiFi → Configuration, tap Start Pairing, then Accept Pairing.",
+  "pair.lost": "If you had accepted, the pairing didn't stick: the grinder lost it when it restarted. This can take a few tries, so accept gbs-anywhere again.",
   "pair.id.text": "The grinder has gbs-anywhere paired, but its pairing ID is missing here. The grinder shows it as Pairing ID under Generic WiFi → Configuration.",
 
   "badge.start": "Grind",
