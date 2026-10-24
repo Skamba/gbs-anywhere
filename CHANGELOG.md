@@ -6,6 +6,67 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-24
+
+### Changed (breaking)
+
+The API's names now follow one pattern, before more apps come to rely on
+them: `GET /api/state` comes in groups (`shot`, `grinder`, `machine`,
+`integrations`, `settings`, `update`, `server`), an event is named by what
+happened to whom (`grinder_shot_requested`, `shot_started`), a state is one
+word, and units are in the name (`_ms`, `_s`, `_g`). Scripts and
+automations written for 0.2.1 need the changes below; the app, the grinder
+and shots typed in on the phone are not affected. `--brew-timeout-s` and
+`volume_ml` in `POST /api/shot/result` are still accepted, and a shot
+history saved by a nightly build is read as before. Going back to a nightly
+build from before this change loses the shot history, as those builds
+can't read the names it is now saved with.
+
+`GET /api/state`, and the same state as the reply of `POST /api/shot/*`,
+`POST /api/machine` and `PUT`/`DELETE /api/overrides`:
+
+| 0.2.1 | now |
+|---|---|
+| `phase.phase`: `ready`, `brewing`, `finishing` (with `requested_by_grinder`, `result`, `aborted`) | `shot.phase`: `ready`, `running`, `finishing` (with the same fields in `shot`) |
+| `last_shot` | `shot.last` |
+| `volume_ml` in a shot's result (`phase.result`, `last_shot`, `integrations[].last_report`) | `weight_g` |
+| `last_grind` (`beverage_weight_g`, `filter`, `raw`) | `grinder.last_grind` (`target_weight_g`, `filter`, `raw`) |
+| `grind_blocked.reason`: `standby`, `eco`, `brewing`, `testing`, `fault`, `warming_up`, `tank_empty`, `not_connected` | `grinder.grind_blocked.cause`: `machine_in_standby`, `machine_in_eco`, `shot_running`, `machine_testing`, `machine_faulty`, `machine_warming_up`, `machine_tank_empty` (`not_connected` was never sent) |
+| `grinder` (`peer`, `polls`, `requests`, `last_poll_age_ms`) | the same, in `grinder` |
+| `mako`, `overrides`, `config` | `machine.mako`, `machine.overrides`, `machine.config` |
+| `config.brew_timeout`, `config.finishing_hold` (`{"secs":…,"nanos":…}`) | `machine.config.shot_window_s` (whole seconds, 0 for no limit, as in `settings`), `machine.config.finishing_hold_s` (seconds, as `--finishing-hold-s` takes them) |
+| `health` of an integration: `error` | `failing` |
+| `since_ms` of an integration | `health_age_ms` |
+| `last_seq`, `version` | `server.last_event_seq`, `server.version` |
+
+Events (`GET /api/events`, `GET /api/events/stream`):
+
+| 0.2.1 | now |
+|---|---|
+| `grind_result` (`result.beverage_weight_g`) | `grinder_grind_finished` (`result.target_weight_g`) |
+| `start_requested` | `grinder_shot_requested` (for an E65/E80 too, with `target_time_ms`) |
+| `brew_started` | `shot_started` |
+| `shot_reported` (`result.volume_ml`) | `shot_reported` (`result.weight_g`) |
+| `shot_reported`: `in_grinder_range`, `true` or `false` (`false` only over 80 s) | `true`, `false` or `null`: by the window of the grinder's request (for the E64 WS over 10 s and up to 80 s, see `grinder.shot_range`), `null` when that is not known |
+| `shot_aborted` | unchanged, with `cause` added |
+| `ready` | `shot_finished` |
+
+Elsewhere:
+
+| 0.2.1 | now |
+|---|---|
+| `POST /api/shot/result` with `volume_ml` | `weight_g` (`volume_ml` still works) |
+| `DELETE /api/integrations/<id>` replies `{"removed":"<id>"}` | `{"id":"<id>"}`, as adding one does |
+| errors reply `{"error":"<sentence>"}`, or plain text for a body or query that can't be read | `{"error":"<sentence>","code":"<code>"}` for both: match on `code` (`shot_not_running`, `shot_already_running`, `integration_not_found`, `request_invalid`, …), as the words may change; "no brew is running" now reads "no shot is running", and "a brew is already running" "a shot is already running" |
+| `--brew-timeout-s` | `--shot-window-s` (the old name still works) |
+
+For example, an automation that waits for `brew_started` now waits for
+`shot_started`; one that checks `phase.phase == "brewing"` now checks
+`shot.phase == "running"`; and one that reads `last_shot.volume_ml` now
+reads `shot.last.weight_g`. One that only reacts to `shot_reported` and
+`shot_aborted` keeps working, unless it reads the weight or
+`in_grinder_range`.
+
 ### Security
 
 - Web pages can no longer use gbs-anywhere through a browser in the home
@@ -141,65 +202,6 @@ a minor release may change behaviour.
   matches the server.
 - The image carries the licenses of the Rust crates built into it, in
   `/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES`.
-
-### Changed (breaking)
-
-The API's names now follow one pattern, before more apps come to rely on
-them: `GET /api/state` comes in groups (`shot`, `grinder`, `machine`,
-`integrations`, `settings`, `update`, `server`), an event is named by what
-happened to whom (`grinder_shot_requested`, `shot_started`), a state is one
-word, and units are in the name (`_ms`, `_s`, `_g`). Scripts and
-automations written for 0.2.1 need the changes below; the app, the grinder
-and shots typed in on the phone are not affected. `--brew-timeout-s` and
-`volume_ml` in `POST /api/shot/result` are still accepted, and a shot
-history saved by a nightly build is read as before. Going back to a nightly
-build from before this change loses the shot history, as those builds
-can't read the names it is now saved with.
-
-`GET /api/state`, and the same state as the reply of `POST /api/shot/*`,
-`POST /api/machine` and `PUT`/`DELETE /api/overrides`:
-
-| 0.2.1 | now |
-|---|---|
-| `phase.phase`: `ready`, `brewing`, `finishing` (with `requested_by_grinder`, `result`, `aborted`) | `shot.phase`: `ready`, `running`, `finishing` (with the same fields in `shot`) |
-| `last_shot` | `shot.last` |
-| `volume_ml` in a shot's result (`phase.result`, `last_shot`, `integrations[].last_report`) | `weight_g` |
-| `last_grind` (`beverage_weight_g`, `filter`, `raw`) | `grinder.last_grind` (`target_weight_g`, `filter`, `raw`) |
-| `grind_blocked.reason`: `standby`, `eco`, `brewing`, `testing`, `fault`, `warming_up`, `tank_empty`, `not_connected` | `grinder.grind_blocked.cause`: `machine_in_standby`, `machine_in_eco`, `shot_running`, `machine_testing`, `machine_faulty`, `machine_warming_up`, `machine_tank_empty` (`not_connected` was never sent) |
-| `grinder` (`peer`, `polls`, `requests`, `last_poll_age_ms`) | the same, in `grinder` |
-| `mako`, `overrides`, `config` | `machine.mako`, `machine.overrides`, `machine.config` |
-| `config.brew_timeout`, `config.finishing_hold` (`{"secs":…,"nanos":…}`) | `machine.config.shot_window_s` (whole seconds, 0 for no limit, as in `settings`), `machine.config.finishing_hold_s` (seconds, as `--finishing-hold-s` takes them) |
-| `health` of an integration: `error` | `failing` |
-| `since_ms` of an integration | `health_age_ms` |
-| `last_seq`, `version` | `server.last_event_seq`, `server.version` |
-
-Events (`GET /api/events`, `GET /api/events/stream`):
-
-| 0.2.1 | now |
-|---|---|
-| `grind_result` (`result.beverage_weight_g`) | `grinder_grind_finished` (`result.target_weight_g`) |
-| `start_requested` | `grinder_shot_requested` (for an E65/E80 too, with `target_time_ms`) |
-| `brew_started` | `shot_started` |
-| `shot_reported` (`result.volume_ml`) | `shot_reported` (`result.weight_g`) |
-| `shot_reported`: `in_grinder_range`, `true` or `false` (`false` only over 80 s) | `true`, `false` or `null`: by the window of the grinder's request (for the E64 WS over 10 s and up to 80 s, see `grinder.shot_range`), `null` when that is not known |
-| `shot_aborted` | unchanged, with `cause` added |
-| `ready` | `shot_finished` |
-
-Elsewhere:
-
-| 0.2.1 | now |
-|---|---|
-| `POST /api/shot/result` with `volume_ml` | `weight_g` (`volume_ml` still works) |
-| `DELETE /api/integrations/<id>` replies `{"removed":"<id>"}` | `{"id":"<id>"}`, as adding one does |
-| errors reply `{"error":"<sentence>"}`, or plain text for a body or query that can't be read | `{"error":"<sentence>","code":"<code>"}` for both: match on `code` (`shot_not_running`, `shot_already_running`, `integration_not_found`, `request_invalid`, …), as the words may change; "no brew is running" now reads "no shot is running", and "a brew is already running" "a shot is already running" |
-| `--brew-timeout-s` | `--shot-window-s` (the old name still works) |
-
-For example, an automation that waits for `brew_started` now waits for
-`shot_started`; one that checks `phase.phase == "brewing"` now checks
-`shot.phase == "running"`; and one that reads `last_shot.volume_ml` now
-reads `shot.last.weight_g`. One that only reacts to `shot_reported` and
-`shot_aborted` keeps working, unless it reads the weight or
-`in_grinder_range`.
 
 ### Changed
 
