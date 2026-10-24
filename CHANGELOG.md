@@ -6,6 +6,11 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Fixed
+
+- The log in the app shows each line's time again, and **Copy** finds the
+  lines of the last hour; both were broken since 0.3.0.
+
 ## [0.3.1] - 2026-10-24
 
 The app is the same as in 0.3.0; this release adds a way to run it without
