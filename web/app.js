@@ -723,13 +723,14 @@
     else if (f.sc === "ready" && (sys.key === "linking" || sys.key === "pairing")) plan = [["wait", "waiting"], ["none", ""], ["none", ""]];
 
     // Which step is open: the running or failed one opens by itself when the
-    // shot moves on; otherwise step 1, or none during a stop (System status
-    // tells why). A tap overrides it until then.
+    // shot moves on, step 3 with the result once done; otherwise step 1, or
+    // none during a stop (System status tells why). A tap overrides it until
+    // then.
     const key = f.sc + ":" + (f.outcome ? f.outcome.seq : 0) + ":" + (f.job ? f.job.seq : 0) + ":" + (stop ? sys.key : "") + ":" + ui.typeIn;
     if (key !== ui.planKey) {
       ui.planKey = key;
       const auto = plan.findIndex(([tone]) => tone === "run" || tone === "error");
-      ui.open = stop ? 0 : auto >= 0 ? auto + 1 : 1;
+      ui.open = stop ? 0 : auto >= 0 ? auto + 1 : f.sc === "done" ? 3 : 1;
       ui.errInfo = false;
     }
     if (f.sc === "running" && ui.lastScenario !== "running") {
@@ -795,10 +796,11 @@
     }
     const shown = f.sc === "checking" || f.sc === "done";
     $("s2-done").hidden = !shown;
-    let res = null;
+    let res = null, shot = "", rating = "";
     if (shown) {
       res = f.sc === "checking" ? S.shot.result : (f.outcome && f.outcome.result);
-      $("s2-shot").textContent = res ? t("unit.shot", { time: secs(res.time_ms / 1000), weight: grams(res.weight_g) }) : "";
+      shot = res ? t("unit.shot", { time: secs(res.time_ms / 1000), weight: grams(res.weight_g) }) : "";
+      $("s2-shot").textContent = shot;
       const at = endTime(f.outcome);
       const by = reportedBy(f.outcome, res);
       $("s2-source").textContent = [by, at ? hhmmss(new Date(at)) : null].filter(Boolean).join(" · ");
@@ -817,8 +819,23 @@
     // Step 3
     $("s3-wait").hidden = !(f.sc === "ready" || f.sc === "knob" || f.sc === "running");
     $("s3-outcome").hidden = !shown;
-    if (shown && res) renderOutcome(res, tg, f.outcome && f.outcome.kind === "shot_reported" ? f.outcome : null);
+    if (shown && res) {
+      $("s3-shot").textContent = shot;
+      rating = renderOutcome(res, tg, f.outcome && f.outcome.kind === "shot_reported" ? f.outcome : null);
+    }
     $("s3-skip").hidden = !(f.sc === "error" || f.sc === "aborted");
+
+    // What each step came to, under its title (hidden while open): the
+    // recipe, the shot (not everyone has a scale) and the grinder's rating.
+    const ground = !(f.sc === "ready" || f.sc === "knob");
+    [ground && recipe ? t("start.step1.recipeTarget", { recipe }) : "", shot, rating].forEach((text, i) => {
+      const sum = $("step-" + (i + 1)).querySelector("[data-sum]");
+      if (sum.textContent !== text) sum.textContent = text;
+      sum.hidden = !text;
+      const open = ui.open === i + 1;
+      sum.classList.toggle("ghost", open);
+      if (open) sum.setAttribute("aria-hidden", "true"); else sum.removeAttribute("aria-hidden");
+    });
   }
 
   /** "Reported by La Marzocco cloud" or "Entered by hand". */
@@ -845,39 +862,48 @@
   }
 
   /** Green when the grinder adjusts from the shot; grey when it ignores
-   *  the shot or (as in the design) the shot was on target. */
+   *  the shot or (as in the design) the shot was on target. Returns the
+   *  rating in short with what to expect, for the closed step's line. */
   function renderOutcome(res, tg, ev) {
     const secsShot = res.time_ms / 1000;
     const box = $("s3-outcome");
     const range = grinderRange();
     const inRange = (ev ? ev.in_grinder_range : inGrinderRange(res.time_ms)) !== false;
-    let result, change = "", good = false;
+    let result, change = "", good = false, sum;
     // in_grinder_range does not say on which side a shot missed, so the
     // time picks the wording: a shot too short also gets the hint to grind
     // finer by hand.
     if (range && res.time_ms <= range.min_ms) {
       result = t("outcome.tooShort", { time: secs(secsShot) });
       change = t("outcome.finerByHand");
+      sum = t("start.step3.sum.tooShort");
     } else if (!inRange) {
       result = t("outcome.tooLong", { time: secs(secsShot) });
+      sum = t("start.step3.sum.tooLong");
     } else if (!tg.t) {
       good = true;
       result = t("outcome.sent");
       change = t("outcome.compares");
+      sum = cap(result);
     } else {
       const d = secsShot - tg.t;
-      if (Math.abs(d) <= ON_TARGET_S) result = t("outcome.onTarget", { time: secs(secsShot), target: secs(tg.t) });
+      if (Math.abs(d) <= ON_TARGET_S) {
+        result = t("outcome.onTarget", { time: secs(secsShot), target: secs(tg.t) });
+        sum = t("start.step3.sum.onTarget");
+      }
       else {
         good = true;
         const diff = { diff: secs(Math.abs(d)) };
         result = d < 0 ? t("outcome.fast", diff) : t("outcome.slow", diff);
         change = d < 0 ? t("outcome.finer") : t("outcome.coarser");
+        sum = t(d < 0 ? "start.step3.sum.fast" : "start.step3.sum.slow", diff);
       }
     }
     box.classList.toggle("good", good);
     $("s3-result").textContent = result;
     $("s3-change-row").hidden = !change;
     $("s3-change").textContent = change;
+    return sum;
   }
 
   function elapsedMs() {

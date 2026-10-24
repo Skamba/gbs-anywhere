@@ -100,6 +100,7 @@
         <span class="head-col"><span class="kicker" data-i18n="start.step1.kicker">Step 1</span><span class="step-title" data-i18n="start.step1.title">Grind with the Grind-by-Sync recipe</span></span>
         <span class="badge" data-badge></span>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        <span class="step-sum" data-sum hidden></span>
       </button>
       <div class="step-body s1" id="step-1-body" hidden>
         <p class="body-text" id="s1-text"></p>
@@ -113,6 +114,7 @@
         <span class="head-col"><span class="kicker" data-i18n="start.step2.kicker">Step 2</span><span class="step-title" data-i18n="start.step2.title">Pull the shot on the espresso machine</span></span>
         <span class="badge" data-badge></span>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        <span class="step-sum" data-sum hidden></span>
       </button>
       <div class="step-body" id="step-2-body" hidden>
         <p class="body-text" id="s2-ready"></p>
@@ -175,11 +177,13 @@
         <span class="head-col"><span class="kicker" data-i18n="start.step3.kicker">Step 3</span><span class="step-title" data-i18n="start.step3.title">Grinder checks and adjusts the grind</span></span>
         <span class="badge" data-badge></span>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+        <span class="step-sum" data-sum hidden></span>
       </button>
       <div class="step-body" id="step-3-body" hidden>
         <p class="body-text" id="s3-wait" data-i18n="start.step3.wait">The grinder compares the shot with the recipe and adjusts.</p>
         <div class="outcome" id="s3-outcome" hidden>
-          <p><strong data-i18n="start.step3.result">Result:</strong> <span id="s3-result"></span></p>
+          <p><strong data-i18n="start.step3.result">Result:</strong> <span id="s3-shot"></span></p>
+          <p><strong data-i18n="start.step3.rating">Rating:</strong> <span id="s3-result"></span></p>
           <p id="s3-change-row"><strong id="s3-change-label" data-i18n="start.step3.expected">Expected:</strong> <span id="s3-change"></span></p>
         </div>
         <p class="body-text" id="s3-skip" data-i18n="start.step3.skip" hidden>Nothing to check: no shot reached the grinder. The grind setting stays as it was.</p>
