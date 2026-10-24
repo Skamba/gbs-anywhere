@@ -16,10 +16,10 @@ The two grinder families connect differently:
 | grinder | how it connects | setup |
 |---|---|---|
 | E64 WS | polls gbs-anywhere as its "Xenia" | [Set up the E64 WS](#set-up-the-e64-ws) |
-| E65W, E65T, E80W, E80T GbS | gbs-anywhere pairs with the grinder's "Generic WiFi" | [Set up an E65/E80 GbS](#set-up-an-e65e80-gbs) |
+| E65W, E65T, E80W, E80T GbS | gbs-anywhere pairs with the grinder over its Local WiFi | [Set up an E65/E80 GbS](#set-up-an-e65e80-gbs) |
 
 Tested with the E64 WS and the E65W GbS; the other E65/E80 GbS models offer
-the same "Generic WiFi" option.
+the same Local WiFi pairing.
 
 **New here? Start with the [wiki](https://github.com/Skamba/gbs-anywhere/wiki):**
 setup for each grinder and integration, daily use and troubleshooting, step
@@ -37,8 +37,9 @@ docker run -d --name gbs-anywhere --restart unless-stopped \
   -p 80:80 -v gbs-anywhere:/data ghcr.io/skamba/gbs-anywhere
 ```
 
-For an E65/E80 GbS, enter the grinder's IP address in the app's settings
-later, or add `-e GRINDER_HOST=<the grinder's IP>` before the image name (see
+For an E65/E80 GbS, enter the grinder's IP address in the app later
+(**Set up an E65/E80 ›** on the Start tab), or add
+`-e GRINDER_HOST=<the grinder's IP>` before the image name (see
 [Set up an E65/E80 GbS](#set-up-an-e65e80-gbs)).
 
 The `/data` volume keeps what you set up in the app (integrations and
@@ -162,70 +163,70 @@ aborted shot.
 
 ## Set up an E65/E80 GbS
 
-These grinders don't poll a machine. With their "Generic WiFi" option the
-machine pairs with the grinder and answers its request after every
-Grind-by-Sync grind. gbs-anywhere does this once it knows the grinder's
-address, which is in the grinder's own WiFi settings, e.g. `192.168.1.30`:
-enter it in the app's settings, or start gbs-anywhere with it
-(`GRINDER_HOST` in Docker, `--grinder` from source). gbs-anywhere talks to the
-grinder on port 30001 over HTTPS.
+These grinders don't poll a machine. Over the grinder's Local WiFi (under
+**Machine To Machine → GBS COFFEE MACHINES**) the machine pairs with the
+grinder and answers its request after every Grind-by-Sync grind.
+gbs-anywhere does this once it knows the grinder's address, which is in the
+grinder's own WiFi settings, e.g. `192.168.1.30`: enter it in the app, or
+start gbs-anywhere with it (`GRINDER_HOST` in Docker, `--grinder` from
+source). gbs-anywhere talks to the grinder on port 30001 over HTTPS.
 
 **Pair the grinder**
 
 1. Put the grinder on the same network as the computer running gbs-anywhere.
-2. On the grinder, open **Settings → Connectivity → Machine To Machine** and
-   enable **Generic WiFi**. Leave the other machines off. Set **Grouphead
-   Selection** to **Grouphead 1** (or **All**): Grind-by-Sync only learns
-   from shots of the selected group, and gbs-anywhere is a one-group machine.
-3. Enter the grinder's address in the app's settings (or start gbs-anywhere
-   with it). The app now says to accept gbs-anywhere on the grinder and shows
-   a pairing code.
-4. On the grinder, in the same **Machine To Machine** menu, open **Generic
-   WiFi → Configuration** and tap **Start Pairing**. (If you enabled Generic
-   WiFi after starting gbs-anywhere, give it up to a minute to notice.)
-   Within a few seconds **gbs-anywhere** shows up under **Available
-   devices**, with the same code: tap **Accept Pairing**. If the grinder's
-   pairing times out first, tap **Start Pairing** again (the code may
-   change: the app always shows the current one).
-5. The Generic WiFi entry is now called **gbs-anywhere**, and the app shows
-   the grinder as **Ready** under Status. A restart needs no new pairing, and
-   neither does a new address for the grinder.
+   On the grinder, leave the other machines under **GBS COFFEE MACHINES**
+   off, and set **Grouphead Selection** to **Grouphead 1** (or **All**):
+   Grind-by-Sync only learns from shots of the selected group, and
+   gbs-anywhere is a one-group machine.
+2. On the Start tab, tap **Set up an E65/E80 ›** under System status: the
+   setup starts with the grinder's address. With the address already set
+   (with **Change IP address** in the ⋮ menu of the grinder card under
+   **Status**, or when starting gbs-anywhere), System status says the
+   grinder is not set up: tap **Set up grinder ›** there, or **Set up** on
+   the grinder card under Status.
+3. **Set up grinder** takes you through five steps with the grinder's own
+   menu names: enable Local WiFi, start pairing under **Configuration**,
+   compare the **Pairing Code** in the app with the grinder's and accept
+   **gbs-anywhere** on the grinder, then wait while the grinder may restart,
+   and confirm the pairing. Keep your phone at the grinder. The steps
+   follow what gbs-anywhere sees and what you answered, so a reload picks
+   up where you were.
+
+A restart needs no new pairing, and neither does a new address for the
+grinder. The grinder card under Status then shows the **Pairing ID**; to
+pair again, **Clear pairing** in its ⋮ menu opens the setup, which starts
+by clearing the pairing on the grinder.
 
 <details>
 <summary><b>If pairing doesn't work</b></summary>
 
-The grinder may restart right after you accept (the E65W with firmware
-V01.36 does): the screen freezes and the light pulses red, then white. Leave
-gbs-anywhere running: it sends the grinder nothing for 3 minutes (the app
-shows that the grinder does not answer, and why), because a request while it
-starts up can make it lose the new pairing. The same pause follows if the
-grinder goes to standby while the pairing code shows. Then open **Generic
-WiFi → Configuration** on the grinder:
+gbs-anywhere checks the pairing 30 s after you tap **Accepted** in the
+app, and sends the grinder nothing until then. Without the tap, it checks
+every 40 s, and the setup keeps waiting for the tap. If the grinder hasn't
+accepted gbs-anywhere by the check, gbs-anywhere waits for the accept and a
+new tap. If the grinder shows **Timeout** next to **Start Pairing**, its
+pairing search ended: tap **Start Pairing** again. The grinder may freeze
+and restart: its LED pulses red, then
+white. When a pairing check goes unanswered, gbs-anywhere
+sends the grinder nothing for 3 minutes, then checks again; the setup waits
+with you. Then:
 
-- **A Pairing ID next to gbs-anywhere:** the pairing is made, but
-  gbs-anywhere missed its ID. Type it into the app and tap **Use this pairing
-  ID**; gbs-anywhere checks it with the grinder first. (The ID is also under
-  **Diagnosis**, after the serial number. `GRINDER_PAIRING_ID` sets it from
-  the command line, unchecked.)
-- **Start Pairing and no gbs-anywhere entry:** the grinder lost the pairing
-  as it restarted. This happens on the grinder's side, and a lost pairing
-  can't be brought back: the only way is to pair again. gbs-anywhere asks
-  again by itself, and the app says the last pairing didn't stick. Switch
-  Generic WiFi on again if needed, then accept once more. It can take
+- **Configuration shows a Pairing ID** (and gbs-anywhere as the name): the
+  pairing is made. The setup asks for that number and checks it with the
+  grinder. (It is also under **Diagnosis**, after the serial number.
+  `GRINDER_PAIRING_ID` sets it from the command line, unchecked.)
+- **No Pairing ID under Configuration:** the pairing wasn't kept. It can't
+  be brought back; the setup says so and starts again at step 2 with a new
+  Pairing Code. **Enable** may be off again after the restart. It can take
   several tries.
 
-A pairing is lost less often on an idle grinder: don't grind right before
-or while you pair, and leave the grinder alone after you accept until it
-has fully started again. Switching it off and on before you pair may help,
-but doesn't always. Once a pairing sticks, avoid Clear Pairing, as it
-means pairing anew.
-
-To start over, tap **Clear Pairing** on the grinder, which also switches
-Generic WiFi off, and switch it on again. After about a minute gbs-anywhere
-asks to pair again by itself.
+A pairing seems to stick more easily on an idle grinder: don't grind right
+before or while you pair, and leave the grinder alone after you accept
+until it has fully started again. Once a pairing sticks, avoid **Clear
+Pairing**, as it means pairing anew.
 
 The wiki's [E65 and E80 GbS page](https://github.com/Skamba/gbs-anywhere/wiki/E65-and-E80-GbS#if-pairing-doesnt-work)
-has these steps and other fixes.
+has the long version and other fixes.
 
 </details>
 
@@ -292,8 +293,9 @@ still set.
 
 ## Settings in the app
 
-Three settings can be changed under **Status → Settings**, so the command
-line can stay as it is:
+Three settings can be changed in the app, so the command line can stay as
+it is: the grinder's address on the grinder card under **Status** (its ⋮
+menu), the other two under **Status → Settings**.
 
 - **Time to pull the shot**: how long gbs-anywhere waits for a shot's time
   and weight before it gives up on that shot (`--shot-window-s`, 3 minutes
@@ -303,7 +305,8 @@ line can stay as it is:
   3:00, `150` is 2:30), and one with decimals is minutes (`2.5` is 2:30),
   which works on a phone's number pad; `m:ss` (`2:30`) and a number with a
   unit (`150 s`) work too. `0` is no limit.
-- **Grinder IP address**: the E65/E80 GbS to pair with (`--grinder`,
+- **Grinder IP address** (**Enter IP address** or **Change IP address** in
+  the grinder card's ⋮ menu): the E65/E80 GbS to pair with (`--grinder`,
   `GRINDER_HOST`), optionally with `:port`. A new address takes effect at
   once and keeps the pairing. Saving the field empty removes the address and
   stops pairing, also when `GRINDER_HOST` is set and after a restart
@@ -313,14 +316,15 @@ line can stay as it is:
   day (see [Update check](#run-it); `--update-check`, `UPDATE_CHECK`, on
   unless set).
 
-Under each one the app says where its value comes from: the default, the
-start settings (a flag or environment variable), or set in the app. A
+Under each one (for the address: in its form) the app says where its value
+comes from: the default, the start settings (a flag or environment
+variable), or set in the app. A
 setting changed in the app is saved in the settings file and wins over its
 flag from then on; without a settings file it lasts until the next restart.
 **Use start setting** forgets the app's value, so the flag or environment
 variable counts again, or the default when neither is set. For the grinder
-address, that is the way back to `GRINDER_HOST`; an empty field instead
-means no grinder, whatever `GRINDER_HOST` says.
+address, that is the way back to `GRINDER_HOST`, offered only when it is
+set; an empty field instead means no grinder, whatever `GRINDER_HOST` says.
 
 In the API (`PUT /api/settings`), `null` goes back to the start setting,
 like **Use start setting**. For `grinder_host` that is not the same as
@@ -358,9 +362,9 @@ package) or after `--` (cargo):
 | `--finishing-hold-s <s>` | 6 | how long the machine shows a shot as finishing before it is ready again (up to 3600); keep it at least one E64 WS poll |
 | `--serial <sn>` | built in | the machine serial number the E64 WS is shown |
 | `--accept-browser-headers` | off | let requests with browser headers reach the E64 WS's routes; only if the log says your E64 WS was refused (then please report it) |
-| `--grinder <host>` | off | pair with this E65/E80 GbS over its "Generic WiFi" option; also `GRINDER_HOST`; an address set in the app wins |
+| `--grinder <host>` | off | pair with this E65/E80 GbS over its Local WiFi; also `GRINDER_HOST`; an address set in the app wins |
 | `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing across restarts; also `GRINDER_PAIRING_FILE` |
-| `--grinder-pairing-id <id>` | off | the pairing ID the grinder shows, used when none is saved or the grinder refuses the saved one (the app can take it too); also `GRINDER_PAIRING_ID` |
+| `--grinder-pairing-id <id>` | off | the Pairing ID the grinder shows, used when none is saved or the grinder refuses the saved one (the app's setup can take it too); also `GRINDER_PAIRING_ID` |
 | `--update-check <on\|off>` | on | look for a newer release once a day (see [Update check](#run-it)); also `UPDATE_CHECK`; a choice made in the app wins |
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |
 | `--hds-*` | off | Half Decent Scale, see [its README](src/integration/half_decent/README.md) |
