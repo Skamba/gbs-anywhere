@@ -1944,7 +1944,7 @@
 
   /** One log line on the page: time in the language's format, level (lower case from the server, shown in capitals), text as the server wrote it. */
   function lineEl(l) {
-    const d = new Date(l.ts);
+    const d = new Date(l.at);
     const level = String(l.level || "info");
     return el("div", { class: "ll l-" + level },
       el("span", { class: "t", text: isNaN(d) ? "--:--:--" : hhmmss(d) }),
@@ -2132,12 +2132,12 @@
   function exportText(lines, filter) {
     const scrub = scrubber();
     const body = lines.map((l) => {
-      const d = new Date(l.ts);
-      return (isNaN(d) ? String(l.ts) : stamp(d) + "." + String(d.getMilliseconds()).padStart(3, "0")) + " "
+      const d = new Date(l.at);
+      return (isNaN(d) ? String(l.at) : stamp(d) + "." + String(d.getMilliseconds()).padStart(3, "0")) + " "
         + String(l.level).toUpperCase().padEnd(5) + " " + scrub(String(l.text || ""));
     });
-    const first = lines.length ? new Date(lines[0].ts) : new Date();
-    const last = lines.length ? new Date(lines[lines.length - 1].ts) : new Date();
+    const first = lines.length ? new Date(lines[0].at) : new Date();
+    const last = lines.length ? new Date(lines[lines.length - 1].at) : new Date();
     const head = "# gbs-anywhere " + ((S && S.server.version) || "") + " log · " + stamp(first) + " to " + stamp(last)
       + " (" + utcOffset(last) + ") · " + lines.length + (lines.length === 1 ? " line" : " lines") + " · " + filter + " · IP addresses and passwords in addresses replaced";
     return head + "\n" + body.join("\n") + "\n";
@@ -2173,7 +2173,7 @@
 
   $("log-copy").addEventListener("click", async () => {
     const since = Date.now() - 60 * 60000;
-    let lines = log.lines.filter((l) => Date.parse(l.ts) >= since && (!log.warnOnly || l.level !== "info"));
+    let lines = log.lines.filter((l) => Date.parse(l.at) >= since && (!log.warnOnly || l.level !== "info"));
     if (lines.length > 500) lines = lines.slice(-500);
     if (!lines.length) {
       logDone("note", log.warnOnly ? t("log.nothingWarnings") : t("log.nothingLines"));
