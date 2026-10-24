@@ -26,7 +26,7 @@ docker run -d --name gbs-anywhere --restart unless-stopped \
   -p 80:80 -v gbs-anywhere:/data \
   -e LM_USERNAME=you@example.com \
   -e LM_PASSWORD='your La Marzocco Home password' \
-  ghcr.io/skamba/gbs-anywhere:nightly
+  ghcr.io/skamba/gbs-anywhere
 ```
 
 An integration set up this way can be moved into the app later, with all

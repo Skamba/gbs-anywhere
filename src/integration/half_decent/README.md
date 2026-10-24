@@ -27,7 +27,7 @@ integration set up this way can be moved there later):
 ```sh
 docker run -d --name gbs-anywhere --restart unless-stopped \
   -p 80:80 -v gbs-anywhere:/data \
-  -e HDS_HOST=192.168.1.40 ghcr.io/skamba/gbs-anywhere:nightly
+  -e HDS_HOST=192.168.1.40 ghcr.io/skamba/gbs-anywhere
 ```
 
 | setting | flag | env | default |

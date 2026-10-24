@@ -34,13 +34,8 @@ with Docker:
 
 ```sh
 docker run -d --name gbs-anywhere --restart unless-stopped \
-  -p 80:80 -v gbs-anywhere:/data ghcr.io/skamba/gbs-anywhere:nightly
+  -p 80:80 -v gbs-anywhere:/data ghcr.io/skamba/gbs-anywhere
 ```
-
-Until 0.3.0 is released, E65/E80 support and the app as described here
-(settings, History and Status tabs) are only in `:nightly`; `latest`
-(0.2.1) is for the E64 WS and has an older app. Once 0.3.0 is out, leave
-`:nightly` off to run the newest release.
 
 For an E65/E80 GbS, enter the grinder's IP address in the app's settings
 later, or add `-e GRINDER_HOST=<the grinder's IP>` before the image name (see
@@ -77,7 +72,7 @@ name like `gbs.tail1234.ts.net`, needs `--allow-host`, with the name given in
 full. Behind a reverse proxy, pass the `Host` header through and allow the
 proxy's name the same way.
 
-`latest` is the newest release; pin one with e.g. `:0.2`, or follow
+`latest` is the newest release; pin one with e.g. `:0.3`, or follow
 `:nightly`, built each night from `main`. The app shows its version under
 **Status** (and at the bottom of the other tabs); what changed is in
 [CHANGELOG.md](CHANGELOG.md).
@@ -92,7 +87,7 @@ if `HTTPS_PROXY` is set; the link to an E65/E80 grinder never does.
 
 **To update** with Docker, get the new image and re-create the container
 with the same command and volume:
-`docker pull ghcr.io/skamba/gbs-anywhere:nightly` (or the tag you run),
+`docker pull ghcr.io/skamba/gbs-anywhere` (or the tag you run),
 `docker rm -f gbs-anywhere`, then the `docker run` above. The `/data` volume
 keeps everything you set up, and an app left open reloads itself once the
 new version answers and nothing is being typed in it.
