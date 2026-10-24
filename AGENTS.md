@@ -42,6 +42,12 @@ file is for agents changing the code.
   the script into `index.html`, so the page still comes in one response.
 - `src/main.rs`: flags and startup only. `src/lib.rs`: the crate root and
   `version()`.
+- `packaging/`: the release builds besides the image. `build-release.sh`
+  makes the binary tarball and the Debian package (cargo-deb, configured in
+  Cargo.toml); `deb/` holds the package's systemd unit, its
+  `/etc/default/gbs-anywhere` and `postrm`. The unit's `ExecStart` and the
+  Dockerfile's `ENTRYPOINT` pass the same flags: change them together. The
+  Dockerfile shares `install-cargo-about.sh`.
 
 ## Commands
 
@@ -240,7 +246,8 @@ messages and pull requests:
 - `main` is protected: changes go in through a pull request, and the `test`
   job of `ci.yml` must pass. Each night `image.yml` publishes `main` as the
   `nightly` image tag, unless `main` has not changed since the last one; a
-  `vX.Y.Z` tag publishes `latest` and creates the GitHub release. Ask
+  `vX.Y.Z` tag publishes `latest` and creates the GitHub release, with
+  the tarballs and Debian packages attached. Ask
   before pushing, force-pushing, tagging or changing `.github/workflows/`.
 - User-visible changes get a line under `## [Unreleased]` in CHANGELOG.md.
 - To release: in a pull request, set `version` in Cargo.toml and rename

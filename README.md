@@ -50,6 +50,30 @@ another port with `-p`, for an E65/E80), and the console prompt and a
 second copy of the app and API on `127.0.0.1:8787`, for this computer
 only, are on; the image turns both off (`--no-stdin --control off`).
 
+**Without Docker**, on a Raspberry Pi with 64-bit Raspberry Pi OS (Pi 3,
+4, 5, Zero 2 W), Debian 12 or newer, or Ubuntu 24.04 or newer, install the
+Debian package from the
+[latest release](https://github.com/Skamba/gbs-anywhere/releases/latest):
+`arm64` for a Raspberry Pi, `amd64` for a PC. In the folder you downloaded
+it to:
+
+```sh
+sudo apt install ./gbs-anywhere_<version>-1_arm64.deb
+```
+
+This runs gbs-anywhere as the `gbs-anywhere` service on port 80 and starts
+it at boot, with the same flags as the image. What you set up in the app,
+the shot history and the E65/E80 pairing are kept in
+`/var/lib/gbs-anywhere`. Environment variables such as `GRINDER_HOST`, and
+extra flags in `GBS_ANYWHERE_ARGS` (say `GBS_ANYWHERE_ARGS=-p 8080`), go in
+`/etc/default/gbs-anywhere`; run `sudo systemctl restart gbs-anywhere`
+after changing it. `journalctl -u gbs-anywhere` shows the log. To update,
+install the newer package the same way. `sudo apt remove gbs-anywhere`
+keeps your data, and `sudo apt purge gbs-anywhere` deletes it as well. Each
+release also has the plain binary
+(`gbs-anywhere-<version>-linux-<arch>.tar.gz`), for other Linux systems
+with glibc 2.36 or newer.
+
 Give the computer a fixed IP or a DHCP reservation in your router, as your
 phone needs its address (e.g. `192.168.1.20`). Then, depending on the
 grinder:
@@ -317,18 +341,19 @@ ready to copy into a bug report.
 
 ## Options
 
-Extra flags go after the image name (Docker) or after `--` (cargo):
+Extra flags go after the image name (Docker), in `GBS_ANYWHERE_ARGS` (Debian
+package) or after `--` (cargo):
 
 | flag | default | what |
 |---|---|---|
 | `--shot-window-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever); **Time to pull the shot** set in the app wins; `--brew-timeout-s`, its name until 0.2.1, still works |
-| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings, integrations moved from the command line); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
+| `--config <file>` | off (Docker: `/data/gbs-anywhere.json`, package: `/var/lib/gbs-anywhere/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings, integrations moved from the command line); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
 | `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
 | `-p, --ports <list>` | 80 | ports to serve on, comma-separated; the E64 WS polls port 80 |
 | `-b, --bind <addr>` | `0.0.0.0` | address to serve those ports on |
-| `--control <addr>` | `127.0.0.1:8787` (Docker: `off`) | a second address for the app and its API, besides the ports above; `off` turns it off |
-| `--no-stdin` | off (Docker: on) | no console prompt, for running as a service |
+| `--control <addr>` | `127.0.0.1:8787` (Docker and package: `off`) | a second address for the app and its API, besides the ports above; `off` turns it off |
+| `--no-stdin` | off (Docker and package: on) | no console prompt, for running as a service |
 | `--allow-host <names>` | off | also open the app by these host names, each in full (e.g. `gbs.tail1234.ts.net`), comma-separated; `*` alone allows any name, even that of a web page that re-points its own name to this address; the IP address and home-network names always work; also `ALLOW_HOST` |
 | `--finishing-hold-s <s>` | 6 | how long the machine shows a shot as finishing before it is ready again (up to 3600); keep it at least one E64 WS poll |
 | `--serial <sn>` | built in | the machine serial number the E64 WS is shown |
@@ -369,8 +394,10 @@ private.
 
 ## Build and contribute
 
-`cargo build --release` builds `target/release/gbs-anywhere`, and
-`docker build -t gbs-anywhere .` the image. [CONTRIBUTING.md](CONTRIBUTING.md)
+`cargo build --release` builds `target/release/gbs-anywhere`,
+`docker build -t gbs-anywhere .` the image, and
+`docker run --rm -v "$PWD:/src" -w /src rust:1-bookworm sh packaging/build-release.sh`
+the release tarball and Debian package in `dist/`. [CONTRIBUTING.md](CONTRIBUTING.md)
 covers the checks, the conventions and adding an integration.
 
 ## License
@@ -381,9 +408,10 @@ Copyright 2026 Skamba and the gbs-anywhere contributors.
 share it. If you share a changed version, or let other people use one over a
 network, you must offer them its source code under the same license.
 
-The image also carries the licenses of the Rust crates built into it, in
-`/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES`
+The image and the Debian package also carry the licenses of the Rust
+crates built into them, in `/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES`
 (`docker cp gbs-anywhere:/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES .`
-copies it out). From source, `cargo about generate about.hbs` prints the same
+copies it out of the container); the release tarballs have it next to the
+binary. From source, `cargo about generate about.hbs` prints the same
 list, with [cargo-about](https://github.com/EmbarkStudios/cargo-about)
 installed.

@@ -1,0 +1,10 @@
+#!/bin/sh
+set -e
+
+# `apt purge` also removes what was set up in the app, the shot history and
+# the E65/E80 pairing; `apt remove` keeps them.
+if [ "$1" = purge ]; then
+    rm -rf /var/lib/private/gbs-anywhere /var/lib/gbs-anywhere
+fi
+
+#DEBHELPER#
