@@ -265,7 +265,7 @@ shot window), or it is not working, the app says so and shows the fields to
 enter the shot on your phone; whichever comes first wins, also when several
 integrations run at once.
 
-Under **Status → Machine integrations**, tap the green **+**, pick one and
+Under **Status → Machine integrations**, tap **+**, pick one and
 fill in its form. Each integration gets a card showing whether it is ready
 and what it last sent; its ⋮ menu has **Edit**, and **Delete** for those
 added in the app. Integrations added in the app are saved, with their

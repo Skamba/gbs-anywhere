@@ -1331,7 +1331,7 @@
     const secrets = new Set(saved.secrets_set || []);
     const fields = el("div", { class: "stack-12" }, k.fields.map((f) => formField(k.id, f, "ef-", f.input === "password" ? null : values[f.key], secrets.has(f.key))));
     const error = el("p", { class: "hint warn", role: "alert", hidden: true });
-    const save = tEl("button", { type: "submit", class: "btn-send ok" }, "common.save");
+    const save = tEl("button", { type: "submit", class: "btn-send" }, "common.save");
     const form = el("form", { class: "integ stack-12", autocomplete: "off", "aria-label": t("integ.edit.label", { title: i.title }) },
       el("div", { class: "integ-row" }, iconFor(i.kind), el("div", { class: "integ-name" }, tEl("p", { class: "kicker" }, "integ.edit.kicker"), el("p", { class: "integ-title", text: i.title }))),
       fields, error,
