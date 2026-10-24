@@ -1,4 +1,4 @@
-//! The link to an E65/E80 GbS grinder over its "Generic WiFi" option (see
+//! The link to an E65/E80 GbS grinder over its Local WiFi option (see
 //! [`crate::protocol::wifi`]). gbs-anywhere pairs once, then asks the grinder
 //! for brew jobs every couple of seconds, which also keeps it shown as active
 //! there. A job (one per Grind-by-Sync grind) starts a brew of the shared
@@ -41,17 +41,36 @@ use crate::protocol::wifi::{
 use crate::protocol::{AbortCause, GrindResult, MachineEvent, Phase};
 use crate::server::Server;
 
-/// Between job requests (and pairing checks). The grinder shows the machine
-/// as active while it asks.
+/// Between job requests. The grinder shows the machine as active while it
+/// asks.
 const POLL: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const MIN_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
+/// The longest wait after a failed request while unpaired: someone is
+/// pairing, and a Pairing Code follows soon after the grinder answers again
+/// (say, after it restarted).
+const UNPAIRED_BACKOFF: Duration = Duration::from_secs(10);
+/// How long the app is asked for the pairing ID before gbs-anywhere applies
+/// to pair again, in case the pairing was cleared on the grinder meanwhile.
+const ASK_WINDOW: Duration = Duration::from_secs(60);
 /// How long nothing is sent to a grinder that stopped answering while
-/// pairing. The E65W freezes and restarts as it saves an accepted pairing
-/// (about a minute and a half), and a request while it starts up can make it
-/// lose that pairing.
+/// pairing. The grinder may freeze and restart after the person accepts
+/// (about a minute and a half until it answers again); gbs-anywhere leaves
+/// it alone until it is back. The API shows it as `quiet_ms`.
 const RESTART_QUIET: Duration = Duration::from_secs(180);
+/// How long from the person's confirmation in the app to the pairing check,
+/// however long after the code it comes. Nothing is sent to the grinder
+/// meanwhile, so it is left alone right after the accept; the app and its
+/// API keep serving.
+const ACCEPT_SETTLE: Duration = Duration::from_secs(30);
+/// Between pairing checks while the code is shown and nobody has confirmed
+/// in the app. The grinder keeps the pairing request open for a long time,
+/// so the confirmation is waited for as long as it takes; this slow check
+/// only finds an accept nobody confirms. Long enough that a person who
+/// accepts on the grinder and then taps in the app normally gets the quiet
+/// moment of `ACCEPT_SETTLE` first.
+const UNCONFIRMED_POLL: Duration = Duration::from_secs(40);
 /// Replies are a few hundred bytes; anything this big is not the grinder.
 const MAX_REPLY_BYTES: usize = 64 * 1024;
 /// How long the grinder must refuse every job request before the pairing
@@ -77,7 +96,7 @@ pub struct WifiConfig {
     /// The pairing ID the grinder shows. Used when the file has none, or when
     /// the grinder refuses the file's.
     pub pairing_id: Option<u32>,
-    /// Between job requests and pairing checks.
+    /// Between job requests.
     pub poll: Duration,
     /// How long nothing is sent after a pairing check got no answer (see
     /// `RESTART_QUIET`).
@@ -85,6 +104,21 @@ pub struct WifiConfig {
     /// How long refused job requests take to count as a cleared pairing (see
     /// `REFUSED_FOR`).
     pub refused_for: Duration,
+    /// How long from the confirmation in the app to the pairing check (see
+    /// `ACCEPT_SETTLE`).
+    pub accept_settle: Duration,
+    /// Between pairing checks while nobody has confirmed in the app (see
+    /// `UNCONFIRMED_POLL`).
+    pub unconfirmed_poll: Duration,
+    /// The wait after a failed request, from `min_backoff` doubling up to
+    /// `max_backoff`, and at most `unpaired_backoff` while unpaired (see
+    /// `UNPAIRED_BACKOFF`).
+    pub min_backoff: Duration,
+    pub max_backoff: Duration,
+    pub unpaired_backoff: Duration,
+    /// How long the app is asked for the pairing ID at a time (see
+    /// `ASK_WINDOW`).
+    pub ask_window: Duration,
 }
 
 impl WifiConfig {
@@ -111,6 +145,12 @@ impl WifiConfig {
             poll: POLL,
             restart_quiet: RESTART_QUIET,
             refused_for: REFUSED_FOR,
+            accept_settle: ACCEPT_SETTLE,
+            unconfirmed_poll: UNCONFIRMED_POLL,
+            min_backoff: MIN_BACKOFF,
+            max_backoff: MAX_BACKOFF,
+            unpaired_backoff: UNPAIRED_BACKOFF,
+            ask_window: ASK_WINDOW,
         })
     }
 }
@@ -194,32 +234,40 @@ fn base_url(host: &str) -> String {
     format!("https://{with_port}")
 }
 
-/// The Generic WiFi link as the app shows it (`grinder.wifi` in
+/// The Local WiFi link as the app shows it (`grinder.wifi` in
 /// `GET /api/state`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct WifiLink {
     /// The grinder's address, as configured.
     pub grinder: String,
     pub state: WifiState,
-    /// While pairing: the number the grinder shows next to gbs-anywhere.
+    /// Where in the pairing the link is, while `state` is `pairing`; `None`
+    /// otherwise.
+    pub phase: Option<WifiPhase>,
+    /// Since when `phase` holds; the API shows it as `phase_age_ms`.
+    #[serde(skip)]
+    pub phase_since: Option<Instant>,
+    /// While pairing: the Pairing Code the grinder shows next to
+    /// gbs-anywhere for this attempt (`pairingCode`).
     pub pairing_code: Option<u32>,
-    /// The grinder has gbs-anywhere paired but the pairing ID is missing
-    /// here: the app asks for the one the grinder shows
-    /// (`POST /api/grinder/pairing`).
-    pub needs_pairing_id: bool,
     /// While asking: the last pairing ID the grinder did not take, so the
     /// app can say so.
     pub unknown_pairing_id: Option<u32>,
-    /// The grinder restarted while pairing (as the E65W does on the accept)
-    /// and came back without the pairing request: a pairing accepted before
-    /// did not stick, and the app asks to accept again. Cleared once paired,
+    /// The grinder went quiet while pairing and came back without the
+    /// pairing request: a pairing accepted before did not stick, and the
+    /// app asks to accept again. Cleared once paired,
     /// or once the grinder turns out to have the pairing after all.
     pub pairing_lost: bool,
+    /// How long gbs-anywhere sends the grinder nothing after a pairing check
+    /// went unanswered (phase `quiet`), so an app can count down to the next
+    /// check.
+    pub quiet_ms: u64,
     /// What is going on, in one sentence.
     pub detail: String,
     /// What went wrong with the last shot, until the next one goes through.
     pub problem: Option<String>,
-    /// The pairing in use; `None` while unpaired.
+    /// The Pairing ID in use, the pairing's lasting number (`pairingId`);
+    /// `None` while unpaired.
     pub pairing_id: Option<u32>,
     /// The grinder does not answer at all (off, in standby or gone from the
     /// network), as opposed to answering with an error. Cleared as soon as
@@ -231,21 +279,52 @@ pub struct WifiLink {
 #[serde(rename_all = "snake_case")]
 pub enum WifiState {
     Connecting,
-    /// Waiting for the person to accept gbs-anywhere on the grinder.
+    /// Pairing with the grinder; `WifiLink::phase` says where in it.
     Pairing,
     Paired,
     /// A request failed; retrying.
     Failing,
 }
 
-/// Why a pairing ID from the app was not taken.
+/// Where in the pairing the link is (`grinder.wifi.phase`), set only while
+/// its state is [`WifiState::Pairing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WifiPhase {
+    /// The code is shown: gbs-anywhere waits for the person to accept it on
+    /// the grinder and confirm that in the app (`POST /api/grinder/accepted`
+    /// is taken only now), for as long as it takes. Meanwhile it checks the
+    /// pairing only every so often (see [`UNCONFIRMED_POLL`]).
+    Accepting,
+    /// Confirmed: gbs-anywhere waits a moment before it checks the pairing
+    /// (see [`ACCEPT_SETTLE`]), and sends the grinder nothing meanwhile.
+    Holding,
+    /// Confirmed in the app: gbs-anywhere checks with the grinder whether the
+    /// pairing was accepted. If not, it is back to `Accepting`.
+    Checking,
+    /// A pairing check went unanswered: gbs-anywhere sends the grinder
+    /// nothing for a while (see [`RESTART_QUIET`]), then checks again.
+    Quiet,
+    /// The grinder has gbs-anywhere paired but the pairing ID is missing
+    /// here: the app asks for the one the grinder shows
+    /// (`POST /api/grinder/pairing` is taken only now).
+    Asking,
+}
+
+/// Why a pairing ID or a confirmation from the app was not taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PairingIdRefusal {
     /// No `--grinder` link runs.
     NoLink,
     /// The link has a working pairing; it needs no ID.
     NotNeeded,
-    /// Another ID is being checked right now.
+    /// The link is not paired, but not asking for an ID either: it is
+    /// connecting or in another phase of the pairing.
+    NotAsking,
+    /// The link is not waiting for an accept right now, so there is nothing
+    /// to confirm.
+    NotAccepting,
+    /// The last ID or confirmation is still being handled.
     Busy,
 }
 
@@ -253,11 +332,18 @@ impl std::fmt::Display for PairingIdRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::NoLink => {
-                "no E65/E80 grinder is set up: enter its address in the app's settings, or \
+                "no E65/E80 grinder is set up: enter its address in the app (Set up grinder), or \
                  start gbs-anywhere with --grinder"
             }
             Self::NotNeeded => "gbs-anywhere is paired with the grinder and needs no pairing ID",
-            Self::Busy => "another pairing ID is being checked, try again in a moment",
+            Self::NotAsking => {
+                "gbs-anywhere is not asking for a pairing ID right now: it takes one only when the \
+                 grinder has it paired but the ID is missing here"
+            }
+            Self::NotAccepting => {
+                "gbs-anywhere is not waiting for you to accept it on the grinder right now"
+            }
+            Self::Busy => "the last request is still being handled, try again in a moment",
         })
     }
 }
@@ -268,6 +354,8 @@ impl PairingIdRefusal {
         match self {
             Self::NoLink => "grinder_not_set_up",
             Self::NotNeeded => "grinder_already_paired",
+            Self::NotAsking => "grinder_not_asking",
+            Self::NotAccepting => "grinder_not_accepting",
             Self::Busy => "grinder_pairing_busy",
         }
     }
@@ -414,9 +502,23 @@ pub struct WifiGrinder {
     /// further failures are not logged until it answers again, and the app
     /// says so (`WifiLink::unreachable`).
     unreachable: bool,
+    /// The last failure logged as a warning, so the same one again (every
+    /// 10 s while not paired) goes to debug instead of filling the log book.
+    last_failure: Option<String>,
+    /// The question for the pairing ID as last asked: what it said and the ID
+    /// the grinder refused, carried into the next round of `ask_window`.
+    asked: Option<(String, Option<u32>)>,
     /// The grinder came back from a restart without the pairing request (see
     /// `WifiLink::pairing_lost`).
     pairing_lost: bool,
+    /// The phase shown while the link reports [`WifiState::Pairing`]:
+    /// `Accepting` until the person confirms in the app (`Holding` while the
+    /// check is then held), `Checking` while that check goes, `Quiet` while
+    /// `stay_quiet` waits. `Asking` is shown by `ask_for_pairing_id`.
+    phase: WifiPhase,
+    /// Since when `phase` holds (for `Quiet`, the current round), for
+    /// `WifiLink::phase_since`.
+    phase_since: Instant,
 }
 
 impl WifiGrinder {
@@ -464,7 +566,11 @@ impl WifiGrinder {
             polls: 0,
             problem: None,
             unreachable: false,
+            last_failure: None,
+            asked: None,
             pairing_lost: false,
+            phase: WifiPhase::Checking,
+            phase_since: Instant::now(),
             owner: 0,
             lock,
             holding,
@@ -491,9 +597,10 @@ impl WifiGrinder {
         server: Arc<Server>,
         owner: u64,
         mut ids: mpsc::Receiver<u32>,
+        mut accept: mpsc::Receiver<()>,
     ) {
         self.owner = owner;
-        let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
+        let mut backoff = Backoff::new(self.cfg.min_backoff, self.cfg.max_backoff);
         if self.holding.is_none() {
             // The link this one replaces may still be saving the pairing:
             // start from what it saved, once it has ended.
@@ -511,34 +618,55 @@ impl WifiGrinder {
         self.status(&server, WifiState::Connecting, None, "connecting");
         loop {
             let outcome = match self.pairing.pairing_id {
-                None => self.pair(&server, &mut ids).await,
+                None => self.pair(&server, &mut ids, &mut accept).await,
                 Some(id) => self.serve(&server, id, &mut events).await,
             };
             if let Err(e) = outcome {
                 // Off or in standby for the night: say so once, not every minute.
                 let unreachable = unreachable(&e);
+                let message = format!("{e:#}");
                 if unreachable && self.unreachable {
                     tracing::debug!("grinder: {e:#}");
                 } else if unreachable {
                     tracing::warn!(
                         "grinder: not reachable (off or in standby?), checking again at least \
-                         every minute: {e:#}"
+                         every minute (every 10 s while not paired): {e:#}"
                     );
+                } else if self.last_failure.as_deref() == Some(message.as_str()) {
+                    tracing::debug!("grinder: {message}");
                 } else {
-                    tracing::warn!("grinder: {e:#}");
+                    tracing::warn!("grinder: {message}");
                 }
+                self.last_failure = (!unreachable).then(|| message.clone());
                 self.unreachable = unreachable;
                 self.status(&server, WifiState::Failing, None, format!("{e:#}"));
-                backoff.wait().await;
+                tokio::time::sleep(self.retry_delay(&mut backoff)).await;
             } else {
                 backoff.reset();
+                self.last_failure = None;
             }
+        }
+    }
+
+    /// How long to wait before trying again after a failed request: the
+    /// backoff, but at most `unpaired_backoff` while there is no pairing.
+    fn retry_delay(&self, backoff: &mut Backoff) -> Duration {
+        let delay = backoff.advance();
+        if self.pairing.pairing_id.is_none() {
+            delay.min(self.cfg.unpaired_backoff)
+        } else {
+            delay
         }
     }
 
     /// Applies for pairing and waits until the person accepts it on the
     /// grinder. `Ok` once paired, or when it should be tried again.
-    async fn pair(&mut self, server: &Server, ids: &mut mpsc::Receiver<u32>) -> anyhow::Result<()> {
+    async fn pair(
+        &mut self,
+        server: &Server,
+        ids: &mut mpsc::Receiver<u32>,
+        accept: &mut mpsc::Receiver<()>,
+    ) -> anyhow::Result<()> {
         let app = PairingApplication::new(&self.pairing.brew_device_id);
         let reply = self.post(wifi::PATH_PAIRING_APPLICATION, &app).await?;
         if reply.status() == wifi::STATUS_ALREADY_PAIRED {
@@ -555,24 +683,40 @@ impl WifiGrinder {
         }
         let code = res.pairing_code;
         let detail = format!(
-            "{}on the grinder, open Generic WiFi, Configuration, start pairing and accept \
-             gbs-anywhere{}",
+            "{}on the grinder, under Configuration, tap Start Pairing and \
+             accept gbs-anywhere{}",
             if self.pairing_lost {
-                "the grinder restarted without the pairing request, so an accepted pairing did not \
+                "the grinder no longer has the pairing request, so a pairing accepted on it did not \
                  stick: "
             } else {
                 ""
             },
-            code.map_or(String::new(), |c| format!(" (code {c})"))
+            code.map_or(String::new(), |c| format!(" (Pairing Code {c})"))
         );
         tracing::info!("grinder: {detail}");
+        // The new code is shown first: a confirmation left from an earlier
+        // attempt must not release this one (cf. `wait_for_pairing_id`
+        // draining `ids`). A new code starts its own phase age, also after
+        // an earlier one in `Accepting`.
+        self.phase = WifiPhase::Accepting;
+        self.phase_since = Instant::now();
         self.status(server, WifiState::Pairing, code, detail.clone());
+        while accept.try_recv().is_ok() {}
+        let shown = tokio::time::Instant::now();
 
         let ask = json!({ "version": API_VERSION, "applicationId": application_id });
         // Left alone after a check got no answer (see `stay_quiet`).
         let mut quiet = false;
+        // The check (or the one before the quiet time) came after a
+        // confirmation in the app.
+        let mut confirmed = false;
         loop {
-            tokio::time::sleep(self.cfg.poll).await;
+            // Shows the code and waits for the next check: after the
+            // confirmation and a moment, or the slow check without one. After
+            // the quiet time, the request is checked again at once.
+            if !quiet {
+                confirmed = self.await_check(server, accept, code, &detail, shown).await;
+            }
             let outcome = self.post(wifi::PATH_PAIRING_STATUS, &ask).await;
             if no_answer(&outcome) {
                 self.stay_quiet(server, outcome, !quiet).await;
@@ -595,9 +739,18 @@ impl WifiGrinder {
             reply.ok().context("checking the pairing")?;
             let status: PairingStatusRes = reply.parse()?;
             if !status.accepted {
-                if std::mem::take(&mut quiet) {
-                    // Back without a restart: the request is still open.
-                    self.status(server, WifiState::Pairing, code, detail.clone());
+                // Back without a restart, the request still open; or
+                // confirmed before the grinder had it accepted. Either way
+                // the code is shown again, and only a confirmation from now
+                // on counts: the grinder has no accept for one sent before.
+                if std::mem::take(&mut quiet) || confirmed {
+                    if confirmed {
+                        tracing::info!(
+                            "grinder: the grinder has not accepted the pairing yet, waiting for \
+                             the accept and a new confirmation in the app"
+                        );
+                    }
+                    while accept.try_recv().is_ok() {}
                 }
                 continue;
             }
@@ -610,9 +763,70 @@ impl WifiGrinder {
         }
     }
 
+    /// Shows the code (phase `Accepting`) and waits for the next pairing
+    /// check, for as long as the person takes to confirm in the app. Without
+    /// a confirmation, the check is due `unconfirmed_poll` from now. A
+    /// confirmation moves to `Holding`: the grinder is sent nothing for
+    /// `accept_settle`, then the check is due, in phase `Checking`. Returns
+    /// whether the person confirmed. `shown` is when the code was shown, for
+    /// the log.
+    async fn await_check(
+        &mut self,
+        server: &Server,
+        accept: &mut mpsc::Receiver<()>,
+        code: Option<u32>,
+        detail: &str,
+        shown: tokio::time::Instant,
+    ) -> bool {
+        // For the log: seconds since the code was shown.
+        let after = |at: tokio::time::Instant| at.duration_since(shown).as_secs_f32();
+        self.set_phase(WifiPhase::Accepting);
+        self.status(server, WifiState::Pairing, code, detail);
+
+        let slow = tokio::time::Instant::now() + self.cfg.unconfirmed_poll;
+        let tapped = tokio::select! {
+            biased;
+            got = accept.recv() => got.is_some(),
+            () = tokio::time::sleep_until(slow) => false,
+        };
+        if !tapped {
+            // No confirmation, or the sender is gone (the link is being
+            // replaced): the slow check, never sooner.
+            tokio::time::sleep_until(slow).await;
+            tracing::debug!(
+                "grinder: checking the pairing {:.1} s after the code, not confirmed in the app",
+                after(tokio::time::Instant::now())
+            );
+            return false;
+        }
+
+        let tap = tokio::time::Instant::now();
+        tracing::info!(
+            "grinder: confirmed in the app {:.1} s after the code, checking the pairing in {:.1} s",
+            after(tap),
+            self.cfg.accept_settle.as_secs_f32()
+        );
+        self.set_phase(WifiPhase::Holding);
+        let hold = "accepted: waiting a moment, then checking the pairing";
+        self.status(server, WifiState::Pairing, code, hold);
+        tokio::time::sleep_until(tap + self.cfg.accept_settle).await;
+
+        let now = tokio::time::Instant::now();
+        tracing::info!(
+            "grinder: checking the pairing {:.1} s after the code, {:.1} s after the confirmation",
+            after(now),
+            now.duration_since(tap).as_secs_f32()
+        );
+        self.set_phase(WifiPhase::Checking);
+        // Back to the plain pairing detail for the check and `stay_quiet`.
+        self.status(server, WifiState::Pairing, code, detail);
+        true
+    }
+
     /// After a pairing check got no answer: sends the grinder nothing for a
-    /// while (see [`RESTART_QUIET`]). Shown as not answering meanwhile, and
-    /// logged as a warning the `first` time in a row.
+    /// while (see [`RESTART_QUIET`]). Shown as still pairing, in phase
+    /// `Quiet` and not answering, and logged as a warning the `first` time
+    /// in a row.
     async fn stay_quiet(&mut self, server: &Server, outcome: anyhow::Result<Reply>, first: bool) {
         let secs = self.cfg.restart_quiet.as_secs();
         let wait = if secs >= 60 {
@@ -621,8 +835,8 @@ impl WifiGrinder {
             format!("{secs} s")
         };
         let detail = format!(
-            "not answering: if you have just accepted the pairing, it is restarting, so nothing \
-             is sent for {wait}"
+            "no answer to the pairing check: nothing is sent to the grinder for {wait}, then \
+             gbs-anywhere checks again (the grinder may be restarting)"
         );
         if first {
             tracing::warn!("grinder: {detail}: {}", failure(outcome));
@@ -630,7 +844,11 @@ impl WifiGrinder {
             tracing::debug!("grinder: {detail}: {}", failure(outcome));
         }
         self.unreachable = true;
-        self.status(server, WifiState::Failing, None, detail);
+        // Each round starts its own quiet time, also after a quiet one, so
+        // `phase_age_ms` says how long until the next check.
+        self.phase = WifiPhase::Quiet;
+        self.phase_since = Instant::now();
+        self.status(server, WifiState::Pairing, None, detail);
         tokio::time::sleep(self.cfg.restart_quiet).await;
     }
 
@@ -646,11 +864,23 @@ impl WifiGrinder {
         ids: &mut mpsc::Receiver<u32>,
     ) -> anyhow::Result<()> {
         let mut detail = "paired on the grinder, but the pairing ID is missing here: enter the \
-                          Pairing ID the grinder shows in its gbs-anywhere entry (Configuration)"
+                          Pairing ID the grinder shows under Configuration"
             .to_owned();
-        let mut unknown = None;
-        // The grinder has the pairing: whatever restarted, it stuck.
+        let mut refused_id = None;
+        // The grinder has the pairing: whatever restarted, it stuck, and we
+        // are no longer waiting for an accept.
         self.pairing_lost = false;
+        // Asked before, and back after `ask_window` (or a failed request): the
+        // question goes on, with its age and an ID typed meanwhile.
+        let again = self.phase == WifiPhase::Asking;
+        if !again {
+            self.set_phase(WifiPhase::Checking);
+            self.asked = None;
+        } else if let Some((said, id)) = self.asked.clone() {
+            // Still the same question: what it said, and an ID refused in it.
+            detail = said;
+            refused_id = id;
+        }
         // The ID it refused for a while, in case it refused it only then.
         if let Some(id) = self.pairing.refused_pairing_id {
             let reply = self.post(wifi::PATH_BREW_JOBS, &Paired::new(id)).await?;
@@ -659,9 +889,9 @@ impl WifiGrinder {
                 self.pairing.save(self.cfg.pairing_file.as_deref())?;
                 detail = format!(
                     "the grinder no longer knows pairing ID {id}: enter the Pairing ID it shows \
-                     in its gbs-anywhere entry (Configuration)"
+                     under Configuration"
                 );
-                unknown = Some(id);
+                refused_id = Some(id);
             } else {
                 reply
                     .ok()
@@ -671,12 +901,22 @@ impl WifiGrinder {
                 return Ok(());
             }
         }
-        let deadline = tokio::time::Instant::now() + MAX_BACKOFF;
+        let deadline = tokio::time::Instant::now() + self.cfg.ask_window;
         // An ID typed while the link was not asking is stale by now.
-        while ids.try_recv().is_ok() {}
+        if !again {
+            while ids.try_recv().is_ok() {}
+        }
         loop {
-            tracing::warn!("grinder: {detail} (in the app, or with --grinder-pairing-id)");
-            self.ask_for_pairing_id(server, &detail, unknown);
+            // The same question again (a new round of the ask window) at
+            // debug, so it doesn't fill the log book.
+            if self.asked.as_ref().is_some_and(|(said, _)| *said == detail) {
+                tracing::debug!("grinder: {detail} (in the app, or with --grinder-pairing-id)");
+            } else {
+                tracing::warn!("grinder: {detail} (in the app, or with --grinder-pairing-id)");
+            }
+            self.asked = Some((detail.clone(), refused_id));
+            self.set_phase(WifiPhase::Asking);
+            self.ask_for_pairing_id(server, &detail, refused_id);
             let id = tokio::select! {
                 _ = tokio::time::sleep_until(deadline) => return Ok(()),
                 Some(id) = ids.recv() => id,
@@ -685,9 +925,9 @@ impl WifiGrinder {
             if reply.http == StatusCode::FORBIDDEN {
                 detail = format!(
                     "the grinder does not know pairing ID {id}: enter the Pairing ID it shows \
-                     in its gbs-anywhere entry (Configuration)"
+                     under Configuration"
                 );
-                unknown = Some(id);
+                refused_id = Some(id);
                 continue;
             }
             reply.ok().context("checking the pairing ID")?;
@@ -704,8 +944,18 @@ impl WifiGrinder {
         }
     }
 
+    /// Moves the pairing to `phase`, counting its age from now unless it is
+    /// there already.
+    fn set_phase(&mut self, phase: WifiPhase) {
+        if self.phase != phase {
+            self.phase = phase;
+            self.phase_since = Instant::now();
+        }
+    }
+
     fn use_pairing_id(&mut self, id: u32) -> anyhow::Result<()> {
         self.pairing_lost = false;
+        self.set_phase(WifiPhase::Checking);
         self.pairing.pairing_id = Some(id);
         self.pairing.refused_pairing_id = None;
         self.pairing.save(self.cfg.pairing_file.as_deref())
@@ -754,6 +1004,8 @@ impl WifiGrinder {
                     }
                     reply.ok().context("asking for brew jobs")?;
                     refused_since = None;
+                    // Working again: the same failure later is a new one.
+                    self.last_failure = None;
                     if self.pairing.refused_pairing_id.take().is_some() {
                         // The pairing in use works: no fallback needed.
                         self.pairing.save(self.cfg.pairing_file.as_deref())?;
@@ -1102,10 +1354,12 @@ impl WifiGrinder {
         WifiLink {
             grinder: self.cfg.base_url.clone(),
             state,
+            phase: (state == WifiState::Pairing).then_some(self.phase),
+            phase_since: (state == WifiState::Pairing).then_some(self.phase_since),
             pairing_code,
-            needs_pairing_id: false,
             unknown_pairing_id: None,
             pairing_lost: self.pairing_lost,
+            quiet_ms: self.cfg.restart_quiet.as_millis() as u64,
             detail,
             problem: self.problem.clone(),
             pairing_id: self.pairing.pairing_id,
@@ -1121,16 +1375,20 @@ impl WifiGrinder {
         }
     }
 
-    fn ask_for_pairing_id(&self, server: &Server, detail: &str, unknown: Option<u32>) {
+    /// Shows the question for the pairing ID (phase `Asking`), with the last
+    /// one the grinder did not take.
+    fn ask_for_pairing_id(&self, server: &Server, detail: &str, refused_id: Option<u32>) {
         server.set_wifi(
             self.owner,
             WifiLink {
                 grinder: self.cfg.base_url.clone(),
-                state: WifiState::Failing,
+                state: WifiState::Pairing,
+                phase: Some(WifiPhase::Asking),
+                phase_since: Some(self.phase_since),
                 pairing_code: None,
-                needs_pairing_id: true,
-                unknown_pairing_id: unknown,
+                unknown_pairing_id: refused_id,
                 pairing_lost: false,
+                quiet_ms: self.cfg.restart_quiet.as_millis() as u64,
                 detail: detail.to_owned(),
                 problem: None,
                 pairing_id: None,
