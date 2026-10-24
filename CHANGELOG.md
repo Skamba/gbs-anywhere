@@ -6,11 +6,17 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-24
+
+The app is the same as in 0.3.0; this release adds a way to run it without
+Docker.
+
 ### Added
 
 - Each release has a Debian package for `arm64` (Raspberry Pi) and `amd64`,
   which runs gbs-anywhere as a systemd service without Docker, and the plain
-  binary as a tarball. See [Run it](README.md#run-it).
+  binary as a tarball. See
+  [Run it](https://github.com/Skamba/gbs-anywhere#run-it).
 
 ## [0.3.0] - 2026-10-24
 
