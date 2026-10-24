@@ -657,6 +657,8 @@
     // The instructions are the app's own (data-i18n), so they follow the
     // language; the link's detail says the same in English, for the log.
     if (pairing) {
+      // The grinder restarted and came back without the request.
+      $("pair-lost").hidden = !wifi.pairing_lost;
       $("pair-code-box").hidden = wifi.pairing_code == null;
       $("pair-code").textContent = wifi.pairing_code == null ? "" : String(wifi.pairing_code);
     }

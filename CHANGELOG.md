@@ -104,6 +104,11 @@ a minor release may change behaviour.
 - `grinder.wifi.unreachable` in `GET /api/state`: true while an E65/E80 GbS
   does not answer at all (off, in standby or gone from the network), as
   opposed to answering with an error.
+- When an E65/E80 GbS restarts during pairing and comes back without the
+  pairing, the app says that the last pairing didn't stick and to accept
+  again (`grinder.wifi.pairing_lost` in `GET /api/state`, until a pairing
+  sticks). The README's "If pairing doesn't work" now says that a lost
+  pairing can only be made anew and can take several tries.
 - `server.boot_id` in `GET /api/state`: new on every start, so an app can
   tell that event and log numbers started over.
 - `age_ms` on each event in `GET /api/events` and the event stream: how long

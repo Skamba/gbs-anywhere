@@ -40,6 +40,10 @@ struct Fake {
     restart_on_accept: bool,
     /// When it restarted that way.
     restarted_at: Option<Instant>,
+    /// Restarts on the accept that lose the pairing, as the E65W often does:
+    /// the accept check is not answered, and afterwards the grinder has
+    /// neither the pairing nor the request. The next accept takes longer.
+    lose_on_restart: u32,
     /// Accepts the pairing on the second status check, like a person who
     /// needs a moment.
     status_checks: u32,
@@ -132,6 +136,13 @@ async fn handle(State(fake): State<Shared>, uri: Uri, Json(body): Json<Value>) -
             f.status_checks += 1;
             if f.status_checks < 2 + f.slow_accept {
                 return ok(json!({ "accepted": false }));
+            }
+            if f.lose_on_restart > 0 {
+                f.lose_on_restart -= 1;
+                f.forget_requests += 1;
+                f.status_checks = 0;
+                f.slow_accept = 10;
+                return StatusCode::SERVICE_UNAVAILABLE.into_response();
             }
             f.paired = Some(PAIRING_ID);
             if f.restart_on_accept {
@@ -906,6 +917,31 @@ async fn a_grinder_that_restarts_on_the_accept_is_left_alone_while_it_starts_up(
 }
 
 #[tokio::test]
+async fn a_pairing_lost_in_the_restart_is_shown_until_one_sticks() {
+    let fake = Fake {
+        lose_on_restart: 1,
+        ..Fake::default()
+    };
+    let (server, fake) = start(fake, None, None).await;
+    let link = || server.grinder_link().wifi;
+    wait_for("the first request", || {
+        link().is_some_and(|w| w.state == WifiState::Pairing)
+    })
+    .await;
+    assert!(!wifi(&server).pairing_lost, "nothing lost yet");
+    wait_for("the request again, as lost", || {
+        link().is_some_and(|w| w.state == WifiState::Pairing && w.pairing_lost)
+    })
+    .await;
+    let w = wifi(&server);
+    assert_eq!(w.pairing_code, Some(73));
+    assert!(w.detail.contains("did not stick"), "{}", w.detail);
+    assert_eq!(fake.lock().unwrap().applications(), 2, "asked again");
+    wait_for("paired", || paired(&server)).await;
+    assert!(!wifi(&server).pairing_lost, "this one stuck");
+}
+
+#[tokio::test]
 async fn a_pairing_request_still_open_after_the_quiet_time_is_kept() {
     // No answer once, then the grinder answers with the request still open.
     let fake = Fake {
@@ -936,6 +972,11 @@ async fn an_expired_pairing_request_is_replaced_at_once() {
         ..Fake::default()
     };
     let (server, fake) = start(fake, None, None).await;
+    wait_for("the request again", || {
+        fake.lock().unwrap().applications() == 2
+    })
+    .await;
+    assert!(!wifi(&server).pairing_lost, "it did not restart");
     wait_for("pairing", || paired(&server)).await;
     let f = fake.lock().unwrap();
     let applied = f.requests_to(wifi::PATH_PAIRING_APPLICATION);

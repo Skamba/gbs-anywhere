@@ -84,6 +84,7 @@
   "pair.id.range": "Die Pairing-ID ist eine Zahl von 1 bis 65535.",
   "pair.id.unknown": "Die Mühle hat die Pairing-ID {id} nicht angenommen. Prüfe die Zahl an der Mühle und gib sie noch einmal ein.",
   "pair.accept.text": "Öffne an der Mühle Verbindungen → Maschine-zu-Maschine → Konfiguration, tippe auf „Pairing starten“ und dann auf „Pairing akzeptieren“.",
+  "pair.lost": "Falls du schon bestätigt hattest: Die Mühle hat die Kopplung beim Neustart verloren. Das kann ein paar Versuche brauchen, bestätige gbs-anywhere also noch einmal.",
   "pair.id.text": "Die Mühle hat gbs-anywhere gekoppelt, aber die Pairing-ID fehlt hier. Sie steht an der Mühle unter Maschine-zu-Maschine → Konfiguration als „Pairing ID“.",
 
   "badge.start": "Mahlen",

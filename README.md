@@ -188,11 +188,18 @@ WiFi → Configuration** on the grinder:
   ID**; gbs-anywhere checks it with the grinder first. (The ID is also under
   **Diagnosis**, after the serial number. `GRINDER_PAIRING_ID` sets it from
   the command line, unchecked.)
-- **Start Pairing and no gbs-anywhere entry:** the pairing was lost. Switch
-  the grinder off and on (also when it has just restarted by itself),
-  switch Generic WiFi on again if needed, then pair once more. If the
-  pairing still doesn't stick, switch the grinder off and on right before
-  you start pairing.
+- **Start Pairing and no gbs-anywhere entry:** the grinder lost the pairing
+  as it restarted. This happens on the grinder's side, and a lost pairing
+  can't be brought back: the only way is to pair again. gbs-anywhere asks
+  again by itself, and the app says the last pairing didn't stick. Switch
+  Generic WiFi on again if needed, then accept once more. It can take
+  several tries.
+
+A pairing is lost less often on an idle grinder: don't grind right before
+or while you pair, and leave the grinder alone after you accept until it
+has fully started again. Switching it off and on before you pair may help,
+but doesn't always. Once a pairing sticks, avoid Clear Pairing, as it
+means pairing anew.
 
 To start over, tap **Clear Pairing** on the grinder, which also switches
 Generic WiFi off, and switch it on again. After about a minute gbs-anywhere
