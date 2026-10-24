@@ -1,0 +1,12 @@
+# Settings for the gbs-anywhere service (installed as
+# /etc/default/gbs-anywhere). After a change:
+#   sudo systemctl restart gbs-anywhere
+#
+# Most settings are easier in the app. Environment variables as in the
+# README, for example an E65/E80 GbS grinder's address:
+#GRINDER_HOST=192.168.1.30
+#UPDATE_CHECK=off
+#
+# Extra flags (see `gbs-anywhere --help`), for example another port when
+# port 80 is taken (fine for an E65/E80; the E64 WS needs port 80):
+#GBS_ANYWHERE_ARGS=-p 8080

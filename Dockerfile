@@ -7,22 +7,9 @@
 # (see `gbs-anywhere --help`).
 
 FROM rust:1-trixie AS build
-# cargo-about writes the third-party notices (about.toml, about.hbs). This is
-# its release binary, checked against the SHA-256 GitHub lists for it.
-ARG CARGO_ABOUT=0.9.2
-ARG TARGETARCH
-RUN case "$TARGETARCH" in \
-      amd64) arch=x86_64 sum=9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af ;; \
-      arm64) arch=aarch64 sum=af5169282fb6f84e13471493f405437e43ac517744c9ae12fbe2cdf0a6f0e5a8 ;; \
-      *) echo "no cargo-about binary for $TARGETARCH" >&2; exit 1 ;; \
-    esac \
- && name="cargo-about-$CARGO_ABOUT-$arch-unknown-linux-musl" \
- && curl -fsSL -o /tmp/about.tar.gz \
-      "https://github.com/EmbarkStudios/cargo-about/releases/download/$CARGO_ABOUT/$name.tar.gz" \
- && echo "$sum  /tmp/about.tar.gz" | sha256sum -c - \
- && tar -xzf /tmp/about.tar.gz -C /tmp \
- && install "/tmp/$name/cargo-about" /usr/local/cargo/bin/ \
- && rm -r /tmp/about.tar.gz "/tmp/$name"
+# cargo-about writes the third-party notices (about.toml, about.hbs).
+COPY packaging/install-cargo-about.sh /tmp/
+RUN sh /tmp/install-cargo-about.sh
 # Commit shown next to the version (`0.1.0+1a2b3c4`); empty for releases.
 ARG GBS_COMMIT=""
 WORKDIR /src

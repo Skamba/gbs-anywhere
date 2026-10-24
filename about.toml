@@ -1,5 +1,6 @@
 # cargo-about settings: the third-party notices shipped in the image
-# (/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES), made by the Dockerfile
+# and the Debian package (/usr/share/doc/gbs-anywhere/THIRD-PARTY-NOTICES),
+# made by the Dockerfile and packaging/build-release.sh
 # with about.hbs. To see them locally:
 #   cargo about generate --locked about.hbs
 

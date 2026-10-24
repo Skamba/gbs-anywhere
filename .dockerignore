@@ -8,3 +8,4 @@
 # The third-party notices (cargo-about).
 !about.toml
 !about.hbs
+!packaging/install-cargo-about.sh

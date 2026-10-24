@@ -6,6 +6,12 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- Each release has a Debian package for `arm64` (Raspberry Pi) and `amd64`,
+  which runs gbs-anywhere as a systemd service without Docker, and the plain
+  binary as a tarball. See [Run it](README.md#run-it).
+
 ## [0.3.0] - 2026-10-24
 
 ### Changed (breaking)

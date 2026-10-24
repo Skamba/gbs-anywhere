@@ -1,4 +1,5 @@
 /target
+/dist
 
 # Run output (grinder transcripts contain your IPs)
 *.log

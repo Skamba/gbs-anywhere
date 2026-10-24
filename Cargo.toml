@@ -1,6 +1,6 @@
 [package]
 name = "gbs-anywhere"
-description = "Grind-by-Sync for the Mahlkönig E64 WS and E65/E80 GbS with any espresso machine"
+description = "Grind-by-Sync for Mahlkönig E64 WS and E65/E80 GbS with any espresso machine"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
@@ -36,3 +36,25 @@ all = { level = "warn", priority = -1 }
 
 [profile.release]
 strip = true
+
+# The Debian package attached to each release, made by cargo-deb in image.yml
+# after `cargo build --release` and `cargo about generate` (see there).
+[package.metadata.deb]
+maintainer = "gbs-anywhere <https://github.com/Skamba/gbs-anywhere/issues>"
+copyright = "2026 Skamba and the gbs-anywhere contributors"
+license-file = ["LICENSE", "0"]
+section = "net"
+extended-description = """\
+Stands in for the espresso machine a Mahlkönig grinder syncs with \
+(Grind-by-Sync): the E64 WS polls it, an E65/E80 GbS is polled by it. Each \
+shot's time and weight, typed on a phone or reported by an integration, \
+let the grinder adjust its grind setting. Runs as the gbs-anywhere service \
+on port 80. Not affiliated with Mahlkönig or Hemro."""
+assets = [
+    ["target/release/gbs-anywhere", "usr/bin/", "755"],
+    ["packaging/deb/default", "etc/default/gbs-anywhere", "600"],
+    ["README.md", "usr/share/doc/gbs-anywhere/", "644"],
+    ["target/THIRD-PARTY-NOTICES", "usr/share/doc/gbs-anywhere/", "644"],
+]
+maintainer-scripts = "packaging/deb/"
+systemd-units = { enable = true, start = true }

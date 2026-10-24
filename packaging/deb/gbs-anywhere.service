@@ -1,0 +1,44 @@
+[Unit]
+Description=gbs-anywhere: Grind-by-Sync for Mahlkönig grinders with any espresso machine
+Documentation=https://github.com/Skamba/gbs-anywhere
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# What is set up in the app, the shot history and the E65/E80 pairing are
+# kept in /var/lib/gbs-anywhere. Flags and environment variables go in
+# /etc/default/gbs-anywhere.
+Environment=CONFIG_FILE=/var/lib/gbs-anywhere/gbs-anywhere.json
+Environment=GBS_ANYWHERE_ARGS=
+# The journal keeps the text; colour codes would show up in it.
+Environment=NO_COLOR=1
+EnvironmentFile=-/etc/default/gbs-anywhere
+ExecStart=/usr/bin/gbs-anywhere --no-stdin --control off $GBS_ANYWHERE_ARGS
+Restart=on-failure
+RestartSec=5
+
+# Runs as a user of its own, made by systemd, that may only bind port 80
+# and write its state directory.
+DynamicUser=yes
+StateDirectory=gbs-anywhere
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+PrivateDevices=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+
+[Install]
+WantedBy=multi-user.target

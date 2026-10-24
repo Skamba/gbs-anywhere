@@ -7,7 +7,8 @@
 # was already built from the same commit (running the workflow by hand on
 # `main` always publishes). A `vX.Y.Z` tag publishes `X.Y.Z`, `X.Y`, `X`
 # (from 1.0) and `latest`, and creates the GitHub release from that version's
-# section in CHANGELOG.md.
+# section in CHANGELOG.md, with the binaries and Debian packages for amd64 and
+# arm64 attached (`packages`; pull requests build them as a check).
 name: image
 
 on:
@@ -198,14 +199,57 @@ jobs:
       - name: Inspect
         run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
 
+  # The binary as a tarball and the Debian package, for people who run
+  # gbs-anywhere without Docker (a Raspberry Pi, say). Built in Debian 12 so
+  # they work with its glibc and newer (see packaging/build-release.sh).
+  packages:
+    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the tarball and the Debian package
+        env:
+          GBS_COMMIT: ${{ !startsWith(github.ref, 'refs/tags/') && github.sha || '' }}
+        run: |
+          docker run --rm -v "$PWD:/src" -w /src -e GBS_COMMIT \
+            rust:1-bookworm sh packaging/build-release.sh
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: merge
+    needs: [merge, packages]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: ${{ runner.temp }}/dist
+          pattern: packages-*
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: ${{ runner.temp }}/dist
+        run: sha256sum * > SHA256SUMS && cat SHA256SUMS
 
       - name: Create the GitHub release from CHANGELOG.md
         env:
@@ -218,4 +262,5 @@ jobs:
             CHANGELOG.md > "$notes"
           flags=()
           if [[ $TAG == *-* ]]; then flags+=(--prerelease); fi
-          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$notes" "${flags[@]}"
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$notes" "${flags[@]}" \
+            "$RUNNER_TEMP"/dist/*
