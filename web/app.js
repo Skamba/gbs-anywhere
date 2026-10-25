@@ -2654,7 +2654,7 @@
         if (st === "later") return null;
         return [
           el("p", { class: "body-text", text: t("setup.x1.text") }),
-          crumbs([t("setup.s21.path1"), t("setup.s21.path2"), t("setup.s21.path3"), t("setup.x1.path4")]),
+          crumbs([t("setup.s21.path2"), t("setup.s21.path3"), t("setup.x1.path4")]),
           hint(t("setup.x1.network")), question(t("setup.x1.question")),
           answers(answer("kindChange", "plain", "back", t("setup.back")), answer("x1", "ok", "check", t("setup.x1.yes"))),
         ];
@@ -2665,7 +2665,7 @@
         const ip = pageIp();
         return [
           el("p", { class: "body-text", text: t("setup.x2.text") }),
-          crumbs([t("setup.s21.path3"), t("setup.s22.path2")]),
+          crumbs([t("setup.s21.path3"), t("setup.s22.path2"), t("setup.x2.path3")]),
           // The address this page came from is gbs-anywhere's; a name would do
           // on the grinder less reliably, so then the person looks it up.
           ip ? el("div", { class: "wz-codebox" },

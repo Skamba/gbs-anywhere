@@ -129,11 +129,11 @@ shows that address to enter, and it says when the grinder is connected.
 
 1. Put the grinder on the same network as the computer running gbs-anywhere.
    The E64 WS only supports 2.4 GHz WiFi.
-2. On the grinder, open **Settings** (lower-left button on the home screen).
+2. On the grinder, open the main menu (lower-left button on the home screen).
 3. Go to **Connectivity → Machine To Machine → Enable Xenia**.
-4. Open **Configuration**. The scan will not find gbs-anywhere, so enter the
-   hostname by hand: the computer's IP address, e.g. `192.168.1.20`. An IP is
-   more reliable than a `.local` name.
+4. Open **Configuration → Edit Host**. The scan will not find gbs-anywhere,
+   so enter the hostname by hand: the computer's IP address, e.g.
+   `192.168.1.20`. An IP is more reliable than a `.local` name.
 5. Within a few seconds the status at the top right of the app turns
    **Ready** (tap it: **Grinder connected**). The grinder polls every 2
    seconds from then on.
