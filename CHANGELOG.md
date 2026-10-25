@@ -24,11 +24,12 @@ before.
 
 - **Set up grinder**: the app pairs an E65/E80 GbS step by step, in the
   grinder's own menu names, from **Set up grinder ›** in System status on
-  the Start tab (**Set up an E65/E80 ›** before an address is set) or
-  **Set up** on the grinder card. It replaces the pairing card and the
-  Pairing ID form on the Start tab; a reload keeps your answers. Once
-  paired, it asks whether the grinder shows Status On, and starts again
-  from step 2 if not.
+  the Start tab or **Set up** on the grinder card. It replaces the pairing
+  card and the Pairing ID form on the Start tab; a reload keeps your
+  answers. Once paired, it asks whether the grinder shows Status On, and
+  starts again from step 2 if not. Without a grinder yet, it first asks
+  which one: for an E64 WS it shows where to enable Xenia and which
+  address to enter on the grinder, and waits for its first request.
 - A ⋮ menu on the grinder card under Status: **Change IP address**
   (**Enter IP address** while none is set) and, while an E65/E80 is paired,
   **Clear pairing**, which opens the setup to pair again.

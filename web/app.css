@@ -524,6 +524,7 @@ ul.kinds button:hover { border-color: var(--accent); }
 .wz-progress { display: flex; flex-direction: column; gap: 8px; padding: 2px 0 4px; }
 .wz-progress-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .wz-bars { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.wz-bars.two { grid-template-columns: repeat(2, 1fr); }
 .wz-bar { height: 6px; border-radius: 99px; background: var(--nav); overflow: hidden; position: relative; }
 .wz-bar.done { background: var(--ok); }
 .wz-bar.active { background: var(--accent); }
@@ -583,6 +584,9 @@ ul.kinds button:hover { border-color: var(--accent); }
 /* A question and its two answers side by side: back or no on the left,
    yes on the right, at most two lines each. */
 .wz-question { font-size: 15px; font-weight: 600; line-height: 1.35; color: var(--ink); }
+/* Questions and texts the focus moves to after an answer */
+.wz-question[tabindex]:focus, .wz-body .body-text[tabindex]:focus { outline: none; }
+.wz-question[tabindex]:focus-visible, .wz-body .body-text[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
 .wz-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .wz-btn {
   min-height: 52px; padding: 8px 10px; border: 0; border-radius: 12px; display: flex; align-items: center; justify-content: center;
@@ -607,7 +611,7 @@ ul.kinds button:hover { border-color: var(--accent); }
 .wz-crumb.key { background: var(--start-bg); border-color: transparent; color: var(--start-fg); }
 .wz-sep { color: var(--muted); display: grid; place-items: center; }
 
-/* The Pairing Code */
+/* The Pairing Code, and the E64 WS's hostname */
 .wz-codebox {
   background: var(--start-bg); border-radius: 14px; padding: 16px; min-width: 0; max-width: 100%;
   display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center;
@@ -615,6 +619,8 @@ ul.kinds button:hover { border-color: var(--accent); }
 .wz-codebox .meta { color: var(--start-fg); }
 .wz-code { font-size: 56px; font-weight: 700; letter-spacing: .1em; line-height: 1.05; font-variant-numeric: tabular-nums; color: var(--ink); padding-left: .1em; }
 .wz-name { font-size: 15px; font-weight: 700; color: var(--ink); }
+/* The E64 WS's hostname: as large as fits, never cut off */
+.wz-host-name { font-size: 26px; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .wz-codebox.waiting { background: var(--neutral-bg); }
 .wz-codebox.waiting .wz-code { color: var(--muted); font-size: 40px; }
 .wz-codebox.waiting .meta { color: var(--neutral-fg); }
