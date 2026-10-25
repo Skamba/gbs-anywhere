@@ -140,7 +140,7 @@ shows that address to enter, and it says when the grinder is connected.
 
 **Make a recipe use Grind-by-Sync**
 
-- New recipe: **Settings → Setup Assistance → Assisted Dial-in**, follow the
+- New recipe: main menu → **Setup Assistance → Assisted Dial-in**, follow the
   steps, save the recipe in a slot, answer **yes** to "Fine-tune with GbS?"
   and choose **GbS**.
 - Existing recipe: open the recipe's menu and turn on **Enable GbS**, then set
