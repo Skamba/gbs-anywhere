@@ -258,10 +258,17 @@ impl Server {
         inner.grinder.last_poll = None;
     }
 
-    /// The link's state, unless that link was replaced meanwhile.
-    fn set_wifi(&self, owner: u64, link: WifiLink) {
+    /// The link's state, unless that link was replaced meanwhile. The time
+    /// it entered its state carries over while the state stays the same
+    /// (`state_age_ms`).
+    fn set_wifi(&self, owner: u64, mut link: WifiLink) {
         let mut inner = self.lock();
         if inner.wifi_owner == owner {
+            link.state_since = match &inner.grinder.wifi {
+                Some(old) if old.state == link.state => old.state_since,
+                _ => None,
+            }
+            .or_else(|| Some(Instant::now()));
             inner.grinder.wifi = Some(link);
         }
     }

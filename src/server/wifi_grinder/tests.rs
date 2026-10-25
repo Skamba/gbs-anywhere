@@ -86,6 +86,9 @@ struct Fake {
     drop_accept_reply: u32,
     /// Pairing applications to fail with HTTP 503.
     fail_applications: u32,
+    /// Pairing applications to turn down with a client error, as a grinder
+    /// not set up for pairing would.
+    turn_down_applications: u32,
     /// Job requests to fail with HTTP 503.
     fail_jobs: u32,
     /// How long a pairing application takes to answer.
@@ -154,6 +157,12 @@ async fn handle(State(fake): State<Shared>, uri: Uri, Json(body): Json<Value>) -
             }
             if f.paired.is_some() {
                 return refuse(wifi::STATUS_ALREADY_PAIRED);
+            }
+            if f.turn_down_applications > 0 {
+                f.turn_down_applications -= 1;
+                // A made-up client error: which status a grinder not set up
+                // for pairing sends is not known.
+                return refuse("ClientErrorPairingNotAllowed");
             }
             ok(json!({ "applicationId": 5, "pairingCode": 73 }))
         }
@@ -1957,4 +1966,131 @@ async fn a_replaced_link_starts_no_brew() {
     wait_for("a few more polls", || polls() >= seen + 5).await;
     assert!(!brewing(&server), "the machine is left alone");
     assert_eq!(taken(&fake), 0, "the job is not taken");
+}
+
+/// A fake grinder and the link to it, retrying every 20 ms while unpaired.
+async fn start_retrying(fake: Fake) -> (Arc<Server>, Shared) {
+    let (base, fake) = fake_grinder(fake).await;
+    let server = Server::new(MachineConfig::default());
+    let mut cfg = test_config(&base);
+    cfg.min_backoff = Duration::from_millis(20);
+    cfg.max_backoff = Duration::from_millis(20);
+    cfg.unpaired_backoff = Duration::from_millis(20);
+    run(
+        &server,
+        WifiGrinder::new(cfg, server.pairing_lock.clone()).unwrap(),
+    );
+    (server, fake)
+}
+
+#[tokio::test]
+async fn a_grinder_that_turns_the_application_down_is_not_set_up() {
+    // It answers, but not for pairing: the app offers the setup, until the
+    // grinder takes an application.
+    let fake = Fake {
+        turn_down_applications: 10,
+        ..Fake::default()
+    };
+    let (server, _fake) = start_retrying(fake).await;
+    wait_for("turned down", || {
+        server
+            .grinder_link()
+            .wifi
+            .is_some_and(|w| w.state == WifiState::Failing && w.not_set_up && !w.unreachable)
+    })
+    .await;
+    wait_for("the code", || accepting(&server)).await;
+    assert!(!wifi(&server).not_set_up);
+}
+
+#[tokio::test]
+async fn another_error_while_unpaired_is_no_missing_setup() {
+    // An error that is not the grinder turning the application down (here
+    // HTTP 503) stays an error, with its detail.
+    let fake = Fake {
+        fail_applications: 10,
+        ..Fake::default()
+    };
+    let (server, _fake) = start_retrying(fake).await;
+    // Checked in the state the wait sees: a later one may already be
+    // pairing, where both are false anyway.
+    wait_for("the error", || {
+        server
+            .grinder_link()
+            .wifi
+            .is_some_and(|w| w.state == WifiState::Failing && !w.not_set_up && !w.unreachable)
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn the_state_age_counts_from_the_state_not_the_last_report() {
+    // Failing again and again keeps one state age; the code then starts
+    // its own.
+    let fake = Fake {
+        turn_down_applications: 1_000,
+        ..Fake::default()
+    };
+    let (server, fake) = start_retrying(fake).await;
+    let age = || {
+        crate::server::state_json(&server)["grinder"]["wifi"]["state_age_ms"]
+            .as_u64()
+            .unwrap()
+    };
+    let applications = || fake.lock().unwrap().applications();
+    wait_for("failing", || {
+        server
+            .grinder_link()
+            .wifi
+            .is_some_and(|w| w.state == WifiState::Failing)
+    })
+    .await;
+    let first = age();
+    let read = Instant::now();
+    let before = applications();
+    // Five more reports, at least 80 ms: an age started afresh by each one
+    // would be about 20 ms.
+    wait_for("turned down five times more", || {
+        applications() >= before + 5
+    })
+    .await;
+    let waited = read.elapsed().as_millis() as u64;
+    assert!(
+        age() + 1 >= first + waited,
+        "{} ms, {waited} ms after {first} ms",
+        age()
+    );
+    // The new state can only start once the grinder takes an application,
+    // so its age can't exceed the time since then; an age that went on would
+    // be at least `first + waited` more.
+    let cleared = Instant::now();
+    fake.lock().unwrap().turn_down_applications = 0;
+    wait_for("the code", || accepting(&server)).await;
+    let new_age = age();
+    assert!(
+        new_age <= cleared.elapsed().as_millis() as u64,
+        "{new_age} ms in a new state"
+    );
+}
+
+#[tokio::test]
+async fn not_set_up_ends_with_another_error() {
+    // Turned down, then failing another way: no longer "not set up".
+    let fake = Fake {
+        turn_down_applications: 1_000,
+        ..Fake::default()
+    };
+    let (server, fake) = start_retrying(fake).await;
+    wait_for("turned down", || {
+        server.grinder_link().wifi.is_some_and(|w| w.not_set_up)
+    })
+    .await;
+    fake.lock().unwrap().fail_applications = 1_000;
+    wait_for("another error", || {
+        server
+            .grinder_link()
+            .wifi
+            .is_some_and(|w| w.state == WifiState::Failing && !w.not_set_up && !w.unreachable)
+    })
+    .await;
 }
