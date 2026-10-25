@@ -2,7 +2,7 @@
 
 gbs-anywhere stands in for the espresso machine a Mahlkönig grinder syncs
 with (Grind-by-Sync). The E64 WS polls it over HTTP on port 80; an E65/E80
-GbS is polled by it instead, over the grinder's "Generic WiFi" HTTPS API
+GbS is polled by it instead, over the grinder's Local WiFi HTTPS API
 (`--grinder`). A person on their phone, or an optional integration, reports
 each shot's time and weight; the grinder then adjusts its grind setting. One
 Rust crate, one HTML page, one Docker image. README.md is for users; this
@@ -12,7 +12,7 @@ file is for agents changing the code.
 
 - `src/protocol/`: the grinder link as plain types, no I/O. `machine.rs` holds
   the state machine and shot rules, `wire.rs` the JSON field names, `wifi.rs`
-  the E65/E80 "Generic WiFi" messages, and `grinder.rs` models how the E64 WS
+  the E65/E80 Local WiFi messages, and `grinder.rs` models how the E64 WS
   reads the machine's replies (`GrinderModel`, used in tests).
 - `src/server/`: axum. `grinder_api.rs` is what the E64 WS calls
   (`/api/v2/*`); `wifi_grinder.rs` pairs with an E65/E80 GbS and turns its

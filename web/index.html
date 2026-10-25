@@ -40,43 +40,26 @@
 <body>
 <div class="app" id="app">
   <div class="top">
-    <header>
+    <header id="app-head">
       <h1>Grind-by-Sync</h1>
       <button type="button" id="sys-pill" class="pill t-none" aria-expanded="false" aria-controls="sys-body" aria-label="System status: connecting"><span class="dot"></span><span class="pill-label" id="sys-pill-text">Connecting…</span></button>
     </header>
-    <nav class="tabs" data-i18n-attr="aria-label:nav.sections" aria-label="Sections">
+    <nav class="tabs" id="tabs" data-i18n-attr="aria-label:nav.sections" aria-label="Sections">
       <a href="#start" data-tab="start" aria-current="page" data-i18n="nav.start">Start</a>
       <a href="#status" data-tab="status" data-i18n="nav.status">Status</a>
       <a href="#history" data-tab="history" data-i18n="nav.history">History</a>
     </nav>
+    <!-- The E65/E80 setup's own header, shown in place of the two above -->
+    <header class="wz-top" id="setup-head" hidden>
+      <button type="button" class="wz-close" id="setup-close" data-i18n-attr="aria-label:setup.close;title:setup.close" aria-label="Close the setup" title="Close the setup"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
+      <h1 data-i18n="setup.title">Set up grinder</h1>
+      <span class="pill t-none" id="setup-pill"><span class="dot"></span><span class="pill-label" id="setup-pill-text"></span></span>
+    </header>
   </div>
 
   <!-- Start: system status and the three steps of a shot -->
   <main class="panel" id="tab-start">
     <div id="banner" class="banner" role="status" hidden></div>
-
-    <!-- E65/E80: waiting for the person to accept gbs-anywhere on the grinder -->
-    <section id="pair-card" class="card pad stack" data-i18n-attr="aria-label:pair.kicker" aria-label="Grinder pairing" hidden>
-      <p class="kicker" data-i18n="pair.kicker">Grinder pairing</p>
-      <p class="card-title" data-i18n="pair.accept.title">Accept gbs-anywhere on the grinder</p>
-      <p class="body-text" data-i18n="pair.accept.text">On the grinder, open Connectivity → Machine To Machine → Generic WiFi → Configuration, tap Start Pairing, then Accept Pairing.</p>
-      <p class="hint warn" id="pair-lost" data-i18n="pair.lost" hidden>If you had accepted, the pairing didn't stick: the grinder lost it when it restarted. This can take a few tries, so accept gbs-anywhere again.</p>
-      <div id="pair-code-box" hidden>
-        <p class="meta" data-i18n="pair.code">Code shown next to gbs-anywhere</p>
-        <p class="code" id="pair-code"></p>
-      </div>
-    </section>
-
-    <!-- E65/E80: the pairing ID, when gbs-anywhere lost it -->
-    <form id="pairing-form" class="card pad stack" autocomplete="off" data-i18n-attr="aria-label:pair.id.label" aria-label="Pairing ID" hidden>
-      <p class="kicker" data-i18n="pair.kicker">Grinder pairing</p>
-      <p class="card-title" data-i18n="pair.id.title">Enter the pairing ID</p>
-      <p class="body-text" data-i18n="pair.id.text">The grinder has gbs-anywhere paired, but its pairing ID is missing here. The grinder shows it as Pairing ID under Generic WiFi → Configuration.</p>
-      <label class="field-label"><span data-i18n="pair.id.label">Pairing ID</span><span class="field"><input id="f-pairing" inputmode="numeric" enterkeyhint="send" autocomplete="off"></span></label>
-      <p class="hint warn" id="pairing-unknown" role="status" hidden></p>
-      <p class="hint warn" id="pairing-error" role="alert" hidden></p>
-      <button type="submit" class="btn-send self-start" id="pairing-submit" data-i18n="pair.id.submit">Use this pairing ID</button>
-    </form>
 
     <section class="card clip t-ok" id="sys-card" data-i18n-attr="aria-label:sys.title" aria-label="System status">
       <button type="button" class="card-head" id="sys-toggle" aria-expanded="false" aria-controls="sys-body">
@@ -86,6 +69,7 @@
       </button>
       <div class="sys-body" id="sys-body" hidden>
         <p class="body-text" id="sys-text"></p>
+        <a href="#setup" class="sys-log sys-setup" id="sys-setup-link" hidden><span data-i18n="sys.setup">Set up grinder</span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></a>
         <div class="sys-diag" id="sys-detail" hidden>
           <span class="sys-diag-text"><span class="sys-diag-k" data-i18n="sys.lastError">Last error</span><span id="sys-detail-text"></span></span>
           <a href="#log" class="sys-log" id="sys-log-link" data-i18n-attr="aria-label:log.show" aria-label="Show the log"><span data-i18n="log.title">Log</span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></a>
@@ -193,13 +177,28 @@
 
   <!-- Status: grinder, integrations, settings, version, log -->
   <main class="panel" id="tab-status" hidden>
-    <section class="card pad stack-12" data-i18n-attr="aria-label:status.grinder" aria-label="Grinder">
+    <!-- The grinder: its ⋮ menu (the integrations' one) changes the address
+         in the form below and clears the pairing through the setup. -->
+    <section class="card pad stack-12 g-card" id="g-card" data-i18n-attr="aria-label:status.grinder" aria-label="Grinder">
       <div class="row-12">
         <span class="tile-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3h10l-1.5 5h-7z"/><rect x="6" y="8" width="12" height="9" rx="2"/><path d="M10 17v3h4v-3"/></svg></span>
         <div class="minw"><p class="card-title" data-i18n="status.grinder">Grinder</p><p class="sub" id="g-model"></p></div>
-        <span class="pill-sm t-none" id="g-pill"><span class="dot"></span><span id="g-pill-text">–</span></span>
+        <span class="head-end" id="g-end"><span class="pill-sm t-none" id="g-pill"><span class="dot"></span><span id="g-pill-text">–</span></span></span>
       </div>
       <dl class="facts" id="g-facts"></dl>
+      <!-- The grinder's address. Below the field: where it comes from. -->
+      <form class="stack" id="g-host-form" autocomplete="off" hidden>
+        <label class="field-label" for="f-host" id="g-host-name" data-i18n="grinder.host.label">Grinder IP address</label>
+        <span class="field"><input id="f-host" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="192.168.1.30" enterkeyhint="done" style="font-size:16px;font-weight:500"></span>
+        <p class="foot" data-i18n="grinder.host.help">The address of an E65/E80 GbS (Local WiFi). Leave it empty when you use an E64 WS.</p>
+        <div class="set-from" id="g-host-from" hidden><span id="g-host-from-text" tabindex="-1"></span><button type="button" class="link-btn" id="g-host-reset" aria-describedby="g-host-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
+        <p class="hint warn" id="g-host-error" role="alert" hidden></p>
+        <div class="actions">
+          <button type="button" class="btn-plain sm" id="g-host-cancel" data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="btn-send" id="g-host-save" data-i18n="common.save">Save</button>
+        </div>
+      </form>
+      <button type="button" class="btn-send g-setup" id="g-setup" data-i18n="grinder.setup" hidden>Set up</button>
     </section>
 
     <section class="card" data-i18n-attr="aria-label:integ.title" aria-label="Machine integrations">
@@ -276,24 +275,6 @@
         <p class="hint" id="set-window-msg" role="status"></p>
         <div class="set-from" id="set-window-from" hidden><span id="set-window-from-text" tabindex="-1"></span><button type="button" class="link-btn" id="set-window-reset" aria-describedby="set-window-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
       </div>
-      <div class="set-block" id="set-host-row" hidden>
-        <div class="set-row">
-          <span class="set-text"><span class="set-name" id="set-host-name" data-i18n="settings.host">Grinder IP address</span><span class="set-sub" id="set-host-value"></span></span>
-          <button type="button" class="btn-plain sm" id="set-host-change" aria-controls="set-host-form" aria-expanded="false" data-i18n="common.change">Change</button>
-        </div>
-        <div class="set-from" id="set-host-from" hidden><span id="set-host-from-text" tabindex="-1"></span><button type="button" class="link-btn" id="set-host-reset" aria-describedby="set-host-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
-        <p class="hint warn" id="set-host-reset-error" role="alert" hidden></p>
-      </div>
-      <form class="stack" id="set-host-form" autocomplete="off" hidden>
-        <label class="field-label" for="f-host" data-i18n="settings.host">Grinder IP address</label>
-        <span class="field"><input id="f-host" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="192.168.1.30" enterkeyhint="done" style="font-size:16px;font-weight:500"></span>
-        <p class="foot" data-i18n="settings.hostHelp">The address of an E65/E80 GbS (Generic WiFi). Leave it empty when you use an E64 WS.</p>
-        <p class="hint warn" id="set-host-error" role="alert" hidden></p>
-        <div class="actions">
-          <button type="button" class="btn-plain sm" id="set-host-cancel" data-i18n="common.cancel">Cancel</button>
-          <button type="submit" class="btn-send" id="set-host-save" data-i18n="common.save">Save</button>
-        </div>
-      </form>
       <div class="set-block" id="set-update-row" hidden>
         <div class="set-row wrap">
           <span class="set-text"><span class="set-name" id="update-name" data-i18n="settings.update">Update check</span><span class="set-sub" data-i18n="settings.updateSub">asks GitHub once a day</span></span>
@@ -355,6 +336,17 @@
     <div class="stack-14" id="h-groups"></div>
     <p class="center-note" id="h-empty" hidden></p>
     <p class="foot" id="h-foot" style="margin-top:4px" hidden></p>
+  </main>
+
+  <!-- Setup: pairing an E65/E80 GbS, step by step. The steps are built by
+       the script from the link's state; see renderSetup(). -->
+  <main class="panel" id="tab-setup" hidden>
+    <section class="wz-progress" data-i18n-attr="aria-label:setup.progress" aria-label="Progress">
+      <div class="wz-progress-top"><p class="kicker" data-i18n="setup.progress.kicker">Setup</p><p class="meta" id="wz-progress"></p></div>
+      <div class="wz-bars" id="wz-bars" aria-hidden="true"></div>
+    </section>
+    <div class="stack-12" id="wz-steps"></div>
+    <p class="sr" id="wz-live" role="status"></p>
   </main>
 
   <footer class="app-footer" id="app-footer">gbs-anywhere</footer>

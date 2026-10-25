@@ -1,5 +1,5 @@
 //! The link to a grinder of the E65/E80 Grind-by-Sync family over its
-//! "Generic WiFi" option. Unlike the E64 WS, which polls the machine, here the
+//! Local WiFi option. Unlike the E64 WS, which polls the machine, here the
 //! machine is the client:
 //!
 //! ```text
@@ -93,7 +93,8 @@ pub struct PairingStatusRes {
     pub status: String,
     #[serde(default)]
     pub accepted: bool,
-    /// Sent once accepted. Also shown on the grinder, under Generic WiFi.
+    /// Sent once accepted. Also shown on the grinder under Configuration,
+    /// once paired.
     pub pairing_id: Option<u32>,
 }
 

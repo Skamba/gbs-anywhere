@@ -107,8 +107,9 @@ struct Args {
     #[arg(long, env = "CONFIG_FILE", value_name = "FILE")]
     config: Option<PathBuf>,
 
-    /// An E65/E80 GbS grinder to pair with over its "Generic WiFi" option:
-    /// its address, e.g. 192.168.1.30. The E64 WS connects to gbs-anywhere
+    /// An E65/E80 GbS grinder to pair with over its Local WiFi (Machine To
+    /// Machine → GBS COFFEE MACHINES on the grinder): its address, e.g.
+    /// 192.168.1.30. The E64 WS connects to gbs-anywhere
     /// instead and needs nothing here. An address set in the app wins.
     #[arg(long, env = "GRINDER_HOST", value_name = "HOST")]
     grinder: Option<String>,
