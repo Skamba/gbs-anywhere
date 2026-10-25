@@ -124,8 +124,8 @@ The grinder treats gbs-anywhere as a Xenia, so the menus below say "Xenia".
 **Connect the grinder**
 
 The app takes you through these steps too: tap **Set up grinder ›** on the
-Start tab and choose **E64 WS**. It shows the address to enter and says
-when the grinder is connected.
+Start tab and choose **E64 WS**. Opened at the computer's IP address, it
+shows that address to enter, and it says when the grinder is connected.
 
 1. Put the grinder on the same network as the computer running gbs-anywhere.
    The E64 WS only supports 2.4 GHz WiFi.

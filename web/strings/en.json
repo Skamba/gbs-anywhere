@@ -137,6 +137,7 @@
   "setup.x2.label": "Address to enter on the grinder",
   "setup.x2.byName": "Enter the IP address of the computer running gbs-anywhere; your router’s device list shows it. An IP is more reliable on the grinder than a name.",
   "setup.x2.ip": "Give that computer a fixed IP address (a DHCP reservation in your router), so the grinder keeps finding it.",
+  "setup.x2.port": "This page is on port {port}, but the grinder always connects to port 80: gbs-anywhere has to answer there too.",
   "setup.x2.question": "Is the address entered on the grinder?",
   "setup.x2.yes": "Entered",
   "setup.x2.done": "The address is entered",

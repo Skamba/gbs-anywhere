@@ -137,6 +137,7 @@
   "setup.x2.label": "An der Mühle einzugebende Adresse",
   "setup.x2.byName": "Gib die IP-Adresse des Computers ein, auf dem gbs-anywhere läuft; die Geräteliste deines Routers zeigt sie. Eine IP ist an der Mühle zuverlässiger als ein Name.",
   "setup.x2.ip": "Gib diesem Computer eine feste IP-Adresse (eine DHCP-Reservierung im Router), damit die Mühle ihn immer findet.",
+  "setup.x2.port": "Diese Seite läuft auf Port {port}, die Mühle verbindet sich aber immer mit Port 80: gbs-anywhere muss auch dort antworten.",
   "setup.x2.question": "Ist die Adresse an der Mühle eingegeben?",
   "setup.x2.yes": "Eingegeben",
   "setup.x2.done": "Die Adresse ist eingegeben",

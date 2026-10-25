@@ -2308,6 +2308,7 @@
       kind: null,           // the grinder the person chose: "e64" or "wifi" (see setupKind)
       x1: false,            // E64 WS: Xenia enabled
       x2: false,            // E64 WS: gbs-anywhere's address entered on it
+      polled: false,        // E64 WS: it polled while the setup was open
       cleared: false,       // repair: the link let go of the old pairing
       clearTapped: false,   // repair: the person said it is cleared
       noClear: false,       // repair after Status Off: nothing to clear, no clearing card
@@ -2397,23 +2398,28 @@
   const setupOffered = () => setupNeeded() || noGrinderYet();
   /** The grinder the setup is for: "e64", "wifi" (E65/E80) or null while
    *  the person has not said and the app can't tell. Re-pairing and an
-   *  address are an E65/E80; an E64 WS polling here (and no E65/E80 link,
-   *  which polls too) is one. */
+   *  address are an E65/E80, also over a choice of E64 WS (an address may
+   *  be saved from another device meanwhile); an E64 WS that polled since
+   *  gbs-anywhere started is one. */
   function setupKind() {
-    if (wz.mode === "repair") return "wifi";
+    if (wz.mode === "repair" || wifiSetup()) return "wifi";
     if (wz.kind) return wz.kind;
-    if (wifiSetup()) return "wifi";
-    if (linkOn()) return "e64";
+    if (S && S.grinder.last_poll_age_ms != null) return "e64";
     return null;
   }
-  /** The E64 WS polls here: its setup is done. */
-  const e64Polling = () => linkOn() && !wifiOf();
-  /** The address the page was opened at, when it is an IPv4 address: the
-   *  one to enter on the E64 WS. A name is left out, as an IP is more
-   *  reliable on the grinder. */
+  /** The E64 WS's setup is done: it polls, or polled while the setup was
+   *  open, so a pause in its polls (or the grinder switched off) doesn't
+   *  take back the finished setup. Not with an E65/E80 link, which polls
+   *  too. */
+  const e64Done = () => !wifiOf() && (wz.polled || linkOn());
+  /** The address the page was opened at, when it is an IPv4 address the
+   *  grinder can reach: the one to enter on the E64 WS. A name is left out,
+   *  as an IP is more reliable on the grinder, and so are loopback and
+   *  link-local addresses. */
   function pageIp() {
     const h = location.hostname;
-    return /^\d{1,3}(\.\d{1,3}){3}$/.test(h) ? h : "";
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return "";
+    return /^(127\.|0\.|169\.254\.)/.test(h) ? "" : h;
   }
 
   /** Opens the setup from the app; `mode` "repair" starts with clearing the
@@ -2434,7 +2440,7 @@
     const kind = setupKind();
     if (!kind) return { step: "kind" };
     if (kind === "e64") {
-      if (e64Polling()) return { step: "x3", part: "done" };
+      if (e64Done()) return { step: "x3", part: "done" };
       return { step: !wz.x1 ? "x1" : !wz.x2 ? "x2" : "x3" };
     }
     const w = wifiOf();
@@ -2604,7 +2610,11 @@
           el("p", { class: "meta", text: t("setup.x2.label") }),
           el("p", { class: "wz-code addr", text: ip }))
           : hint(t("setup.x2.byName")),
-        hint(t("setup.x2.ip")), question(t("setup.x2.question")),
+        hint(t("setup.x2.ip")),
+        // The grinder always connects to port 80: an app on another port
+        // (say, Docker's -p 8080:80) needs gbs-anywhere on port 80 too.
+        location.port && location.port !== "80" ? hint(t("setup.x2.port", { port: location.port }), "warn") : null,
+        question(t("setup.x2.question")),
         answers(answer("x2Back", "plain", "back", t("setup.back")), answer("x2", "ok", "check", t("setup.x2.yes"))),
       ];
     }
@@ -2810,6 +2820,10 @@
   /** Follows the link: the clear card ends once the link lets go of the
    *  old pairing, and a new step starts with its cards as they open. */
   function syncSetup() {
+    // An address saved meanwhile makes it an E65/E80, and the card on top
+    // says so.
+    if (wz.kind === "e64" && wifiSetup()) wz.kind = "wifi";
+    if (linkOn() && !wifiOf()) wz.polled = true;
     if (setupKind() !== "wifi") {
       const at = setupAt();
       const key = setupKey(at);
@@ -3105,7 +3119,7 @@
       case "noCodeBack": Object.assign(wz, { started: 0, c31: false, c21: false, note: "", focus: "wz-s21" }); break;
       case "kindE64": Object.assign(wz, { kind: "e64", x1: false, x2: false, focus: "wz-head-x1" }); setupSay(t("setup.kind.chosen", { grinder: t("setup.kind.e64") })); break;
       case "kindWifi": wz.kind = "wifi"; wz.focus = "wz-host"; setupSay(t("setup.kind.chosen", { grinder: t("setup.kind.wifi") })); break;
-      case "kindChange": Object.assign(wz, { kind: null, x1: false, x2: false, focus: "wz-head-kind" }); break;
+      case "kindChange": Object.assign(wz, { kind: null, x1: false, x2: false, polled: false, focus: "wz-head-kind" }); break;
       case "x1": wz.x1 = true; wz.focus = "wz-head-x2"; setupSay(t("setup.x1.done")); break;
       case "x2": wz.x2 = true; wz.focus = "wz-head-x3"; setupSay(t("setup.x2.done")); break;
       case "x2Back": wz.x1 = false; wz.focus = "wz-head-x1"; break;
