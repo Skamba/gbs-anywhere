@@ -12,6 +12,10 @@ a minor release may change behaviour.
   integration use the accent colour like the other main buttons, and
   warnings (an aborted shot in History, warning notes) are orange, apart
   from the brown accent.
+- After a shot, step 3 on the Start tab stays open with the shot, the
+  grinder's rating and what to expect next; a closed step shows what it
+  came to under its title (the recipe target, the shot, the rating with its
+  trend), and the step heads keep their place when opened or closed.
 - The appearance and language switches under Settings have equal widths,
   and the pressed label no longer wraps or shifts them.
 
