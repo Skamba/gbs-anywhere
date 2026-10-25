@@ -37,10 +37,10 @@ docker run -d --name gbs-anywhere --restart unless-stopped \
   -p 80:80 -v gbs-anywhere:/data ghcr.io/skamba/gbs-anywhere
 ```
 
-For an E65/E80 GbS, enter the grinder's IP address in the app later
-(**Set up an E65/E80 ›** on the Start tab), or add
-`-e GRINDER_HOST=<the grinder's IP>` before the image name (see
-[Set up an E65/E80 GbS](#set-up-an-e65e80-gbs)).
+Then open the app and tap **Set up grinder ›** on the Start tab: it asks
+which grinder you have and takes you through its steps. For an E65/E80 GbS
+you can instead add `-e GRINDER_HOST=<the grinder's IP>` before the image
+name (see [Set up an E65/E80 GbS](#set-up-an-e65e80-gbs)).
 
 The `/data` volume keeps what you set up in the app (integrations and
 [settings](#settings-in-the-app)), the shot history and the E65/E80 pairing
@@ -123,6 +123,10 @@ The grinder treats gbs-anywhere as a Xenia, so the menus below say "Xenia".
 
 **Connect the grinder**
 
+The app takes you through these steps too: tap **Set up grinder ›** on the
+Start tab and choose **E64 WS**. It shows the address to enter and says
+when the grinder is connected.
+
 1. Put the grinder on the same network as the computer running gbs-anywhere.
    The E64 WS only supports 2.4 GHz WiFi.
 2. On the grinder, open **Settings** (lower-left button on the home screen).
@@ -178,8 +182,9 @@ source). gbs-anywhere talks to the grinder on port 30001 over HTTPS.
    off, and set **Grouphead Selection** to **Grouphead 1** (or **All**):
    Grind-by-Sync only learns from shots of the selected group, and
    gbs-anywhere is a one-group machine.
-2. On the Start tab, tap **Set up an E65/E80 ›** under System status: the
-   setup starts with the grinder's address. With the address already set
+2. On the Start tab, tap **Set up grinder ›** under System status and
+   choose **E65 / E80**: the setup goes on with the grinder's address.
+   With the address already set
    (with **Change IP address** in the ⋮ menu of the grinder card under
    **Status**, or when starting gbs-anywhere), System status says the
    grinder is not set up: tap **Set up grinder ›** there, or **Set up** on

@@ -49,7 +49,7 @@
       <a href="#status" data-tab="status" data-i18n="nav.status">Status</a>
       <a href="#history" data-tab="history" data-i18n="nav.history">History</a>
     </nav>
-    <!-- The E65/E80 setup's own header, shown in place of the two above -->
+    <!-- The setup's own header, shown in place of the two above -->
     <header class="wz-top" id="setup-head" hidden>
       <button type="button" class="wz-close" id="setup-close" data-i18n-attr="aria-label:setup.close;title:setup.close" aria-label="Close the setup" title="Close the setup"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
       <h1 data-i18n="setup.title">Set up grinder</h1>
@@ -338,8 +338,9 @@
     <p class="foot" id="h-foot" style="margin-top:4px" hidden></p>
   </main>
 
-  <!-- Setup: pairing an E65/E80 GbS, step by step. The steps are built by
-       the script from the link's state; see renderSetup(). -->
+  <!-- Setup: which grinder, then connecting an E64 WS or pairing an E65/E80
+       GbS, step by step. The steps are built by the script from the
+       server's state; see renderSetup(). -->
   <main class="panel" id="tab-setup" hidden>
     <section class="wz-progress" data-i18n-attr="aria-label:setup.progress" aria-label="Progress">
       <div class="wz-progress-top"><p class="kicker" data-i18n="setup.progress.kicker">Setup</p><p class="meta" id="wz-progress"></p></div>

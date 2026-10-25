@@ -33,6 +33,7 @@
     stop: '<circle cx="12" cy="12" r="9"/><path d="M5.6 5.6l12.8 12.8"/>',
     retry: '<path d="M20 12a8 8 0 1 1-2.5-5.8M20 4v5h-5"/>',
     timer: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    grinder: '<path d="M7 3h10l-1.5 5h-7z"/><rect x="6" y="8" width="12" height="9" rx="2"/><path d="M10 17v3h4v-3"/>',
     unlink: '<path d="M9.5 14.5l-2 2a3.5 3.5 0 0 1-5-5l2-2M14.5 9.5l2-2a3.5 3.5 0 0 1 5 5l-2 2M8 3v3M3 8h3M16 21v-3M21 16h-3"/>',
     down: '<path d="M6 9l6 6 6-6"/>',
   };
@@ -420,8 +421,8 @@
   };
 
   // --- Tabs --------------------------------------------------------------------
-  // "setup" is the E65/E80 setup's own view, without the tabs (#setup, or
-  // #repair to start by clearing the old pairing).
+  // "setup" is the grinder setup's own view, without the tabs (#setup, or
+  // #repair to start an E65/E80 by clearing the old pairing).
   const TABS = ["start", "status", "history", "setup"];
   function showTab(name) {
     // The log is the last card on Status: #log opens it there.
@@ -621,20 +622,9 @@
     $("sys-icon").replaceChildren(icon(s.icon, 22, s.icon === "check" ? 2.2 : 2));
     $("sys-text").textContent = s.text;
     $("sys-text").hidden = !s.text;
-    // An E65/E80 that is not paired yet: the way into the setup. Also with
-    // no grinder at all yet (no address, and no E64 WS polled since the
-    // start): the setup then starts with the address.
-    const noGrinderYet = !!S && s.key === "noGrinder" && !wifiSetup() && S.grinder.last_poll_age_ms == null;
-    const link = $("sys-setup-link");
-    link.hidden = !(S && online && (setupNeeded() || noGrinderYet));
-    // Without an address, an E64 WS that is off looks the same: the link
-    // then names the E65/E80 and isn't filled, so it doesn't read as a step
-    // for an E64 WS.
-    const e65Only = !setupNeeded();
-    link.classList.toggle("sys-setup", !e65Only);
-    const linkKey = e65Only ? "sys.setupE65" : "sys.setup";
-    link.firstChild.dataset.i18n = linkKey;
-    if (link.firstChild.textContent !== t(linkKey)) link.firstChild.textContent = t(linkKey);
+    // The way into the setup: an E65/E80 that is not paired yet, or no
+    // grinder at all yet (the setup then asks which one).
+    $("sys-setup-link").hidden = !(S && online && setupOffered());
     // The last error, with the way to the log.
     $("sys-detail-text").textContent = s.detail;
     $("sys-detail").hidden = !s.detail;
@@ -1106,8 +1096,9 @@
     else if (linkStarting()) { tone = "start"; state = "connecting"; }
     else if (setupNeeded() && wifi && wifi.state === "failing" && wifi.unreachable === false) { tone = "start"; state = "notSetUp"; }
     setTone($("g-pill"), tone);
-    // Set up while an E65/E80 is not paired; clearing a pairing is in the menu.
-    $("g-setup").hidden = !setupNeeded() || !$("g-host-form").hidden;
+    // Set up while an E65/E80 is not paired, or no grinder is known yet;
+    // clearing a pairing is in the menu.
+    $("g-setup").hidden = !setupOffered() || !$("g-host-form").hidden;
     $("g-pill-text").textContent = t("grinder.state." + state);
     renderGrinderMenu();
     const age = S.grinder.last_poll_age_ms;
@@ -2299,10 +2290,12 @@
     logDone("dl", t("log.downloaded", { file: name, n: lines.length }));
   });
 
-  // --- Setup (E65/E80) ---------------------------------------------------------------
-  // Pairing an E65/E80 GbS step by step, in a view of its own. Which step it
-  // is comes from the link (grinder.wifi in /api/state) wherever it can, so
-  // a reload lands on the same one. What the person says about the
+  // --- Setup ------------------------------------------------------------------------
+  // Setting up a grinder step by step, in a view of its own. It starts by
+  // asking which grinder it is, unless the app can tell: an E64 WS is told
+  // where gbs-anywhere is and polls it, an E65/E80 GbS is paired. Which step
+  // it is comes from the server (grinder.wifi and the E64 WS's polls in
+  // /api/state) wherever it can, so a reload lands on the same one. What the person says about the
   // grinder's screen (Enabled, Pairing started, shown, Cleared) is kept
   // here, and in this tab's sessionStorage until the setup closes or
   // finishes, so a reload goes on from it too. Re-pairing starts with a
@@ -2312,6 +2305,9 @@
   function freshSetup(mode) {
     return {
       mode,
+      kind: null,           // the grinder the person chose: "e64" or "wifi" (see setupKind)
+      x1: false,            // E64 WS: Xenia enabled
+      x2: false,            // E64 WS: gbs-anywhere's address entered on it
       cleared: false,       // repair: the link let go of the old pairing
       clearTapped: false,   // repair: the person said it is cleared
       noClear: false,       // repair after Status Off: nothing to clear, no clearing card
@@ -2346,7 +2342,7 @@
   // "gbs.setup"). Only these: the rest comes from the link again.
   // lastCode too: after a reload in the restart wait, it still tells the
   // same request (not accepted yet) from a new one (lost).
-  const SETUP_KEPT = ["mode", "clearTapped", "noClear", "c21", "started", "c31", "attempt", "note", "lostAck", "confirmed", "lastCode"];
+  const SETUP_KEPT = ["mode", "kind", "x1", "x2", "clearTapped", "noClear", "c21", "started", "c31", "attempt", "note", "lostAck", "confirmed", "lastCode"];
   let setupKept = null;   // what was last written: only a change is written
   function keepSetup() {
     const v = JSON.stringify(SETUP_KEPT.map((k) => wz[k]));
@@ -2368,7 +2364,7 @@
     if (kept.mode !== mode && !(kept.mode === "repair" && mode === "setup")) return null;
     const fresh = freshSetup(kept.mode);
     for (const k of SETUP_KEPT) {
-      // lastCode starts as null and is a string once a code was shown.
+      // kind and lastCode start as null and are strings once set.
       if (typeof kept[k] === typeof fresh[k] || (fresh[k] === null && typeof kept[k] === "string")) fresh[k] = kept[k];
     }
     // The hash moves to #setup only once the old pairing is cleared.
@@ -2394,6 +2390,31 @@
   const wifiPaired = () => { const w = wifiOf(); return !!(w && w.pairing_id != null); };
   /** An E65/E80 is set up but not paired: the way into the setup shows. */
   const setupNeeded = () => wifiSetup() && !wifiPaired();
+  /** No grinder known yet: no E65/E80 address, and no E64 WS polled since
+   *  gbs-anywhere started. An E64 WS that is off looks the same, so the
+   *  setup asks which grinder it is. */
+  const noGrinderYet = () => !!S && !wifiSetup() && S.grinder.last_poll_age_ms == null;
+  const setupOffered = () => setupNeeded() || noGrinderYet();
+  /** The grinder the setup is for: "e64", "wifi" (E65/E80) or null while
+   *  the person has not said and the app can't tell. Re-pairing and an
+   *  address are an E65/E80; an E64 WS polling here (and no E65/E80 link,
+   *  which polls too) is one. */
+  function setupKind() {
+    if (wz.mode === "repair") return "wifi";
+    if (wz.kind) return wz.kind;
+    if (wifiSetup()) return "wifi";
+    if (linkOn()) return "e64";
+    return null;
+  }
+  /** The E64 WS polls here: its setup is done. */
+  const e64Polling = () => linkOn() && !wifiOf();
+  /** The address the page was opened at, when it is an IPv4 address: the
+   *  one to enter on the E64 WS. A name is left out, as an IP is more
+   *  reliable on the grinder. */
+  function pageIp() {
+    const h = location.hostname;
+    return /^\d{1,3}(\.\d{1,3}){3}$/.test(h) ? h : "";
+  }
 
   /** Opens the setup from the app; `mode` "repair" starts with clearing the
    *  pairing on the grinder. */
@@ -2405,9 +2426,17 @@
   }
   function closeSetup() { goTab(setupFrom); }
 
-  /** Where the setup is: `step` 1 to 5 or "clear"; for step 5 its `part`
-   *  (done, id or lost); for step 3 the Pairing Code, when there is one. */
+  /** Where the setup is: "kind" while it asks which grinder; for an E64 WS
+   *  `step` "x1" to "x3", with `part` done once it polls; for an E65/E80
+   *  `step` 1 to 5 or "clear", for step 5 its `part` (done, id or lost), for
+   *  step 3 the Pairing Code, when there is one. */
   function setupAt() {
+    const kind = setupKind();
+    if (!kind) return { step: "kind" };
+    if (kind === "e64") {
+      if (e64Polling()) return { step: "x3", part: "done" };
+      return { step: !wz.x1 ? "x1" : !wz.x2 ? "x2" : "x3" };
+    }
     const w = wifiOf();
     if (!setupHost() || wz.editHost) return { step: 1 };
     // Re-pair: the link keeps the old pairing until it notices it was
@@ -2433,10 +2462,14 @@
     return { step: 2 };
   }
 
-  // Each card's place: the clear card sits between steps 1 and 2.
-  const SETUP_ORDER = { 1: 1, clear: 1.5, 2: 2, 3: 3, 4: 4, 5: 5 };
+  // Each card's place: the grinder's kind first, the clear card between
+  // steps 1 and 2; the E64 WS has its own three.
+  const SETUP_ORDER = { kind: 0, 1: 1, clear: 1.5, 2: 2, 3: 3, 4: 4, 5: 5, x1: 1, x2: 2, x3: 3 };
+  /** The number a card shows: 1 to 5, and 1 to 3 for the E64 WS's. */
+  const setupNo = (n) => (typeof n === "number" ? n : SETUP_ORDER[n]);
   /** done, active, wait (for the grinder), retry or later. */
   function setupCard(n, at) {
+    if (n === "kind") return at.step === "kind" ? "active" : "done";
     if (at.part === "done") return "done";
     if (n === "clear" && wz.cleared) return "done";
     // Cleared on the grinder: waits in the background for the link.
@@ -2448,16 +2481,19 @@
     if (me > cur) return "later";
     if (n === "clear") return wz.clearTapped ? "wait" : "active";
     if (n === 3 && !at.code) return "wait";
-    if (n === 4) return "wait";
+    if (n === 4 || n === "x3") return "wait";
     if (n === 5 && at.part === "lost") return "retry";
     return "active";
   }
-  const SETUP_TITLE = { clear: "setup.clear.title", 1: "setup.s1.title", 2: "setup.s2.title", 3: "setup.s3.title", 4: "setup.s4.title", 5: "setup.s5.title" };
+  const SETUP_TITLE = { kind: "setup.kind.title", x1: "setup.x1.title", x2: "setup.x2.title", x3: "setup.x3.title", clear: "setup.clear.title", 1: "setup.s1.title", 2: "setup.s2.title", 3: "setup.s3.title", 4: "setup.s4.title", 5: "setup.s5.title" };
   const SETUP_TONE = { done: "done", active: "start", wait: "run", retry: "warn", later: "none" };
   const SETUP_BADGE = { done: "done", active: "now", wait: "wait", retry: "retry", later: "later" };
 
   /** The header pill: its text (setup.pill.<key>), tone and whether it pulses. */
   function setupPill(at) {
+    if (at.step === "kind") return ["choose", "none", false];
+    if (at.step === "x3") return at.part === "done" ? ["connected", "done", false] : ["polling", "run", true];
+    if (at.step === "x1" || at.step === "x2") return ["prepare", "start", false];
     if (at.part === "done") return wz.statusOn === "no" ? ["lost", "warn", false] : ["done", "done", false];
     if (at.step === 1) return ["address", "none", false];
     if (at.step === "clear") return ["clear", wz.clearTapped ? "run" : "start", wz.clearTapped];
@@ -2533,6 +2569,54 @@
   /** The body of card `n` in state `st`, or null when it has none. */
   function setupBody(n, st, at) {
     const w = wifiOf();
+    if (n === "kind") {
+      if (st === "done") {
+        // Once an E65/E80 address is saved, that is the grinder: removing
+        // the address (grinder card, ⋮) is the way back.
+        const change = setupKind() === "e64" || !wifiSetup();
+        return [el("p", { class: "body-text", text: t("setup.kind.chosen", { grinder: t("setup.kind." + setupKind()) }) }),
+          change ? el("button", { type: "button", class: "wz-btn plain wide", "data-act": "kindChange" }, icon("back", 16, 2.5), t("setup.kind.change")) : null];
+      }
+      return [el("p", { class: "body-text", text: t("setup.kind.text") }),
+        answers(answer("kindE64", "ok", null, t("setup.kind.e64"), t("setup.kind.e64Sub")),
+          answer("kindWifi", "ok", null, t("setup.kind.wifi"), t("setup.kind.wifiSub")))];
+    }
+    if (n === "x1") {
+      if (st === "done") return [el("p", { class: "body-text", text: t("setup.x1.done") })];
+      if (st === "later") return null;
+      return [
+        el("p", { class: "body-text", text: t("setup.x1.text") }),
+        crumbs([t("setup.s21.path1"), t("setup.s21.path2"), t("setup.s21.path3"), t("setup.x1.path4")]),
+        hint(t("setup.x1.network")), question(t("setup.x1.question")),
+        answers(answer("kindChange", "plain", "back", t("setup.back")), answer("x1", "ok", "check", t("setup.x1.yes"))),
+      ];
+    }
+    if (n === "x2") {
+      if (st === "done") return [el("p", { class: "body-text", text: t("setup.x2.done") })];
+      if (st === "later") return null;
+      const ip = pageIp();
+      return [
+        el("p", { class: "body-text", text: t("setup.x2.text") }),
+        crumbs([t("setup.s21.path3"), t("setup.s22.path2")]),
+        // The address this page came from is gbs-anywhere's; a name would do
+        // on the grinder less reliably, so then the person looks it up.
+        ip ? el("div", { class: "wz-codebox" },
+          el("p", { class: "meta", text: t("setup.x2.label") }),
+          el("p", { class: "wz-code addr", text: ip }))
+          : hint(t("setup.x2.byName")),
+        hint(t("setup.x2.ip")), question(t("setup.x2.question")),
+        answers(answer("x2Back", "plain", "back", t("setup.back")), answer("x2", "ok", "check", t("setup.x2.yes"))),
+      ];
+    }
+    if (n === "x3") {
+      if (st === "done") return [el("p", { class: "body-text", text: t("setup.x3.done") })];
+      if (st === "later") return null;
+      return [
+        waiting(t("setup.x3.wait")),
+        hint(t("setup.x3.help")),
+        el("button", { type: "button", class: "wz-btn plain wide", "data-act": "x3Back" }, icon("back", 16, 2.5), t("setup.back")),
+      ];
+    }
     if (n === 1) {
       if (st === "done") {
         const host = setupHost();
@@ -2693,6 +2777,8 @@
 
   /** The short info under a card's title, or "". */
   function setupSub(n, at) {
+    if (n === "kind") return at.step === "kind" ? "" : t("setup.kind." + setupKind());
+    if (n === "x2") { const ip = pageIp(); return ip ? t("setup.x2.sub", { ip }) : ""; }
     if (n === 1) { const host = setupHost(); return host ? t("setup.s1.sub", { host }) : t("setup.s1.subNone"); }
     if (n === "clear") return wz.cleared ? t("setup.clear.done") : wz.clearTapped ? t("setup.clear.subWait") : "";
     if (n === 2) return t("setup.s2.sub");
@@ -2724,6 +2810,16 @@
   /** Follows the link: the clear card ends once the link lets go of the
    *  old pairing, and a new step starts with its cards as they open. */
   function syncSetup() {
+    if (setupKind() !== "wifi") {
+      const at = setupAt();
+      const key = setupKey(at);
+      if (key !== wz.at) {
+        wz.at = key;
+        wz.open = {};
+        if (at.part === "done") setupSay(t("setup.e64.title"));
+      }
+      return at;
+    }
     const w = wifiOf();
     const phase = w && w.state === "pairing" ? w.phase : null;
     // A hold follows a confirmation, also one tapped on another device or
@@ -2837,21 +2933,30 @@
     pill.classList.toggle("pulse", pulse);
     const pillText = pillKey ? t("setup.pill." + pillKey) : t("sys.label.offline");
     if ($("setup-pill-text").textContent !== pillText) $("setup-pill-text").textContent = pillText;
-    const cards = [...(wz.mode === "repair" && !wz.noClear ? ["clear"] : []), 1, 2, 3, 4, 5];
-    // The clear card sits above step 1, as the first thing to do.
+    // The choice of grinder stays on top once made here (not when the app
+    // could tell); the clear card sits above step 1, as the first thing to
+    // do.
+    const kind = setupKind();
+    const chosen = wz.kind ? ["kind"] : [];
+    const cards = !kind ? ["kind"]
+      : kind === "e64" ? [...chosen, "x1", "x2", "x3"]
+        : [...chosen, ...(wz.mode === "repair" && !wz.noClear ? ["clear"] : []), 1, 2, 3, 4, 5];
     const states = cards.map((n) => setupCard(n, at));
-    const stepNo = at.step === "clear" ? 2 : at.step;
-    const progress = at.part === "done" ? t(wz.statusOn === "no" ? "setup.pill.lost" : "setup.pill.done") : at.step === "clear" ? t("setup.pill.clear") : t("setup.progress.step", { n: stepNo });
+    const steps = cards.filter((n) => n !== "clear" && n !== "kind");
+    const stepNo = at.step === "clear" ? 2 : setupNo(at.step);
+    const progress = at.step === "kind" ? t("setup.pill.choose")
+      : kind === "e64" ? (at.part === "done" ? t("setup.pill.connected") : t("setup.progress.step", { n: stepNo, total: steps.length }))
+        : at.part === "done" ? t(wz.statusOn === "no" ? "setup.pill.lost" : "setup.pill.done") : at.step === "clear" ? t("setup.pill.clear") : t("setup.progress.step", { n: stepNo, total: steps.length });
     if ($("wz-progress").textContent !== progress) $("wz-progress").textContent = progress;
 
     // Rebuilt only when something shown changes, so a field keeps what is
     // typed and the focus stays put between polls.
-    const sig = JSON.stringify([lang, at, states, setupHost(), setupReached(), wz.open, wz.c21, wz.c31, !!wz.started, wz.late, wz.note,
+    const sig = JSON.stringify([lang, at, states, kind, wz.kind, wz.x1, wz.x2, pageIp(), setupHost(), setupReached(), wz.open, wz.c21, wz.c31, !!wz.started, wz.late, wz.note,
       wz.attempt, wz.clearTapped, wz.cleared, wz.lastCode, wz.hostError, wz.hostBusy, wz.acceptError, wz.acceptBusy, wz.tapped,
       wz.idError, wz.idBusy, wz.statusOn, wz.stillPaired, wz.confirmed, w && w.phase, w && w.unknown_pairing_id, w && w.pairing_id]);
     if (sig !== wz.sig) {
       wz.sig = sig;
-      $("wz-bars").replaceChildren(...cards.filter((n) => n !== "clear").map((n) => el("span", { class: "wz-bar " + setupCard(n, at) })));
+      $("wz-bars").replaceChildren(...steps.map((n) => el("span", { class: "wz-bar " + setupCard(n, at) })));
       const active = document.activeElement;
       const keep = active && $("wz-steps").contains(active) && active.id ? active.id : null;
       $("wz-steps").replaceChildren(
@@ -2859,7 +2964,13 @@
           banner("warn", t("setup.note.stillPaired"), "warn"),
           el("button", { type: "button", class: "wz-btn ok wide", "data-act": "stillPaired" }, icon("check", 16, 2.5), t("setup.stillPaired.button")))] : []),
         ...cards.map((n, i) => setupCardEl(n, states[i], at)),
-        ...(at.part === "done" ? [wz.statusOn === "no"
+        ...(at.part === "done" && kind === "e64" ? [el("section", { class: "card wz-hero" },
+          el("span", { class: "wz-big" }, icon("check", 34, 2.4)),
+          el("h2", { text: t("setup.e64.title") }),
+          el("p", { class: "body-text" }, lines(t("setup.e64.text"))),
+          hint(t("setup.e64.recipe")),
+          el("button", { type: "button", id: "wz-finish", class: "wz-btn ok wide", "data-act": "finish" }, t("setup.done.button")))] : []),
+        ...(at.part === "done" && kind === "wifi" ? [wz.statusOn === "no"
           // Status not On: the grinder has no pairing, so nothing to clear on
           // it. Restart goes on from 2.1 now; the link lets go of the pairing
           // the grinder refuses meanwhile (and the page moves by itself if
@@ -2912,14 +3023,15 @@
     const open = !!body && (wz.open[n] != null ? wz.open[n] : auto);
     const sub = st === "later" ? "" : setupSub(n, at);
     const tone = SETUP_TONE[st];
-    const num = st === "done" ? icon("check", 16, 2.6) : n === "clear" ? icon("unlink", 16, 2.2) : st === "retry" ? "!" : String(n);
+    const num = st === "done" ? icon("check", 16, 2.6) : n === "clear" ? icon("unlink", 16, 2.2) : n === "kind" ? icon("grinder", 16, 2)
+      : st === "retry" ? "!" : String(setupNo(n));
     const bodyId = "wz-body-" + n;
     return el("section", { class: "card wz-card t-" + tone + (st === "later" ? " later" : st !== "done" ? " current" : "") },
-      el("button", { type: "button", class: "wz-head", "data-toggle": String(n), "aria-expanded": String(open),
+      el("button", { type: "button", class: "wz-head", id: "wz-head-" + n, "data-toggle": String(n), "aria-expanded": String(open),
         "aria-controls": open ? bodyId : null, disabled: st === "later" || !body },
         el("span", { class: "num" }, num),
         el("span", { class: "head-col" },
-          el("span", { class: "kicker", text: n === "clear" ? t("setup.pill.clear") : t("setup.step", { n }) }),
+          el("span", { class: "kicker", text: n === "clear" ? t("setup.pill.clear") : n === "kind" ? t("setup.kind.kicker") : t("setup.step", { n: setupNo(n) }) }),
           el("span", { class: "step-title", text: t(n === 4 && st === "wait" && !setupConfirmed() ? "setup.s4.titleWait" : SETUP_TITLE[n]) })),
         el("span", { class: "badge", text: t("setup.badge." + SETUP_BADGE[st]) }),
         chevron(),
@@ -2991,6 +3103,13 @@
       // Lost in the restart: from step 2, and Local WiFi may be off again.
       case "again": Object.assign(wz, { attempt: wz.attempt + 1, started: 0, c31: false, c21: false, confirmed: false, note: "retry", lostAck: true, focus: "wz-s21" }); setupSay(t("setup.note.retry")); break;
       case "noCodeBack": Object.assign(wz, { started: 0, c31: false, c21: false, note: "", focus: "wz-s21" }); break;
+      case "kindE64": Object.assign(wz, { kind: "e64", x1: false, x2: false, focus: "wz-head-x1" }); setupSay(t("setup.kind.chosen", { grinder: t("setup.kind.e64") })); break;
+      case "kindWifi": wz.kind = "wifi"; wz.focus = "wz-host"; setupSay(t("setup.kind.chosen", { grinder: t("setup.kind.wifi") })); break;
+      case "kindChange": Object.assign(wz, { kind: null, x1: false, x2: false, focus: "wz-head-kind" }); break;
+      case "x1": wz.x1 = true; wz.focus = "wz-head-x2"; setupSay(t("setup.x1.done")); break;
+      case "x2": wz.x2 = true; wz.focus = "wz-head-x3"; setupSay(t("setup.x2.done")); break;
+      case "x2Back": wz.x1 = false; wz.focus = "wz-head-x1"; break;
+      case "x3Back": wz.x2 = false; wz.focus = "wz-head-x2"; break;
       case "accepted": await sendAccepted(); return;
       default: return;
     }
@@ -3058,7 +3177,7 @@
   $("wz-steps").addEventListener("click", (e) => {
     const head = e.target.closest("[data-toggle]");
     if (head) {
-      const n = head.dataset.toggle === "clear" ? "clear" : Number(head.dataset.toggle);
+      const n = /^\d+$/.test(head.dataset.toggle) ? Number(head.dataset.toggle) : head.dataset.toggle;
       wz.open[n] = head.getAttribute("aria-expanded") !== "true";
       wz.focus = null;
       renderSetup();
