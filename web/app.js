@@ -2807,6 +2807,7 @@
   const PAIR_TITLE = { clear: "setup.clear.title", 1: "setup.s1.title", 2: "setup.s2.title", 3: "setup.s3.title", 4: "setup.s4.title", 5: "setup.s5.title" };
   /** done, active, wait (for the grinder), retry or later. */
   function pairCard(n, at) {
+    if (at.part === "done") return "done";
     if (n === "clear" && wz.pair.cleared) return "done";
     // Cleared on the grinder: waits in the background for the link.
     if (n === "clear" && wz.pair.clearTapped) return "wait";
