@@ -3190,8 +3190,10 @@
     }
     // The code the link shows now, at any step (also at step 2 before
     // "Pairing started"): a wait entered from here is about this request.
-    // Taken last, so the comparisons above still see the one before.
-    if (phase === "accepting" && w.pairing_code != null && !wz.pair.editHost) wz.pair.lastCode = String(w.pairing_code);
+    // Taken last, so the comparisons above still see the one before. Not
+    // under the lost card: its done step 3 keeps the code that was accepted,
+    // and Try again goes back to step 2, which takes the new one.
+    if (phase === "accepting" && w.pairing_code != null && !wz.pair.editHost && at.part !== "lost") wz.pair.lastCode = String(w.pairing_code);
     return at;
   }
 
