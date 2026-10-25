@@ -2600,14 +2600,13 @@
     return {
       x1: false,            // Xenia enabled
       x2: false,            // gbs-anywhere's address entered on it
-      polled: false,        // it polled while the setup was open
     };
   }
-  /** The E64 WS's setup is done: it polls, or polled while the setup was
-   *  open, so a pause in its polls (or the grinder switched off) doesn't
-   *  take back the finished setup. Not with an E65/E80 link, which polls
-   *  too. */
-  const e64Done = () => !wifiOf() && (wz.e64.polled || linkOn());
+  /** The E64 WS's setup is done: it polled since gbs-anywhere started, as
+   *  the server says, so a pause in its polls, the grinder switched off or
+   *  a reload doesn't take back the finished setup. Not with an E65/E80
+   *  link, which polls too. */
+  const e64Done = () => !wifiOf() && !!S && S.grinder.last_poll_age_ms != null;
   /** The address the page was opened at, when it is an IPv4 address the
    *  grinder can reach: the one to enter on the E64 WS. A name is left out,
    *  as an IP is more reliable on the grinder, and so are loopback and
@@ -2630,7 +2629,6 @@
       return { step: !wz.e64.x1 ? "x1" : !wz.e64.x2 ? "x2" : "x3" };
     },
     sync() {
-      if (linkOn() && !wifiOf()) wz.e64.polled = true;
       const at = E64_FLOW.at();
       const key = setupKey(at);
       if (key !== wz.at) {
