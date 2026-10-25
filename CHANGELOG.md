@@ -6,6 +6,15 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Changed
+
+- **Add** and **Save** in the integration forms and the **+** for a new
+  integration use the accent colour like the other main buttons, and
+  warnings (an aborted shot in History, warning notes) are orange, apart
+  from the brown accent.
+- The appearance and language switches under Settings have equal widths,
+  and the pressed label no longer wraps or shifts them.
+
 ### Fixed
 
 - The log in the app shows each line's time again, and **Copy** finds the

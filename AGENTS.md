@@ -222,7 +222,7 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
 - Phone first: content at most 480 px wide, 16 px side padding, no
   horizontal scrolling.
 - Typing the time and weight by hand is the default flow and must work with no
-  integration set up. Integrations are optional, behind the green + under
+  integration set up. Integrations are optional, behind the + under
   Status → Machine integrations.
 
 ## Public repository wording
