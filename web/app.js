@@ -281,6 +281,9 @@
   };
 
   const wifiOf = () => (S && S.grinder && S.grinder.wifi) || null;
+  /** How long the link `w` has been in its state, from the server's
+   *  state_age_ms, as of now. */
+  const linkStateAge = (w) => (w.state_age_ms == null ? 0 : w.state_age_ms + (performance.now() - stateAt));
   /** How long the link leaves the grinder alone after an unanswered check
    *  (quiet_ms), in whole minutes, at least 1. */
   const quietMinutes = (w) => Math.max(1, Math.round(((w && w.quiet_ms) || 0) / 60000));
@@ -543,12 +546,10 @@
       return s("start", "clock", "linking", host ? t("sys.text.linking", { host }) : t("sys.text.linkingNoHost"));
     }
     if (!linkOn()) {
-      // It answers, only not as a paired grinder: not set up, rather than
-      // not connected.
-      if (setupNeeded() && wifi && wifi.state === "failing" && wifi.unreachable === false) {
-        // The grinder's reply (say, that no pairing runs) is no error here.
-        return s("start", "alert", "setup", t("sys.text.setup"));
-      }
+      // It answers but turns pairing down: not set up, rather than not
+      // connected; its answer stays at hand with the log. Any other error
+      // shows as one.
+      if (setupNeeded() && wifi && wifi.not_set_up) return s("start", "alert", "setup", t("sys.text.setup"), lastCause(wifi.detail));
       const missing = grinderMissing(wifi);
       return s("error", "alert", "noGrinder", missing.text, missing.detail);
     }
@@ -1097,7 +1098,7 @@
     else if (wifi && wifi.state === "pairing") { tone = "start"; state = "pairing"; }
     else if (on) { tone = "ok"; state = "ready"; }
     else if (linkStarting()) { tone = "start"; state = "connecting"; }
-    else if (setupNeeded() && wifi && wifi.state === "failing" && wifi.unreachable === false) { tone = "start"; state = "notSetUp"; }
+    else if (setupNeeded() && wifi && wifi.not_set_up) { tone = "start"; state = "notSetUp"; }
     setTone($("g-pill"), tone);
     // Set up while an E65/E80 is not paired, or no grinder is known yet;
     // clearing a pairing is in the menu.
@@ -2755,7 +2756,6 @@
       acceptError: "", acceptBusy: false, tapped: false,
       acceptFor: null,      // the Pairing Code "Accepted" was sent for, until the link took it
       entry: null,          // the link's phase when the view opened (filled by pairSync)
-      connSince: null,      // performance.now() the link started connecting
       unreached: false,     // step 1 says gbs-anywhere doesn't reach the grinder
       idValue: "", idError: "", idBusy: false, refused: null, late: false,
       confirmed: false,     // Accepted was tapped here for this attempt
@@ -2857,7 +2857,7 @@
     const w = wifiOf();
     if (!w || (wz.mode === "repair" && !wz.pair.cleared)) return false;
     if (w.state === "failing") return !!w.unreachable;
-    return w.state === "connecting" && wz.pair.connSince != null && performance.now() - wz.pair.connSince > CONNECT_LONG_MS;
+    return w.state === "connecting" && linkStateAge(w) > CONNECT_LONG_MS;
   }
 
   /** The link reached the grinder: it answers, paired or not. */
@@ -3104,8 +3104,6 @@
       // From now on a reload goes on with the setup, not with clearing again.
       if (location.hash === "#repair") history.replaceState(null, "", "#setup");
     }
-    if (!w || w.state !== "connecting") wz.pair.connSince = null;
-    else if (wz.pair.connSince == null) wz.pair.connSince = performance.now();
     // "Accepted" stays busy until the link took it: it left accepting, or
     // shows another code.
     if (wz.pair.acceptFor != null && !(phase === "accepting" && String(w.pairing_code) === wz.pair.acceptFor)) {

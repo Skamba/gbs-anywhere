@@ -241,6 +241,10 @@ pub struct WifiLink {
     /// The grinder's address, as configured.
     pub grinder: String,
     pub state: WifiState,
+    /// Since when `state` holds, set by the server as the link reports it
+    /// (see `Server::set_wifi`); the API shows it as `state_age_ms`.
+    #[serde(skip)]
+    pub state_since: Option<Instant>,
     /// Where in the pairing the link is, while `state` is `pairing`; `None`
     /// otherwise.
     pub phase: Option<WifiPhase>,
@@ -273,6 +277,11 @@ pub struct WifiLink {
     /// network), as opposed to answering with an error. Cleared as soon as
     /// it answers again.
     pub unreachable: bool,
+    /// Not paired, and the grinder answered the pairing application with a
+    /// client error, as one not set up for pairing would: the app says it is
+    /// not set up rather than failing. Cleared once it takes one, or fails
+    /// some other way.
+    pub not_set_up: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -505,6 +514,8 @@ pub struct WifiGrinder {
     /// The last failure logged as a warning, so the same one again (every
     /// 10 s while not paired) goes to debug instead of filling the log book.
     last_failure: Option<String>,
+    /// The last pairing application was turned down (`WifiLink::not_set_up`).
+    not_set_up: bool,
     /// The question for the pairing ID as last asked: what it said and the ID
     /// the grinder refused, carried into the next round of `ask_window`.
     asked: Option<(String, Option<u32>)>,
@@ -567,6 +578,7 @@ impl WifiGrinder {
             problem: None,
             unreachable: false,
             last_failure: None,
+            not_set_up: false,
             asked: None,
             pairing_lost: false,
             phase: WifiPhase::Checking,
@@ -617,6 +629,8 @@ impl WifiGrinder {
         let mut events = server.subscribe();
         self.status(&server, WifiState::Connecting, None, "connecting");
         loop {
+            // Said again by `pair` for each application it turns down.
+            self.not_set_up = false;
             let outcome = match self.pairing.pairing_id {
                 None => self.pair(&server, &mut ids, &mut accept).await,
                 Some(id) => self.serve(&server, id, &mut events).await,
@@ -672,6 +686,8 @@ impl WifiGrinder {
         if reply.status() == wifi::STATUS_ALREADY_PAIRED {
             return self.wait_for_pairing_id(server, ids).await;
         }
+        // It answers but turns the application down: not set up for pairing.
+        self.not_set_up = refused(&reply);
         reply.ok().context("asking to pair")?;
         let res: PairingApplicationRes = reply.parse()?;
         let application_id = res
@@ -1354,6 +1370,7 @@ impl WifiGrinder {
         WifiLink {
             grinder: self.cfg.base_url.clone(),
             state,
+            state_since: None,
             phase: (state == WifiState::Pairing).then_some(self.phase),
             phase_since: (state == WifiState::Pairing).then_some(self.phase_since),
             pairing_code,
@@ -1364,6 +1381,7 @@ impl WifiGrinder {
             problem: self.problem.clone(),
             pairing_id: self.pairing.pairing_id,
             unreachable: self.unreachable,
+            not_set_up: self.not_set_up,
         }
     }
 
@@ -1383,6 +1401,7 @@ impl WifiGrinder {
             WifiLink {
                 grinder: self.cfg.base_url.clone(),
                 state: WifiState::Pairing,
+                state_since: None,
                 phase: Some(WifiPhase::Asking),
                 phase_since: Some(self.phase_since),
                 pairing_code: None,
@@ -1393,6 +1412,7 @@ impl WifiGrinder {
                 problem: None,
                 pairing_id: None,
                 unreachable: false,
+                not_set_up: false,
             },
         );
     }

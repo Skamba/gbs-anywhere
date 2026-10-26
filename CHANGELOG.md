@@ -46,6 +46,12 @@ before.
   and `quiet_ms` how long a `quiet` round lasts.
 - `grinder_not_asking`: `POST /api/grinder/pairing` while the link is not
   paired but not asking for a Pairing ID either.
+- `grinder.wifi.state_age_ms`, how long the link has been in its `state`,
+  and `grinder.wifi.not_set_up`: not paired, and the grinder answers, but
+  turns the pairing application down with a client error (as one not set
+  up for pairing would). System status and the grinder card say the grinder
+  is not set up only then; any other error while not paired shows as an
+  error, with its detail and the way to the log.
 
 ### Changed
 
