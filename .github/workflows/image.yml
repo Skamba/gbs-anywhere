@@ -271,8 +271,9 @@ jobs:
       # above, so this comes after it. The token comes from a GitHub App
       # installed only on gbs-anywhere-pi, with Contents: write and nothing
       # else. If this fails, the release is already out: start the image by
-      # hand from gbs-anywhere-pi's Actions → Image → Run workflow.
-      - uses: actions/create-github-app-token@v3
+      # hand from gbs-anywhere-pi's Actions → Image → Run workflow. The action
+      # is pinned to a commit, as it handles the App's private key.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         id: pi-token
         if: ${{ !contains(github.ref_name, '-') }}
         with:
