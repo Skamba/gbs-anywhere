@@ -255,6 +255,10 @@ messages and pull requests:
   after merging, tag that commit `vX.Y.Z` and push the tag. CI stops the
   release if the tag, Cargo.toml and CHANGELOG.md disagree. Release tags
   cannot be moved or deleted.
+- Every release updates the [wiki](https://github.com/Skamba/gbs-anywhere/wiki)
+  (its own repository, `gbs-anywhere.wiki`): once the release is out, bring
+  the pages its changes touch in line with it. README.md links there for new
+  users, so the wiki describes the latest release, not `main`.
 - Commit messages have an imperative subject line of at most about 70
   characters and a body that explains why.
 
