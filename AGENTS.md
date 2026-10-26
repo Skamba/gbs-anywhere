@@ -247,7 +247,8 @@ messages and pull requests:
   job of `ci.yml` must pass. Each night `image.yml` publishes `main` as the
   `nightly` image tag, unless `main` has not changed since the last one; a
   `vX.Y.Z` tag publishes `latest` and creates the GitHub release, with
-  the tarballs and Debian packages attached. Ask
+  the tarballs and Debian packages attached; a release without a `-` in its
+  tag then asks gbs-anywhere-pi to build a Raspberry Pi image from it. Ask
   before pushing, force-pushing, tagging or changing `.github/workflows/`.
 - User-visible changes get a line under `## [Unreleased]` in CHANGELOG.md.
 - To release: in a pull request, set `version` in Cargo.toml and rename
