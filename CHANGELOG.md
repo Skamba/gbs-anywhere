@@ -53,6 +53,12 @@ before.
   is not set up only then; any other error while not paired shows as an
   error, with its detail and the way to the log.
 
+- Opened by name (such as `gbs-anywhere.local`), the E64 WS setup and
+  the grinder card under Status show the address to enter on the grinder
+  too, as the server sees it. When that looks like an address inside
+  Docker, which the grinder can't reach, the app says so instead. In the
+  API: `server.ip` and `server.ip_in_docker_range` in `/api/state`.
+
 ### Changed
 
 - The grinder's address moved from Status → Settings into the grinder

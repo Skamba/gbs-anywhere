@@ -39,6 +39,8 @@ use std::time::{Duration, Instant};
 use crate::integration::Integrations;
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{Machine, MachineConfig};
+use axum::extract::connect_info::Connected;
+use axum::serve::IncomingStream;
 pub use browser::AllowedHosts;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
@@ -543,6 +545,26 @@ pub async fn serve(
     Ok(())
 }
 
+/// Both ends of a request's connection, as `ConnectInfo<Conn>`.
+#[derive(Debug, Clone, Copy)]
+pub struct Conn {
+    /// Who sent it.
+    pub peer: SocketAddr,
+    /// The address it came in on: on the home network, the one the grinder
+    /// can reach this server at; in a Docker container, the container's.
+    /// `None` when the system could not tell.
+    pub local: Option<SocketAddr>,
+}
+
+impl Connected<IncomingStream<'_, TcpListener>> for Conn {
+    fn connect_info(stream: IncomingStream<'_, TcpListener>) -> Self {
+        Self {
+            peer: *stream.remote_addr(),
+            local: stream.io().local_addr().ok(),
+        }
+    }
+}
+
 fn spawn_server(
     listener: TcpListener,
     app: axum::Router,
@@ -551,12 +573,9 @@ fn spawn_server(
 ) -> tokio::task::JoinHandle<()> {
     let stopped = state.stopped();
     tokio::spawn(async move {
-        if let Err(e) = axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(stopped)
-        .await
+        if let Err(e) = axum::serve(listener, app.into_make_service_with_connect_info::<Conn>())
+            .with_graceful_shutdown(stopped)
+            .await
         {
             tracing::warn!("server on {addr} stopped: {e}");
         }

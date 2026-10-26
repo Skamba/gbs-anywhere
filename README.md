@@ -124,8 +124,12 @@ The grinder treats gbs-anywhere as a Xenia, so the menus below say "Xenia".
 **Connect the grinder**
 
 The app takes you through these steps too: tap **Set up grinder ›** on the
-Start tab and choose **E64 WS**. Opened at the computer's IP address, it
-shows that address to enter, and it says when the grinder is connected.
+Start tab and choose **E64 WS**. It shows the address to enter, also when
+the app was opened by name, and it says when the grinder is connected. In
+Docker it sees only the container's own address (unless the container uses
+the host's network): when the address is in Docker's range (172.17.x.x to
+172.31.x.x), it says so and asks for the computer's address, which your
+router's list of devices shows.
 
 1. Put the grinder on the same network as the computer running gbs-anywhere.
    The E64 WS only supports 2.4 GHz WiFi.

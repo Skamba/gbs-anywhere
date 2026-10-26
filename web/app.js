@@ -1110,6 +1110,13 @@
     const facts = [
       ["ip", e65 ? (typed || (wifi && urlHost(wifi.grinder)) || "–") : (hostOf(S.grinder.peer) || "–")],
     ];
+    // The address an E64 WS polls; in Docker's range, with a note that it
+    // is likely the container's own, until a grinder polled: then it found
+    // the right one.
+    const own = e65 ? null : ownAddress();
+    const shown = own && own.ip && !(own.docker && age != null);
+    if (shown) facts.push(["serverIp", own.ip]);
+    $("g-ip-docker").hidden = !(shown && own.docker);
     if (e65) facts.push(["pairingId", wifi && wifi.pairing_id != null ? String(wifi.pairing_id) : t("grinder.fact.notPaired")]);
     if (wifi && wifi.pairing_code != null && wifi.state === "pairing") facts.push(["pairingCode", String(wifi.pairing_code)]);
     facts.push(["lastContact", age == null ? t("grinder.fact.never") : ago(age)]);
@@ -2616,12 +2623,24 @@
   const e64Done = () => !wifiOf() && !!S && S.grinder.last_poll_age_ms != null;
   /** The address the page was opened at, when it is an IPv4 address the
    *  grinder can reach: the one to enter on the E64 WS. A name is left out,
-   *  as an IP is more reliable on the grinder, and so are loopback and
-   *  link-local addresses. */
+   *  as an IP is more reliable on the grinder, and so are loopback,
+   *  link-local and shared (100.64.0.0/10, Tailscale's) addresses. */
   function pageIp() {
     const h = location.hostname;
     if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) return "";
-    return /^(127\.|0\.|169\.254\.)/.test(h) ? "" : h;
+    return /^(127\.|0\.|169\.254\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(h) ? "" : h;
+  }
+  /** gbs-anywhere's address to enter on an E64 WS. First the one the
+   *  server was reached on, as the page's may be a proxy's or a forwarded
+   *  port's; in Docker, though, that one is the container's own, which the
+   *  grinder can't reach, and the page's (`pageIp`) is the host's. `docker`
+   *  says that only the container's is known. */
+  function ownAddress() {
+    const s = (S && S.server) || {};
+    if (s.ip && !s.ip_in_docker_range) return { ip: s.ip, docker: false };
+    const page = pageIp();
+    if (page && page !== s.ip) return { ip: page, docker: false };
+    return { ip: s.ip || page, docker: !!s.ip_in_docker_range };
   }
   const E64_TITLE = { x1: "setup.x1.title", x2: "setup.x2.title", x3: "setup.x3.title" };
   const E64_ORDER = { x1: 1, x2: 2, x3: 3 };
@@ -2667,16 +2686,17 @@
       if (n === "x2") {
         if (st === "done") return [el("p", { class: "body-text", text: t("setup.x2.done") })];
         if (st === "later") return null;
-        const ip = pageIp();
+        const own = ownAddress();
+        const ip = own.docker ? "" : own.ip;
         return [
           el("p", { class: "body-text", text: t("setup.x2.text") }),
           crumbs([t("setup.s21.path3"), t("setup.s22.path2"), t("setup.x2.path3")]),
-          // The address this page came from is gbs-anywhere's; a name would do
-          // on the grinder less reliably, so then the person looks it up.
+          // A name would do on the grinder less reliably, and an address
+          // inside Docker not at all: then the person looks it up.
           ip ? el("div", { class: "wz-codebox" },
             el("p", { class: "meta", text: t("setup.x2.label") }),
             el("p", { class: "wz-code addr", text: ip }))
-            : hint(t("setup.x2.byName")),
+            : own.docker ? hint(t("setup.x2.docker"), "warn") : hint(t("setup.x2.byName")),
           hint(t("setup.x2.ip")),
           // The grinder always connects to port 80: an app on another port
           // (say, Docker's -p 8080:80) needs gbs-anywhere on port 80 too.
@@ -2697,7 +2717,7 @@
       return null;
     },
     sub(n) {
-      if (n === "x2") { const ip = pageIp(); return ip ? t("setup.x2.sub", { ip }) : ""; }
+      if (n === "x2") { const own = ownAddress(); return own.ip && !own.docker ? t("setup.x2.sub", { ip: own.ip }) : ""; }
       return "";
     },
     pill(at) {
@@ -2705,7 +2725,7 @@
       return ["prepare", "start", false];
     },
     progress: (at) => (at.part === "done" ? t("setup.pill.connected") : ""),
-    sig: () => [wz.e64.x1, wz.e64.x2, pageIp()],
+    sig: () => [wz.e64.x1, wz.e64.x2, ownAddress()],
     top: () => [],
     end(at) {
       if (at.part !== "done") return [];

@@ -13,7 +13,7 @@
 
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
-use std::net::{IpAddr, SocketAddr};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::extract::{ConnectInfo, MatchedPath, Request, State};
@@ -21,6 +21,7 @@ use axum::http::{HeaderMap, Method, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::Response;
 
+use crate::server::Conn;
 use crate::server::control_api::error;
 
 /// Names home networks give their devices, besides IP addresses, `localhost`
@@ -214,8 +215,8 @@ pub async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) 
     // Unknown when the router is served without its peers' addresses.
     let peer = req
         .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|c| c.0.ip());
+        .get::<ConnectInfo<Conn>>()
+        .map(|c| c.0.peer.ip());
     // The host as the request names it. Without a Host (HTTP/1.0, some
     // scripts) there is nothing to check; a browser always sends one. HTTP/2
     // carries it as the URI's authority.

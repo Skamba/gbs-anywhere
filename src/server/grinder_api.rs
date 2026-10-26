@@ -1,7 +1,6 @@
 //! The face the E64 WS sees: a Xenia's `/api/v2/*` on port 80. (An E65/E80
 //! GbS is polled by [`super::wifi_grinder`] instead.)
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,8 +14,8 @@ use axum::routing::any;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 
-use crate::server::Server;
 use crate::server::browser::{first_refusal, from_browser};
+use crate::server::{Conn, Server};
 
 /// The grinder's writes are a few dozen bytes; anything much bigger is not
 /// from the grinder, and would be kept with the event.
@@ -54,7 +53,7 @@ fn grinder_path(path: &str) -> bool {
 async fn handle(
     State(x): State<Arc<Server>>,
     Extension(AcceptBrowsers(accept)): Extension<AcceptBrowsers>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    ConnectInfo(Conn { peer, .. }): ConnectInfo<Conn>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
