@@ -195,10 +195,9 @@ nav.tabs a[aria-current="page"] { background: var(--nav-on); color: var(--ink); 
   flex: none; display: inline-flex; align-items: center; gap: 2px; min-height: 36px; padding: 0 10px 0 12px; border-radius: 999px;
   border: 1px solid var(--field); background: var(--surface); color: var(--strong); font-size: 13px; font-weight: 650; text-decoration: none;
 }
-/* The way into the E65/E80 setup, shaped like the way to the log; it
-   starts something, so it is filled with the accent. */
-#sys-setup-link { align-self: flex-start; min-height: 44px; }
-.sys-setup { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+/* The way into the setup, shaped like the way to the log; it starts
+   something, so it is filled with the accent. */
+.sys-setup { align-self: flex-start; min-height: 44px; border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
 /* Grinder and integrations, in one quiet line */
 .checks { overflow: hidden; border-top: 1px solid var(--line); padding-top: 10px; font-size: 13px; color: var(--text); }
 .checks:empty { display: none; }
@@ -509,7 +508,7 @@ ul.kinds button:hover { border-color: var(--accent); }
 /* Only for screen readers */
 .sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
-/* E65/E80 setup: its own view, with a header of its own in place of the
+/* The setup: its own view, with a header of its own in place of the
    app's header and tabs. */
 /* Back, title and pill fit one line at 360 px, in English and German. */
 .wz-top { gap: 8px; }
@@ -615,6 +614,8 @@ ul.kinds button:hover { border-color: var(--accent); }
 .wz-codebox .meta { color: var(--start-fg); }
 .wz-code { font-size: 56px; font-weight: 700; letter-spacing: .1em; line-height: 1.05; font-variant-numeric: tabular-nums; color: var(--ink); padding-left: .1em; }
 .wz-name { font-size: 15px; font-weight: 700; color: var(--ink); }
+/* An address in place of a code: smaller, so an IP fits at phone width. */
+.wz-code.addr { font-size: 32px; letter-spacing: .02em; overflow-wrap: anywhere; }
 .wz-codebox.waiting { background: var(--neutral-bg); }
 .wz-codebox.waiting .wz-code { color: var(--muted); font-size: 40px; }
 .wz-codebox.waiting .meta { color: var(--neutral-fg); }
