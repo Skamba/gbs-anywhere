@@ -1,5 +1,5 @@
 ---
-description: Prepare a gbs-anywhere release X.Y.Z (version bump and CHANGELOG in a pull request, then the tag after merging). Only when asked for a release.
+description: Prepare a gbs-anywhere release X.Y.Z (version bump and CHANGELOG in a pull request, then the tag after merging, then the wiki). Only when asked for a release.
 argument-hint: X.Y.Z
 disable-model-invocation: true
 ---
@@ -46,3 +46,16 @@ Only once the person says it is merged:
 - `image.yml` checks the tag against Cargo.toml and CHANGELOG.md, builds
   the image, and creates the GitHub release. Give the person the link to
   that workflow run.
+
+## 4. The wiki
+
+Once that run has published the release:
+
+- The [wiki](https://github.com/Skamba/gbs-anywhere/wiki) describes the
+  latest release. Ask who updates it this time: if someone else keeps it,
+  tell the person to let them know the release is out, and stop here.
+- Clone `https://github.com/Skamba/gbs-anywhere.wiki.git` and bring the
+  pages that the release's CHANGELOG section touches in line with it:
+  setup steps, menu paths, flags, screenshots that no longer match.
+  The rules in "Public repository wording" apply there too.
+- Ask before pushing the wiki.
