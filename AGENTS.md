@@ -2,7 +2,7 @@
 
 gbs-anywhere stands in for the espresso machine a Mahlkönig grinder syncs
 with (Grind-by-Sync). The E64 WS polls it over HTTP on port 80; an E65/E80
-GbS is polled by it instead, over the grinder's "Generic WiFi" HTTPS API
+GbS is polled by it instead, over the grinder's Local WiFi HTTPS API
 (`--grinder`). A person on their phone, or an optional integration, reports
 each shot's time and weight; the grinder then adjusts its grind setting. One
 Rust crate, one HTML page, one Docker image. README.md is for users; this
@@ -12,7 +12,7 @@ file is for agents changing the code.
 
 - `src/protocol/`: the grinder link as plain types, no I/O. `machine.rs` holds
   the state machine and shot rules, `wire.rs` the JSON field names, `wifi.rs`
-  the E65/E80 "Generic WiFi" messages, and `grinder.rs` models how the E64 WS
+  the E65/E80 Local WiFi messages, and `grinder.rs` models how the E64 WS
   reads the machine's replies (`GrinderModel`, used in tests).
 - `src/server/`: axum. `grinder_api.rs` is what the E64 WS calls
   (`/api/v2/*`); `wifi_grinder.rs` pairs with an E65/E80 GbS and turns its
@@ -222,7 +222,7 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
 - Phone first: content at most 480 px wide, 16 px side padding, no
   horizontal scrolling.
 - Typing the time and weight by hand is the default flow and must work with no
-  integration set up. Integrations are optional, behind the green + under
+  integration set up. Integrations are optional, behind the + under
   Status → Machine integrations.
 
 ## Public repository wording
@@ -256,6 +256,10 @@ messages and pull requests:
   after merging, tag that commit `vX.Y.Z` and push the tag. CI stops the
   release if the tag, Cargo.toml and CHANGELOG.md disagree. Release tags
   cannot be moved or deleted.
+- Every release updates the [wiki](https://github.com/Skamba/gbs-anywhere/wiki)
+  (its own repository, `gbs-anywhere.wiki`): once the release is out, bring
+  the pages its changes touch in line with it. README.md links there for new
+  users, so the wiki describes the latest release, not `main`.
 - Commit messages have an imperative subject line of at most about 70
   characters and a body that explains why.
 

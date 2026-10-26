@@ -6,12 +6,87 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+`grinder.wifi` in `GET /api/state` (and in the replies that carry the same
+state) now says where an E65/E80 pairing is in one `phase`. Scripts written
+for 0.3.x that read it need the changes below; the pairing file is read as
+before.
+
+| 0.3.x | now |
+|---|---|
+| `state: "pairing"`: the Pairing Code is shown | only with `phase: "accepting"`; `pairing` also covers `holding`, `checking`, `quiet` and `asking` |
+| `needs_pairing_id: true`, with `state: "failing"` | `phase: "asking"`, with `state: "pairing"` |
+| `state: "failing"` while nothing is sent for 3 minutes after an unanswered pairing check | `state: "pairing"`, `phase: "quiet"` (`unreachable` stays `true`) |
+| `POST /api/grinder/pairing` while not paired and not asking for an ID: `grinder_already_paired` | `grinder_not_asking`; `grinder_already_paired` only while paired |
+
 ### Added
 
-- Status → Grinder shows the address to enter on an E64 WS, also when the
-  app was opened by name (such as `gbs-anywhere.local`). When it looks like
-  an address inside Docker, the app says the grinder can't reach it. In the
+- **Set up grinder**: the app sets up the grinder step by step, in the
+  grinder's own menu names, from **Set up grinder ›** in System status on
+  the Start tab or **Set up** on the grinder card. While no grinder is
+  known yet, it first asks which one you have. An E64 WS is shown
+  where to enable Xenia and which address to enter (the IP the app was
+  opened at, when it was opened at one), and the setup ends once the
+  grinder polls. An E65/E80 GbS is paired; this replaces the pairing card
+  and the Pairing ID form on the Start tab. A reload keeps your answers.
+  Once an E65/E80 is paired, the setup asks whether the grinder shows
+  Status On, and starts again from step 2 if not.
+- A ⋮ menu on the grinder card under Status: **Change IP address**
+  (**Enter IP address** while none is set) and, while an E65/E80 is paired,
+  **Clear pairing**, which opens the setup to pair again.
+- `POST /api/grinder/accepted`: the app's "I accepted on the grinder".
+  gbs-anywhere checks the pairing 30 s later and sends the grinder nothing
+  meanwhile; without it, it checks every 40 s (was every 2 s). Taken only
+  in phase `accepting`, else refused with `grinder_not_accepting`.
+- `grinder.wifi.phase` while `state` is `pairing`: `accepting` (the Pairing
+  Code is shown), `holding` (confirmed, waiting 30 s), `checking`, `quiet`
+  (nothing sent for 3 minutes after an unanswered check) or `asking` (the
+  Pairing ID is needed); `phase_age_ms` says how long it has been in it,
+  and `quiet_ms` how long a `quiet` round lasts.
+- `grinder_not_asking`: `POST /api/grinder/pairing` while the link is not
+  paired but not asking for a Pairing ID either.
+- `grinder.wifi.state_age_ms`, how long the link has been in its `state`,
+  and `grinder.wifi.not_set_up`: not paired, and the grinder answers, but
+  turns the pairing application down with a client error (as one not set
+  up for pairing would). System status and the grinder card say the grinder
+  is not set up only then; any other error while not paired shows as an
+  error, with its detail and the way to the log.
+
+- Opened by name (such as `gbs-anywhere.local`), the E64 WS setup and
+  the grinder card under Status show the address to enter on the grinder
+  too, as the server sees it. When that looks like an address inside
+  Docker, which the grinder can't reach, the app says so instead. In the
   API: `server.ip` and `server.ip_in_docker_range` in `/api/state`.
+
+### Changed
+
+- The grinder's address moved from Status → Settings into the grinder
+  card's ⋮ menu, with where it comes from in its form. **Use start
+  setting** is offered there only when there is a start address.
+- **Add** and **Save** in the integration forms and the **+** for a new
+  integration use the accent colour like the other main buttons, and
+  warnings (an aborted shot in History, warning notes) are orange, apart
+  from the brown accent.
+- After a shot, step 3 on the Start tab stays open with the shot, the
+  grinder's rating and what to expect next; a closed step shows what it
+  came to under its title (the recipe target, the shot, the rating with its
+  trend), and the step heads keep their place when opened or closed.
+- The appearance and language switches under Settings have equal widths,
+  and the pressed label no longer wraps or shifts them.
+- While not paired, a grinder that does not answer is tried again at least
+  every 10 s (was up to a minute), so a Pairing Code follows soon after it
+  answers again.
+- The app, the README, the log and `--grinder`'s help call the link Local
+  WiFi, after the line under the grinder's switch (Local WiFi connected),
+  instead of "Generic WiFi", and the pairing hints use the grinder's words
+  (Configuration, Start Pairing, Pairing Code). Without a grinder, the
+  refusal points to **Set up grinder**.
+
+### Fixed
+
+- The log in the app shows each line's time again, and **Copy** finds the
+  lines of the last hour; both were broken since 0.3.0.
 
 ## [0.3.1] - 2026-10-24
 

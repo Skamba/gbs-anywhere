@@ -18,7 +18,7 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80 with its `state`), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and the grinder's `grinder_message`), and `shot_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, 0 for no limit, `finishing_hold_s`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq`; on this route also `ip`, the IPv4 address the request came in on, which an E64 WS can use as its Xenia hostname (`null` over loopback, a link-local address or IPv6), and `ip_in_docker_range`: whether it is in 172.17.0.0 to 172.31.255.255, where Docker most likely gave it to its container, so the grinder can't reach it |
+//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80: its `grinder` address, its `state` (`connecting`, `pairing`, `paired`, `failing`) and, only while `pairing`, its `phase`: `accepting` while gbs-anywhere shows the code and waits for the person to accept it on the grinder and confirm that in the app, for as long as it takes (meanwhile it checks the pairing with the grinder every 40 s), `holding` while it waits 30 s after the confirmation and sends the grinder nothing, `checking` while it checks the pairing with the grinder after that (if the grinder has not accepted it yet, the phase is `accepting` again), `quiet` while gbs-anywhere sends the grinder nothing for a while after a pairing check went unanswered (the grinder may be restarting), `asking` while the grinder has it paired but the pairing ID is missing here; `phase_age_ms`, how long the link has been in that phase (for `quiet`, in the current round), and `quiet_ms`, how long a `quiet` round lasts; `state_age_ms`, how long it has been in its `state` (from the start of the link: a restart or a new address starts it over); with `pairing_code`, `pairing_id`, `unknown_pairing_id` (the last pairing ID the grinder did not take, while asking), `pairing_lost`, `unreachable`, `not_set_up` (not paired, and the grinder answered the pairing application with a client error, as one not set up for pairing would), `detail` and `problem`. The two numbers carry the grinder's own names: `pairing_code` is the "Pairing Code" it shows for one attempt (`pairingCode` in its protocol), `pairing_id` the "Pairing ID", the pairing's lasting number (`pairingId`)), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and the grinder's `grinder_message`), and `shot_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, 0 for no limit, `finishing_hold_s`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq`; on this route also `ip`, the IPv4 address the request came in on, which an E64 WS can use as its Xenia hostname (`null` over loopback, a link-local or shared (Tailscale) address, or IPv6), and `ip_in_docker_range`: whether it is in 172.17.0.0 to 172.31.255.255, where Docker most likely gave it to its container, so the grinder can't reach it |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them; they win over flags from then on. `null` goes back to the start setting (the flag or environment variable, else the default); `"grinder_host":""` removes the address (without a start address, the same as `null`). Replies with the settings as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
@@ -35,7 +35,8 @@
 //! | POST | `/api/shot/abort` | ends the shot as a user abort (grinder skips it) |
 //! | POST | `/api/shot/start` | starts a shot without a grinder request (an E64 WS sees a flush; an E65/E80 nothing) |
 //! | POST | `/api/machine` | patch the `ON`-state mako fields, e.g. `{"TANK_LEVEL":0}` |
-//! | POST | `/api/grinder/pairing` | `{"pairing_id":1234}` — the pairing ID an E65/E80 grinder shows, only while the link asks for it |
+//! | POST | `/api/grinder/pairing` | `{"pairing_id":1234}` — the pairing ID an E65/E80 grinder shows, only while the link asks for it (`phase` `asking`); refused with `grinder_already_paired` while paired, `grinder_not_asking` otherwise |
+//! | POST | `/api/grinder/accepted` | the person confirms they accepted gbs-anywhere on the grinder: it checks the pairing 30 s later, and sends the grinder nothing meanwhile (`phase` `holding`); only while the link waits for it (`phase` `accepting`), empty body; refused with `grinder_not_accepting` otherwise, `grinder_not_set_up` without an E65/E80 and `grinder_pairing_busy` while the last one is handled |
 //! | PUT/DELETE | `/api/overrides` | raw keys forced into every mako reply |
 
 use std::convert::Infallible;
@@ -94,6 +95,7 @@ pub fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::Router {
         .route("/api/integrations/{id}/adopt", post(adopt_integration))
         .route("/api/machine", post(patch_machine))
         .route("/api/grinder/pairing", post(grinder_pairing))
+        .route("/api/grinder/accepted", post(grinder_accepted))
         .route("/api/overrides", put(put_overrides).delete(clear_overrides))
         .route_layer(axum::middleware::from_fn_with_state(hosts, browser::guard))
         .with_state(state)
@@ -121,7 +123,15 @@ pub fn state_json(x: &Server) -> Value {
                 "polls": link.polls,
                 "requests": link.requests,
                 "last_poll_age_ms": link.last_poll.map(|t| now.saturating_duration_since(t).as_millis() as u64),
-                "wifi": link.wifi,
+                "wifi": link.wifi.as_ref().map(|w| {
+                    let mut wifi = serde_json::to_value(w).unwrap_or(Value::Null);
+                    if let Value::Object(o) = &mut wifi {
+                        let age = |t: Instant| now.saturating_duration_since(t).as_millis() as u64;
+                        o.insert("phase_age_ms".into(), json!(w.phase_since.map(age)));
+                        o.insert("state_age_ms".into(), json!(w.state_since.map(age)));
+                    }
+                    wifi
+                }),
                 "last_grind": m.last_grind(),
                 "grind_blocked": blocked,
                 "shot_range": m.grinder_range(),
@@ -283,15 +293,24 @@ async fn get_state(
 }
 
 /// The address the grinder can reach this server at, from the one a request
-/// came in on: an IPv4 address that is not loopback or link-local (what a
-/// computer takes when no router gave it one), else `None`.
+/// came in on: an IPv4 address that is not loopback, link-local (what a
+/// computer takes when no router gave it one) or shared (100.64.0.0/10, as
+/// Tailscale uses), else `None`.
 fn grinder_ip(local: IpAddr) -> Option<Ipv4Addr> {
     match local.to_canonical() {
-        IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified() => {
+        IpAddr::V4(ip)
+            if !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified() && !shared(ip) =>
+        {
             Some(ip)
         }
         _ => None,
     }
+}
+
+/// 100.64.0.0/10 (`Ipv4Addr::is_shared` is not stable yet).
+fn shared(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    a == 100 && b & 0xc0 == 64
 }
 
 /// Whether `ip` is in the part of Docker's built-in network pools that home
@@ -560,6 +579,15 @@ async fn grinder_pairing(
     }
     match x.use_grinder_pairing_id(id) {
         Ok(()) => Json(json!({ "pairing_id": id })).into_response(),
+        Err(e) => error(StatusCode::CONFLICT, e.code(), &e.to_string()),
+    }
+}
+
+/// The person accepted gbs-anywhere on the grinder: the link waits a moment,
+/// then checks the pairing. Only while it waits for this. The body is ignored.
+async fn grinder_accepted(State(x): State<Arc<Server>>) -> Response {
+    match x.grinder_accepted() {
+        Ok(()) => Json(json!({ "accepted": true })).into_response(),
         Err(e) => error(StatusCode::CONFLICT, e.code(), &e.to_string()),
     }
 }
@@ -1140,6 +1168,9 @@ mod tests {
         assert_eq!(ip("127.0.0.1"), None, "this computer only");
         assert_eq!(ip("::1"), None);
         assert_eq!(ip("169.254.83.10"), None, "link-local");
+        assert_eq!(ip("100.101.102.103"), None, "Tailscale");
+        assert_eq!(ip("100.63.0.1").as_deref(), Some("100.63.0.1"));
+        assert_eq!(ip("100.128.0.1").as_deref(), Some("100.128.0.1"));
         assert_eq!(ip("0.0.0.0"), None);
         assert_eq!(ip("fe80::1"), None, "IPv6");
     }

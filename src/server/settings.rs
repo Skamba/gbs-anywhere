@@ -704,19 +704,16 @@ impl Server {
                 "no --config or --grinder-pairing-file: the pairing lasts until restart"
             );
         }
-        tracing::info!(
-            "grinder: pairing over Generic WiFi with {}",
-            link.base_url()
-        );
+        tracing::info!("grinder: pairing over Local WiFi with {}", link.base_url());
         // Taken here, under the settings lock, rather than in the task: an
         // older link that is still finishing a step can then never take over
         // again, so only this one reports and gets the pairing IDs typed in
         // the app.
-        let (owner, ids) = self.attach_wifi();
+        let (owner, ids, accept) = self.attach_wifi();
         // Shown until the link reports for itself, so the app never sees an
         // address without a link.
         self.set_wifi(owner, link.connecting());
-        let task = tokio::spawn(link.run(self.clone(), owner, ids)).abort_handle();
+        let task = tokio::spawn(link.run(self.clone(), owner, ids, accept)).abort_handle();
         live.link = Some(RunningLink { task });
     }
 
