@@ -134,6 +134,9 @@ async fn grinder_accepts_a_shot_entered_in_the_app() {
 
     let state: Value = grinder.get("/api/state").await;
     assert_eq!(state["server"]["version"], crate::version());
+    // Asked over loopback, there is no address to give the grinder.
+    assert_eq!(state["server"]["ip"], Value::Null);
+    assert_eq!(state["server"]["ip_in_docker_range"], false);
 
     // Grind with a Grind-by-Sync recipe, then the knob press.
     let recipe = json!({ "SYNC_BEVERAGE_WEIGHT": 36.0 });

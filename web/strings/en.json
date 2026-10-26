@@ -192,6 +192,7 @@
   "grinder.state.ready": "Ready",
   "grinder.state.connecting": "Connecting",
   "grinder.fact.ip": "IP address",
+  "grinder.fact.serverIp": "gbs-anywhere’s address",
   "grinder.fact.pairingId": "Pairing ID",
   "grinder.fact.notPaired": "not paired",
   "grinder.fact.pairingCode": "Pairing code",
@@ -199,6 +200,8 @@
   "grinder.fact.never": "never",
   "grinder.fact.group": "Group head 1",
   "grinder.group.idle": "Idle",
+  "grinder.serverIp.hint": "Enter gbs-anywhere’s address on the grinder under Enable Xenia → Configuration.",
+  "grinder.serverIp.docker": "This looks like an address inside Docker, which the grinder can’t reach. Enter the address of the computer Docker runs on instead; your router’s list of devices shows it.",
   "grinder.group.running": "Brewing",
   "grinder.group.finishing": "Finishing",
 

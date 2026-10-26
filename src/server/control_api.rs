@@ -18,7 +18,7 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80 with its `state`), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and the grinder's `grinder_message`), and `shot_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, 0 for no limit, `finishing_hold_s`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq` |
+//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80 with its `state`), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and the grinder's `grinder_message`), and `shot_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, 0 for no limit, `finishing_hold_s`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq`; on this route also `ip`, the IPv4 address the request came in on, which an E64 WS can use as its Xenia hostname (`null` over loopback, a link-local address or IPv6), and `ip_in_docker_range`: whether it is in 172.17.0.0 to 172.31.255.255, where Docker most likely gave it to its container, so the grinder can't reach it |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them; they win over flags from then on. `null` goes back to the start setting (the flag or environment variable, else the default); `"grinder_host":""` removes the address (without a start address, the same as `null`). Replies with the settings as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
@@ -39,18 +39,19 @@
 //! | PUT/DELETE | `/api/overrides` | raw keys forced into every mako reply |
 
 use std::convert::Infallible;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{MachineError, MakoState, ShotResult};
-use axum::Json;
-use axum::extract::{FromRequest, FromRequestParts, Path, Query, State};
+use axum::extract::{ConnectInfo, FromRequest, FromRequestParts, Path, Query, State};
 use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
+use axum::{Extension, Json};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -59,7 +60,7 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::integration::{self, ChangeError, Settings};
 use crate::server::browser::{self, AllowedHosts};
 use crate::server::logbook::{self, LogLine};
-use crate::server::{Server, SettingsChange, history};
+use crate::server::{Conn, Server, SettingsChange, history};
 
 /// The app's routes, answering only to home-network host names (`hosts`
 /// adds more) and refusing writes from other sites.
@@ -263,8 +264,43 @@ async fn icon(State(x): State<Arc<Server>>, Path(name): Path<String>) -> Respons
     }
 }
 
-async fn get_state(State(x): State<Arc<Server>>) -> Json<Value> {
-    Json(state_json(&x))
+async fn get_state(
+    State(x): State<Arc<Server>>,
+    conn: Option<Extension<ConnectInfo<Conn>>>,
+) -> Json<Value> {
+    let mut state = state_json(&x);
+    let ip = conn
+        .and_then(|Extension(ConnectInfo(c))| c.local)
+        .and_then(|a| grinder_ip(a.ip()));
+    if let Some(server) = state["server"].as_object_mut() {
+        server.insert("ip".into(), json!(ip));
+        server.insert(
+            "ip_in_docker_range".into(),
+            json!(ip.is_some_and(in_docker_range)),
+        );
+    }
+    Json(state)
+}
+
+/// The address the grinder can reach this server at, from the one a request
+/// came in on: an IPv4 address that is not loopback or link-local (what a
+/// computer takes when no router gave it one), else `None`.
+fn grinder_ip(local: IpAddr) -> Option<Ipv4Addr> {
+    match local.to_canonical() {
+        IpAddr::V4(ip) if !ip.is_loopback() && !ip.is_link_local() && !ip.is_unspecified() => {
+            Some(ip)
+        }
+        _ => None,
+    }
+}
+
+/// Whether `ip` is in the part of Docker's built-in network pools that home
+/// networks don't use: 172.17.0.0 to 172.31.255.255. There, it is most
+/// likely a container's own address, which the grinder can't reach. (The
+/// pools also take subnets of 192.168.0.0/16, which says nothing.)
+fn in_docker_range(ip: Ipv4Addr) -> bool {
+    let [a, b, ..] = ip.octets();
+    a == 172 && (17..=31).contains(&b)
 }
 
 #[derive(Deserialize)]
@@ -680,8 +716,8 @@ mod tests {
     use serde_json::Value;
 
     use super::{
-        CSS_SLOT, JS_SLOT, LANGS, PAGE_CSS, PAGE_HTML, PAGE_JS, STRINGS_SLOT, VERSION_SLOT, page,
-        script_safe,
+        CSS_SLOT, JS_SLOT, LANGS, PAGE_CSS, PAGE_HTML, PAGE_JS, STRINGS_SLOT, VERSION_SLOT,
+        grinder_ip, in_docker_range, page, script_safe,
     };
 
     /// One language's texts by key: a text, or a plural
@@ -1090,5 +1126,33 @@ mod tests {
             serde_json::from_str(&safe).unwrap(),
         );
         assert_eq!(a, b, "still the same JSON");
+    }
+
+    #[test]
+    fn grinder_ip_is_an_ipv4_address_off_this_computer() {
+        let ip = |s: &str| grinder_ip(s.parse().unwrap()).map(|ip| ip.to_string());
+        assert_eq!(ip("192.168.1.20").as_deref(), Some("192.168.1.20"));
+        assert_eq!(
+            ip("::ffff:192.168.1.20").as_deref(),
+            Some("192.168.1.20"),
+            "IPv4 on an IPv6 socket"
+        );
+        assert_eq!(ip("127.0.0.1"), None, "this computer only");
+        assert_eq!(ip("::1"), None);
+        assert_eq!(ip("169.254.83.10"), None, "link-local");
+        assert_eq!(ip("0.0.0.0"), None);
+        assert_eq!(ip("fe80::1"), None, "IPv6");
+    }
+
+    #[test]
+    fn docker_range_leaves_home_networks_out() {
+        let docker = |s: &str| in_docker_range(s.parse().unwrap());
+        assert!(docker("172.17.0.2"), "the default bridge");
+        assert!(docker("172.18.0.5"), "a compose network");
+        assert!(docker("172.31.255.254"));
+        assert!(!docker("172.16.0.10"));
+        assert!(!docker("172.32.0.1"));
+        assert!(!docker("192.168.1.20"));
+        assert!(!docker("10.0.0.5"));
     }
 }

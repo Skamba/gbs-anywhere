@@ -128,7 +128,11 @@ The grinder treats gbs-anywhere as a Xenia, so the menus below say "Xenia".
 3. Go to **Connectivity → Machine To Machine → Enable Xenia**.
 4. Open **Configuration**. The scan will not find gbs-anywhere, so enter the
    hostname by hand: the computer's IP address, e.g. `192.168.1.20`. An IP is
-   more reliable than a `.local` name.
+   more reliable than a `.local` name. The app shows it under **Status →
+   Grinder** as gbs-anywhere's address. In Docker it can only see the
+   container's own address (unless the container uses the host's network):
+   when that is in Docker's range (172.17.x.x to 172.31.x.x) the app says so,
+   and the computer's address is in your router's list of devices.
 5. Within a few seconds the status at the top right of the app turns
    **Ready** (tap it: **Grinder connected**). The grinder polls every 2
    seconds from then on.

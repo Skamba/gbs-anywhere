@@ -6,6 +6,13 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+- Status → Grinder shows the address to enter on an E64 WS, also when the
+  app was opened by name (such as `gbs-anywhere.local`). When it looks like
+  an address inside Docker, the app says the grinder can't reach it. In the
+  API: `server.ip` and `server.ip_in_docker_range` in `/api/state`.
+
 ## [0.3.1] - 2026-10-24
 
 The app is the same as in 0.3.0; this release adds a way to run it without

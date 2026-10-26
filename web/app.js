@@ -1078,6 +1078,14 @@
     const facts = [
       ["ip", e65 ? (typed || (wifi && urlHost(wifi.grinder)) || "–") : (hostOf(S.grinder.peer) || "–")],
     ];
+    // What an E64 WS needs as its Xenia hostname: the address the page was
+    // opened by, if an IP, as that one is reachable from the home network
+    // even in Docker; else the one the server was reached on.
+    const typedIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(location.hostname) && !location.hostname.startsWith("127.") ? location.hostname : null;
+    const ownIp = e65 ? null : typedIp || S.server.ip;
+    if (ownIp) facts.push(["serverIp", ownIp]);
+    $("g-ip-docker").hidden = !(ownIp && !typedIp && S.server.ip_in_docker_range);
+    $("g-ip-hint").hidden = !ownIp || on || !$("g-ip-docker").hidden;
     if (e65) facts.push(["pairingId", wifi && wifi.pairing_id != null ? String(wifi.pairing_id) : t("grinder.fact.notPaired")]);
     if (wifi && wifi.pairing_code != null && wifi.state === "pairing") facts.push(["pairingCode", String(wifi.pairing_code)]);
     facts.push(["lastContact", age == null ? t("grinder.fact.never") : ago(age)]);
