@@ -281,6 +281,9 @@
   };
 
   const wifiOf = () => (S && S.grinder && S.grinder.wifi) || null;
+  /** How long the link leaves the grinder alone after an unanswered check
+   *  (quiet_ms), in whole minutes, at least 1. */
+  const quietMinutes = (w) => Math.max(1, Math.round(((w && w.quiet_ms) || 0) / 60000));
   function linkOn() {
     const age = S && S.grinder ? S.grinder.last_poll_age_ms : null;
     return age != null && age < 6000;
@@ -532,7 +535,7 @@
     // Not paired yet: the setup (System status leads there) says what to do.
     const phase = wifi && wifi.state === "pairing" ? wifi.phase : null;
     if (phase === "asking") return s("start", "alert", "pairing", t("sys.text.needsId"));
-    if (phase === "quiet") return s("start", "clock", "pairing", t("sys.text.quiet"));
+    if (phase === "quiet") return s("start", "clock", "pairing", t("sys.text.quiet", { n: quietMinutes(wifi) }));
     if (phase === "accepting") return s("start", "alert", "setup", t("sys.text.accept"));
     if (phase) return s("start", "clock", "pairing", t("sys.text.pairing"));
     if (linkStarting()) {
@@ -2352,6 +2355,9 @@
         if (typeof was === typeof into[k] || (into[k] === null && typeof was === "string")) into[k] = was;
       }
     }
+    // A kept code is a string or nothing (the loop lets any object through
+    // for a field that starts as null).
+    if (typeof fresh.pair.lastCode !== "string") fresh.pair.lastCode = null;
     // The hash moves to #setup only once the old pairing is cleared.
     if (v.mode === "repair" && mode === "setup") fresh.pair.cleared = true;
     return fresh;
@@ -2384,8 +2390,8 @@
    *  pairing on the grinder. */
   function openSetup(mode) {
     if (tab !== "setup") setupFrom = tab;
+    // showTab then starts it afresh, with nothing kept to restore.
     forgetSetup();
-    wz = freshSetup(mode);
     goTab(mode === "repair" ? "repair" : "setup");
   }
   function closeSetup() { goTab(setupFrom); }
@@ -2741,6 +2747,9 @@
       note: "",             // why it is back at step 2: retry, mismatch, notShown
       attempt: 1,
       lostAck: false,       // the lost pairing was seen and "Try again" tapped
+      gone: false,          // the wait ended with a new request: shown as lost
+      host: null,           // the address the last sync saw (not kept)
+      afterWait: false,     // past the restart wait, before the next attempt
       lastCode: null,       // the Pairing Code last shown, for step 3 once done
       editHost: false, hostValue: null, hostError: "", hostBusy: false,
       acceptError: "", acceptBusy: false, tapped: false,
@@ -2790,8 +2799,9 @@
     // the person accepted on the grinder without confirming here.
     const entry = wz.pair.entry || {};
     if (phase === "quiet" || (WAIT_PHASES.includes(phase) && (wz.pair.tapped || WAIT_PHASES.includes(entry.phase)))) return { step: 4 };
-    // The last accepted pairing did not stick (shown until one does).
-    if (w && w.pairing_lost && !wz.pair.lostAck) return { step: 5, part: "lost" };
+    // The last accepted pairing did not stick (shown until one does), also
+    // when the wait ended with a new request and the link didn't say so.
+    if (w && (w.pairing_lost || wz.pair.gone) && !wz.pair.lostAck) return { step: 5, part: "lost" };
     const code = phase === "accepting" && w.pairing_code != null ? String(w.pairing_code) : null;
     // Step 3 only after "Pairing started" here: the grinder can answer with
     // a Pairing Code before pairing is started on it, even with Local WiFi
@@ -2866,7 +2876,7 @@
       }
       const unreached = st === "retry" ? [banner("warn", t("setup.s1.unreached", { host: pairHost() }), "warn")] : [];
       const input = el("input", {
-        id: "wz-host", inputmode: "url", autocomplete: "off", autocapitalize: "off", spellcheck: "false", placeholder: "192.168.1.20",
+        id: "wz-host", inputmode: "url", autocomplete: "off", autocapitalize: "off", spellcheck: "false", placeholder: "192.168.1.30",
         enterkeyhint: "done", "aria-describedby": wz.pair.hostError ? "wz-host-error" : null,
       });
       input.value = wz.pair.hostValue != null ? wz.pair.hostValue : pairHost();
@@ -2884,12 +2894,12 @@
       if (st === "later") return null;
       // Paired, Configuration opens the paired device's page, with Clear
       // Pairing (Pairing löschen) at its end.
-      const path = crumbs([t("setup.s21.path1"), t("setup.s21.path2"), t("setup.s21.path3"), t("setup.s22.path2"), t("setup.clear.button")]);
+      const path = crumbs([t("setup.s21.path2"), t("setup.s21.path3"), t("setup.s22.path2"), t("setup.clear.button")]);
       if (wz.pair.clearTapped) {
-        return [el("p", { class: "body-text", text: t("setup.clear.text") }), path, waiting(t("setup.clear.wait")),
+        return [el("p", { class: "body-text", text: t("setup.clear.text") }), path, hint(t("setup.s21.menu")), waiting(t("setup.clear.wait")),
           el("button", { type: "button", class: "wz-btn plain wide", "data-act": "unclear" }, icon("back", 16, 2.5), t("setup.back"))];
       }
-      return [el("p", { class: "body-text", text: t("setup.clear.text") }), path, question(t("setup.clear.question")),
+      return [el("p", { class: "body-text", text: t("setup.clear.text") }), path, hint(t("setup.s21.menu")), question(t("setup.clear.question")),
         answers(answer("close", "plain", "back", t("setup.back")), answer("cleared", "ok", "check", t("setup.clear.yes"), t("setup.clear.yesSub")))];
     }
     if (n === 2) {
@@ -2903,7 +2913,8 @@
       if (!fin && wz.pair.note === "cleared") out.push(banner("warn", t("setup.note.cleared"), "warn"));
       out.push(parts([
         { id: "wz-s21", title: t("setup.s21.title"), s: enabled ? "done" : "now", body: [
-          crumbs([t("setup.s21.path1"), t("setup.s21.path2"), t("setup.s21.path3"), t("setup.s21.path4"), t("setup.s21.path5")]),
+          crumbs([t("setup.s21.path2"), t("setup.s21.path3"), t("setup.s21.path4"), t("setup.s21.path5")]),
+          hint(t("setup.s21.menu")),
           // The switch is named after the last device the grinder knew.
           hint(t("setup.s21.name")), hint(t("setup.s21.tip")), question(t("setup.s21.question")),
           answers(answer("back21", "plain", "back", t("setup.back")), answer("c21", "ok", "check", t("setup.s21.yes")))] },
@@ -2953,12 +2964,15 @@
     if (n === 4) {
       if (st === "done") return [el("p", { class: "body-text", text: t("setup.s4.back") })];
       if (st !== "wait") return null;
-      // Said only when it is so: the person confirmed here, or the link holds
-      // the check after a confirmation.
-      const registered = wz.pair.tapped || (w && w.phase === "holding");
+      // Said only when it is so: Accepted was tapped on this page (another
+      // device's tap also holds, but isn't "your" acceptance here).
+      const registered = wz.pair.confirmed;
       // Nothing is sent to the grinder for a while: the usual time no longer
       // holds, so it is not shown.
       const quiet = !!w && w.state === "pairing" && w.phase === "quiet";
+      // Opened in the wait (or reloaded), the timer counts from where this
+      // phase began, not from the tap: the usual total doesn't fit then.
+      const midWait = WAIT_PHASES.includes((wz.pair.entry || {}).phase);
       return [
         // A Timeout or a frozen screen looks like a failure: hands off, first.
         el("div", { class: "banner warn wz-banner-icon" }, icon("warn", 18, 2.2),
@@ -2970,8 +2984,8 @@
           : el("p", { class: "body-text", text: t("setup.s4.unconfirmed") }),
         el("div", { class: "wz-wait" }, el("span", { class: "wz-spinner" }),
           el("div", null, el("p", { class: "wz-timer", id: "wz-timer", text: pairWaited() }),
-            quiet ? null : el("p", { class: "meta wz-timeline" }, icon("timer", 16, 2.2), t("setup.s4.time")))),
-        quiet ? hint(t("setup.s4.quiet")) : null,
+            quiet || midWait ? null : el("p", { class: "meta wz-timeline" }, icon("timer", 16, 2.2), t("setup.s4.time")))),
+        quiet ? hint(t("setup.s4.quiet", { n: quietMinutes(w) })) : null,
         // What the grinder usually shows meanwhile, so none of it is a surprise.
         el("p", { class: "hint" }, el("strong", { text: t(pairConfirmed() ? "setup.s4.flow.title" : "setup.s4.flow.titleIf") })),
         el("ol", { class: "wz-flow" }, ["setup.s4.flow1", "setup.s4.flow2", "setup.s4.flow3", "setup.s4.flow4"].map((k) => el("li", { text: t(k) }))),
@@ -2994,7 +3008,8 @@
         return [
           el("p", { class: "body-text", text: t("setup.s5.text") }),
           // After the restart the grinder is on its home screen: the whole way.
-          crumbs([t("setup.s21.path1"), t("setup.s21.path2"), t("setup.s21.path3"), t("setup.s22.path2")]),
+          crumbs([t("setup.s21.path2"), t("setup.s21.path3"), t("setup.s22.path2")]),
+          hint(t("setup.s21.menu")),
           el("form", { class: "stack", "data-form": "id", autocomplete: "off" },
             el("label", { class: "field-label" }, el("span", { text: t("setup.s5.label") }), el("span", { class: "field wz-field" }, input)),
             error ? errorLine("wz-id-error", error) : null,
@@ -3003,10 +3018,11 @@
       }
       if (at.part === "lost") {
         return [
-          // Without Accepted tapped here, the grinder may just have been off.
-          wz.pair.confirmed
+          // Without Accepted tapped here, the grinder may just have been off;
+          // with a new request the old one may have expired (see pairLostTitle).
+          pairLostTitle() === "setup.lost.title"
             ? el("div", { class: "banner warn" }, el("b", { class: "wz-banner-title", text: t("setup.lost.title") }), t("setup.lost.text"))
-            : el("div", { class: "banner warn" }, el("b", { class: "wz-banner-title", text: t("setup.lost.titleOff") }), t("setup.lost.textOff")),
+            : el("div", { class: "banner warn" }, el("b", { class: "wz-banner-title", text: t("setup.lost.titleOff") }), t(wz.pair.gone ? "setup.lost.textGone" : "setup.lost.textOff")),
           hint(t("setup.lost.honest")),
           // Seen to help now and then, not always.
           wz.pair.attempt > 1 ? hint(t("setup.lost.restart")) : null,
@@ -3023,9 +3039,12 @@
     if (n === "clear") return wz.pair.cleared ? t("setup.clear.done") : wz.pair.clearTapped ? t("setup.clear.subWait") : "";
     if (n === 2) return t("setup.s2.sub");
     if (n === 3) {
-      const code = at.code || wz.pair.lastCode;
+      // The last code once the step is done; while it waits, only the one
+      // showing (an earlier one may have gone).
+      const past = PAIR_ORDER[at.step] > 3;
+      const code = at.code || (past ? wz.pair.lastCode : null);
       // Done without a code to show (after a reload): nothing to wait for.
-      return code ? t("setup.s3.sub", { code }) : PAIR_ORDER[at.step] > 3 ? "" : t("setup.s3.subWait");
+      return code ? t("setup.s3.sub", { code }) : past ? "" : t("setup.s3.subWait");
     }
     return "";
   }
@@ -3037,6 +3056,25 @@
     if (wz.pair.quietFrom != null) return clockDown(Math.max(0, wz.pair.quietMs - (performance.now() - wz.pair.quietFrom)));
     return wz.pair.waitFrom == null ? "0:00" : clockDown(performance.now() - wz.pair.waitFrom);
   }
+
+  /** The first Pairing Code after the restart wait: the same one is the
+   *  same request, not accepted yet; another one, with no word of a lost
+   *  pairing, means the old request is gone (it ran out on the grinder, or
+   *  gbs-anywhere restarted), shown as a lost pairing rather than a silent
+   *  step 2. */
+  function pairFirstCodeAfterWait(w) {
+    const p = wz.pair;
+    p.afterWait = false;
+    if (String(w.pairing_code) === p.lastCode) {
+      Object.assign(p, { started: Date.now(), c21: true, c31: true, note: "notAccepted", lostAck: true, confirmed: false });
+      setupSay(t("setup.note.notAccepted"));
+    } else if (p.lastCode != null && !w.pairing_lost) p.gone = true;
+  }
+
+  /** The lost card's title: a restart lost an accepted pairing only when
+   *  Accepted was tapped here and the link didn't just get a new request
+   *  (that one also fits an expired request or gbs-anywhere restarting). */
+  const pairLostTitle = () => (wz.pair.confirmed && !wz.pair.gone ? "setup.lost.title" : "setup.lost.titleOff");
 
   /** Follows the link: the clear card ends once the link lets go of the
    *  old pairing, and a new step starts with its cards as they open. */
@@ -3058,7 +3096,9 @@
     // After Restart setup the link still holding the pairing for long, with
     // the grinder answering, means it has it after all: Status may be On.
     if (wz.pair.noClear && !wz.pair.cleared && !wz.pair.restartAt) wz.pair.restartAt = Date.now();
-    wz.pair.stillPaired = wz.pair.noClear && !wz.pair.cleared && !!w && w.state === "paired" && Date.now() - wz.pair.restartAt > STILL_PAIRED_MS;
+    const stillPaired = wz.pair.noClear && !wz.pair.cleared && !!w && w.state === "paired" && Date.now() - wz.pair.restartAt > STILL_PAIRED_MS;
+    if (stillPaired && !wz.pair.stillPaired) setupSay(t("setup.note.stillPaired"));
+    wz.pair.stillPaired = stillPaired;
     if (wz.mode === "repair" && !wz.pair.cleared && !wifiPaired()) {
       wz.pair.cleared = true;
       // From now on a reload goes on with the setup, not with clearing again.
@@ -3074,8 +3114,21 @@
       wz.pair.acceptFor = null;
       wz.pair.acceptBusy = false;
     }
+    // The code of the request the wait is for, also when the view opened
+    // in the wait (the link shows it while holding and checking).
+    if (WAIT_PHASES.includes(phase) && w.pairing_code != null) wz.pair.lastCode = String(w.pairing_code);
+    // Another address is another grinder: nothing from the last one's wait
+    // applies (also when it changed elsewhere, not through Back here).
+    const host = pairHost();
+    if (wz.pair.host != null && host !== wz.pair.host) Object.assign(wz.pair, { afterWait: false, gone: false, lastCode: null });
+    wz.pair.host = host;
+    // The first code after the wait, also after the link restarted in
+    // between (gbs-anywhere restarted); not while another address is being
+    // typed, which may be another grinder.
+    if (wz.pair.afterWait && !wz.pair.editHost && phase === "accepting" && w.pairing_code != null) pairFirstCodeAfterWait(w);
     let at = pairAt();
-    if (at.code) wz.pair.lastCode = at.code;
+    // Asking for the Pairing ID or paired: the wait's question is answered.
+    if (at.part === "id" || at.part === "done") Object.assign(wz.pair, { afterWait: false, gone: false });
     // What the server says by itself, announced when it changes.
     const refused = at.part === "id" && w.unknown_pairing_id != null ? w.unknown_pairing_id : null;
     if (refused !== wz.pair.refused) {
@@ -3116,33 +3169,36 @@
         if (!wasWaiting) wz.pair.waitFrom = stateAt - ((w && w.phase_age_ms) || 0);
         // What the person said about this attempt is past; the next one
         // starts afresh, and a pairing lost after it is shown again.
-        Object.assign(wz.pair, { started: 0, c31: false, note: "", lostAck: false, acceptError: "" });
+        Object.assign(wz.pair, { started: 0, c31: false, note: "", lostAck: false, gone: false, afterWait: false, acceptError: "" });
       } else {
         wz.pair.waitFrom = null;
         wz.pair.tapped = false;
         // Past the wait the view opened in: the next one starts from a tap.
-        if (wasWaiting) wz.pair.entry = { phase: null };
-        // Back from the check to the same request: the grinder had not
-        // accepted yet, so the Pairing Code shows again, with a note.
-        // Told by the code: the same as before is the same request (the
-        // link may still say a pairing was lost before it); a new one is a
-        // new request, after a lost pairing.
-        if (wasWaiting && phase === "accepting" && w.pairing_code != null && String(w.pairing_code) === wz.pair.lastCode) {
-          Object.assign(wz.pair, { started: Date.now(), c21: true, c31: true, note: "notAccepted", lostAck: true, confirmed: false });
-          const again = pairAt();
-          wz.at = setupKey(again);
-          if (again.code) wz.pair.lastCode = again.code;
-          setupSay(t("setup.note.notAccepted"));
-          return again;
+        // Not once it asks for the Pairing ID or is paired: a later code is
+        // then a new attempt.
+        if (wasWaiting) Object.assign(wz.pair, { entry: { phase: null }, afterWait: at.step !== 5 });
+        // Back from the check with a Pairing Code at once: told by the code,
+        // the same request (not accepted yet: the code shows again, with a
+        // note) or a new one (see pairFirstCodeAfterWait).
+        if (wasWaiting && phase === "accepting" && w.pairing_code != null) {
+          pairFirstCodeAfterWait(w);
+          at = pairAt();
+          wz.at = setupKey(at);
         }
       }
-      if (at.part === "lost") setupSay(t(wz.pair.confirmed ? "setup.lost.title" : "setup.lost.titleOff"));
+      if (at.part === "lost") setupSay(t(pairLostTitle()));
     }
+    // The code the link shows now, at any step (also at step 2 before
+    // "Pairing started"): a wait entered from here is about this request.
+    // Taken last, so the comparisons above still see the one before. Not
+    // under the lost card: its done step 3 keeps the code that was accepted,
+    // and Try again goes back to step 2, which takes the new one.
+    if (phase === "accepting" && w.pairing_code != null && !wz.pair.editHost && at.part !== "lost") wz.pair.lastCode = String(w.pairing_code);
     return at;
   }
 
   const PAIR_FLOW = {
-    kept: ["clearTapped", "noClear", "c21", "started", "c31", "attempt", "note", "lostAck", "confirmed", "lastCode"],
+    kept: ["clearTapped", "noClear", "c21", "started", "c31", "attempt", "note", "lostAck", "gone", "afterWait", "confirmed", "lastCode"],
     // The clear card sits above step 1, as the first thing to do.
     cards: () => [...(wz.mode === "repair" && !wz.pair.noClear ? ["clear"] : []), 1, 2, 3, 4, 5],
     number: (n) => (typeof n === "number" ? n : null),
@@ -3241,7 +3297,7 @@
         case "c21": p.c21 = true; setupNext("wz-s22", t("setup.s21.title")); return true;
         case "back21": p.editHost = true; p.hostValue = pairHost(); wz.focus = "wz-host"; return true;
         case "back22": p.c21 = false; wz.focus = "wz-s21"; return true;
-        case "started": Object.assign(p, { started: Date.now(), note: "", c31: false, confirmed: false }); wz.focus = "wz-s31"; return true;
+        case "started": Object.assign(p, { started: Date.now(), note: "", c31: false, confirmed: false, afterWait: false }); wz.focus = "wz-s31"; return true;
         case "c31": p.c31 = true; setupNext("wz-s32", t("setup.s31.done")); return true;
         // Not shown: start pairing again on the grinder (Local WiFi is on).
         case "no31":
@@ -3257,7 +3313,7 @@
           return true;
         // Lost in the restart: from step 2, and Local WiFi may be off again.
         case "again":
-          Object.assign(p, { attempt: p.attempt + 1, started: 0, c31: false, c21: false, confirmed: false, note: "retry", lostAck: true });
+          Object.assign(p, { attempt: p.attempt + 1, started: 0, c31: false, c21: false, confirmed: false, note: "retry", lostAck: true, gone: false, afterWait: false });
           wz.focus = "wz-s21";
           setupSay(t("setup.note.retry"));
           return true;
