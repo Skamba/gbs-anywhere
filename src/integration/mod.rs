@@ -50,7 +50,8 @@
 //!   (`integ.detail.<key>` in `web/strings/<lang>.json`); a line without a
 //!   key, or one the catalog lacks, is shown in English. Errors stay English.
 //! * Then list it here: `pub mod <id>;`, its `KIND` in [`KINDS`], and its
-//!   args in [`CliArgs`] and [`CliArgs::configured`].
+//!   args in [`CliArgs`] and [`CliArgs::configured`]. `cargo test` checks
+//!   that each kind's flags turn it on.
 //!
 //! [`Link::report`] applies the rules every integration must follow: a shot
 //! only counts while the grinder is waiting after a knob press (on an E65/E80
@@ -769,6 +770,71 @@ mod tests {
         assert_eq!(json["detail"], "boom");
         assert_eq!(json["detail_key"], serde_json::Value::Null);
         assert_eq!(json["detail_vars"], serde_json::json!({}));
+    }
+
+    /// The flags as the binary takes them.
+    #[derive(clap::Parser)]
+    struct Cli {
+        #[command(flatten)]
+        integrations: CliArgs,
+    }
+
+    /// The kinds `argv` turns on.
+    fn configured(argv: &[String]) -> std::collections::BTreeSet<&'static str> {
+        use clap::Parser;
+        let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+        let on = cli.integrations.configured();
+        on.iter().map(|(kind, _)| kind.id).collect()
+    }
+
+    /// Registering one takes four lines here; a missed `CliArgs::configured`
+    /// line would ignore its flags without a word.
+    #[test]
+    fn every_integration_has_flags_that_turn_it_on() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let kinds: std::collections::BTreeSet<&str> = KINDS.iter().map(|k| k.id).collect();
+        // Each `#[group(id = "<id>")]`; clap adds one for each struct, too.
+        let groups: Vec<_> = cmd
+            .get_groups()
+            .filter(|g| !["Cli", "CliArgs"].contains(&g.get_id().as_str()))
+            .collect();
+        let ids: std::collections::BTreeSet<&str> =
+            groups.iter().map(|g| g.get_id().as_str()).collect();
+        assert_eq!(ids, kinds, "one flag group for each kind in KINDS");
+        for arg in cmd.get_arguments() {
+            assert!(
+                groups
+                    .iter()
+                    .any(|g| g.get_args().any(|a| a == arg.get_id())),
+                "--{} is in no integration's group",
+                arg.get_id()
+            );
+        }
+
+        // Set in the environment (`LM_USERNAME`, say), not by the flags.
+        let ambient = configured(&["gbs-anywhere".to_owned()]);
+        for group in groups {
+            let id = group.get_id().as_str();
+            let mut argv = vec!["gbs-anywhere".to_owned()];
+            for arg_id in group.get_args() {
+                let arg = cmd.get_arguments().find(|a| a.get_id() == arg_id).unwrap();
+                argv.push(format!("--{}", arg.get_long().expect("a long flag")));
+                if arg.get_action().takes_values() {
+                    // Valid as text and as a number.
+                    argv.push("1".to_owned());
+                }
+            }
+            let on = configured(&argv);
+            assert!(
+                on.contains(id),
+                "{argv:?} does not turn on {id}: is it in CliArgs::configured?"
+            );
+            assert!(
+                on.iter().all(|k| *k == id || ambient.contains(k)),
+                "{argv:?} turns on {on:?}"
+            );
+        }
     }
 
     #[test]
