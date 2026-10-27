@@ -1202,22 +1202,23 @@
   const kindOf = (id) => (kinds || []).find((k) => k.id === id);
   const hasPassword = (k) => !!(k && k.fields.some((f) => f.input === "password"));
 
-  // Icons from the --icons directory, probed once per kind
-  // (undefined: not probed yet, null: none, string: URL).
-  const customIcons = {};
+  // Icons from the --icons directory, by kind: its URL, or null for none.
+  // Probed for every kind as the kinds load, before any of them shows, so
+  // the picker and the add form show them from the first time they open.
+  let customIcons = {};
+  /** The --icons file for kind `id` (svg, png or webp), or null. */
   async function probeIcon(id) {
-    customIcons[id] = null;
     for (const ext of ["svg", "png", "webp"]) {
       try {
         const r = await fetch("/icons/" + id + "." + ext, { method: "HEAD", cache: "no-store" });
-        if (r.ok) { customIcons[id] = "/icons/" + id + "." + ext; invalidateIntegrations(); return; }
+        if (r.ok) return "/icons/" + id + "." + ext;
       } catch (_) {}
     }
+    return null;
   }
   function iconFor(kindId, node) {
     const box = node || el("span", { class: "integ-icon" });
     if (!/^[a-z0-9_-]+$/.test(kindId)) { box.replaceChildren(icon("cloud", 22, 1.8)); return box; }
-    if (customIcons[kindId] === undefined) probeIcon(kindId);
     if (customIcons[kindId]) {
       const mark = el("span", { class: "mark" });
       mark.style.setProperty("--icon", "url('" + customIcons[kindId] + "')");
@@ -1236,7 +1237,10 @@
     kindsLoading = true;
     try {
       const r = await api("/api/integrations/kinds");
-      kinds = Array.isArray(r.kinds) ? r.kinds : [];
+      const list = Array.isArray(r.kinds) ? r.kinds : [];
+      const found = await Promise.all(list.map((k) => (/^[a-z0-9_-]+$/.test(k.id) ? probeIcon(k.id) : null)));
+      customIcons = Object.fromEntries(list.map((k, n) => [k.id, found[n]]));
+      kinds = list;
       kindsPersistent = !!r.persistent;
       invalidateIntegrations();
     } catch (_) {}
