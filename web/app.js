@@ -330,15 +330,16 @@
   const ui = {
     open: 1, planKey: null, info: false, errInfo: false, dismissed: 0,
     // System status: open or closed (sysOpen), as last set outside a stop
-    // (sysPref), and the stop it opened for by itself (sysStop, see STOPS).
+    // (sysPref), and the stop it opened for by itself (sysStop, see stopOf).
     sysOpen: false, sysPref: false, sysStop: null,
     pill: null,                  // the pill's label and short label, for a resize
     // Shot events this page reported by hand, and the event numbers the one
     // just sent falls between until its event is in.
-    lastScenario: null, mine: new Set(), mineRange: null,
-    // The running brew (its start event), whether step 2 shows the fields
-    // for it, and whether no integration reported it in time.
-    brew: null, typeIn: false, missed: false,
+    mine: new Set(), mineRange: null,
+    // The running brew (brewOf; undefined until the Start tab first
+    // rendered), whether step 2 shows the fields for it, and whether no
+    // integration reported it in time.
+    brew: undefined, typeIn: false, missed: false,
   };
 
   const wifiOf = () => (S && S.grinder && S.grinder.wifi) || null;
@@ -736,16 +737,17 @@
     node.className = node.className.replace(/\bt-[a-z]+\b/g, "").trim() + " t-" + tone;
   }
 
-  /** Renders the pill and System status; returns what sysInfo() said. */
-  function renderHeader(f) {
-    const s = sysInfo(f);
-    // A stop opens System status; a tap closes it until the next stop. When
-    // the stop is over, it goes back to how it was left before.
-    const stop = stopOf(s, f);
-    if (stop !== ui.sysStop) {
-      ui.sysStop = stop;
-      ui.sysOpen = stop ? true : ui.sysPref;
-    }
+  /** System status opened or closed for the stop `stop` (see stopOf): a
+   *  stop opens it; a tap closes it until the next stop. When the stop is
+   *  over, it goes back to how it was left before. */
+  function followStop(stop) {
+    if (stop === ui.sysStop) return;
+    ui.sysStop = stop;
+    ui.sysOpen = stop ? true : ui.sysPref;
+  }
+
+  /** Renders the pill and System status `s` (from sysInfo). */
+  function renderHeader(s) {
     const pill = $("sys-pill");
     setTone(pill, s.tone);
     ui.pill = [s.label, s.short];
@@ -766,7 +768,6 @@
     $("sys-toggle").setAttribute("aria-expanded", String(ui.sysOpen));
     $("sys-body").hidden = !ui.sysOpen;
     renderChecks(s);
-    return s;
   }
   /** The pill's label, or its short form when the long one would be cut off. */
   function fitPill(label, short) {
@@ -841,52 +842,96 @@
   /** "the La Marzocco cloud and the Half Decent Scale", from integrations. */
   const theTitles = (live) => joinList(live.map((i) => t("start.integrationName", { title: i.title })));
 
-  /** Renders the Start tab; `L` is this render's linkStatus(), when it has one. */
-  function renderStart(L) {
-    if (!S) return;
-    link = L || linkStatus();
-    const f = flow();
-    const r = reporters();
-    const tg = targets();
-    const sys = renderHeader(f);
-    renderBanner(f, sys);
+  /** The brew that runs, as the server numbers its start event: "?" while
+   *  that event is not in yet, null while none runs. With the server's
+   *  boot_id, as its numbers start over when it restarts. */
+  function brewOf(f) {
+    if (f.sc !== "running") return null;
+    const s = f.started;
+    return S.server.boot_id + ":" + (s && !(f.outcome && f.outcome.seq > s.seq) ? s.seq : "?");
+  }
 
+  // The Start tab renders in four parts: what the state says (planStart),
+  // the page's own state that follows it (applyStart), what happens once
+  // per brew (brewStarted), and the page itself (drawStart).
+
+  /** What the Start tab shows, from the server's state alone: the shot
+   *  (flow), System status and its stop, the brew and each step's tone
+   *  and badge. */
+  function planStart() {
+    const f = flow();
+    const sys = sysInfo(f);
     // Step 1 says when no shot can start: blocked while there is no grinder
     // (or no gbs-anywhere, or the grinder won't grind), waiting while it
     // connects or pairs.
-    const stop = !!stopOf(sys, f);
-    // Step 2 shows the fields to type the shot in when no integration can
-    // report it: none is working, the brew was started without the grinder,
-    // or none reported it in time. Once shown, they stay for this brew.
-    const brew = f.sc === "running" ? (f.started ? f.started.seq : -1) : null;
-    if (brew !== ui.brew) { ui.brew = brew; ui.typeIn = ui.missed = false; }
-    if (brew !== null) {
-      ui.missed = ui.missed || shotMissed(r);
-      ui.typeIn = ui.typeIn || r.manual || !S.shot.requested_by_grinder || ui.missed;
-    }
+    const stop = stopOf(sys, f);
     let plan = PLANS[f.sc];
     // Also after a shot, whose result stays in steps 2 and 3.
     if (stop && sys.def.step1 === "wait") plan = [["wait", "badge.waiting"], ...plan.slice(1)];
     else if (stop && ["ready", "done", "error", "aborted"].includes(f.sc)) plan = [[sys.tone === "warn" ? "warn" : "error", "badge.blocked"], ...plan.slice(1)];
     else if (f.sc === "ready" && sys.def.step1 === "wait") plan = [["wait", "badge.waiting"], ["none", ""], ["none", ""]];
+    return { f, sys, stop, plan, brew: brewOf(f), r: reporters(), tg: targets() };
+  }
 
+  /** The page's own state for plan `p`: System status open or closed, the
+   *  brew and its fields, and which step is open. Returns whether a new
+   *  brew started. */
+  function applyStart(p) {
+    const { f, r, stop } = p;
+    followStop(stop);
+    // A new brew: also one that started and another that followed it while
+    // the page was away (a phone asleep). Its start event coming in after
+    // the state is the same brew.
+    const was = ui.brew;
+    const same = p.brew === was || (p.brew !== null && was != null && was.endsWith(":?") && p.brew.split(":")[0] === was.split(":")[0]);
+    ui.brew = p.brew;
+    if (!same) ui.typeIn = ui.missed = false;
+    // Step 2 shows the fields to type the shot in when no integration can
+    // report it: none is working, the brew was started without the grinder,
+    // or none reported it in time. Once shown, they stay for this brew.
+    if (p.brew !== null) {
+      ui.missed = ui.missed || shotMissed(r);
+      ui.typeIn = ui.typeIn || r.manual || !S.shot.requested_by_grinder || ui.missed;
+    }
     // Which step is open: the running or failed one opens by itself when the
     // shot moves on, step 3 with the result once done; otherwise step 1, or
     // none during a stop (System status tells why). A tap overrides it until
     // then.
-    const key = f.sc + ":" + (f.outcome ? f.outcome.seq : 0) + ":" + (f.job ? f.job.seq : 0) + ":" + (stop ? sys.key : "") + ":" + ui.typeIn;
+    const key = f.sc + ":" + (f.outcome ? f.outcome.seq : 0) + ":" + (f.job ? f.job.seq : 0) + ":" + (stop || "") + ":" + ui.typeIn;
     if (key !== ui.planKey) {
       ui.planKey = key;
-      const auto = plan.findIndex(([tone]) => tone === "run" || tone === "error");
+      const auto = p.plan.findIndex(([tone]) => tone === "run" || tone === "error");
       ui.open = stop ? 0 : auto >= 0 ? auto + 1 : f.sc === "done" ? 3 : 1;
       ui.errInfo = false;
     }
-    if (f.sc === "running" && ui.lastScenario !== "running") {
-      // A typed weight stays for the next shot; left empty, the recipe's is sent.
-      $("f-time").value = ""; setHint();
-      if (ui.lastScenario !== null && navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (_) {} }
-    }
-    ui.lastScenario = f.sc;
+    return !same && p.brew !== null;
+  }
+
+  /** Once per brew, as it starts: the shot time typed for the last one
+   *  goes (a typed weight stays for the next shot; left empty, the
+   *  recipe's is sent), and the phone buzzes, unless `quiet` (the page
+   *  just opened). */
+  function brewStarted(quiet) {
+    $("f-time").value = "";
+    setHint();
+    if (!quiet && navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (_) {} }
+  }
+
+  /** Renders the Start tab; `L` is this render's linkStatus(), when it has one. */
+  function renderStart(L) {
+    if (!S) return;
+    link = L || linkStatus();
+    const opened = ui.brew === undefined;
+    const p = planStart();
+    if (applyStart(p)) brewStarted(opened);
+    drawStart(p);
+  }
+
+  /** The Start tab for plan `p`, as applyStart left the page's state. */
+  function drawStart(p) {
+    const { f, r, tg, sys, plan } = p;
+    renderHeader(sys);
+    renderBanner(f, sys);
     plan.forEach(([tone, label], i) => setStep(i + 1, tone, label, ui.open === i + 1));
 
     // Step 1
@@ -3617,7 +3662,12 @@
   function renderAll() {
     // The link once for every view, so they all say the same.
     link = linkStatus();
-    if (!S) { renderHeader({ sc: "ready" }); return; }
+    if (!S) {
+      const f = { sc: "ready" }, s = sysInfo(f);
+      followStop(stopOf(s, f));
+      renderHeader(s);
+      return;
+    }
     // Name and version at the bottom of every tab but Status, whose
     // gbs-anywhere card shows them.
     $("app-footer").hidden = tab === "status";
