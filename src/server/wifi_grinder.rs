@@ -63,14 +63,14 @@ const RESTART_QUIET: Duration = Duration::from_secs(180);
 /// however long after the code it comes. Nothing is sent to the grinder
 /// meanwhile, so it is left alone right after the accept; the app and its
 /// API keep serving.
-const ACCEPT_SETTLE: Duration = Duration::from_secs(30);
+pub(super) const ACCEPT_SETTLE: Duration = Duration::from_secs(30);
 /// Between pairing checks while the code is shown and nobody has confirmed
 /// in the app. The grinder keeps the pairing request open for a long time,
 /// so the confirmation is waited for as long as it takes; this slow check
 /// only finds an accept nobody confirms. Long enough that a person who
 /// accepts on the grinder and then taps in the app normally gets the quiet
 /// moment of `ACCEPT_SETTLE` first.
-const UNCONFIRMED_POLL: Duration = Duration::from_secs(40);
+pub(super) const UNCONFIRMED_POLL: Duration = Duration::from_secs(40);
 /// Replies are a few hundred bytes; anything this big is not the grinder.
 const MAX_REPLY_BYTES: usize = 64 * 1024;
 /// How long the grinder must refuse every job request before the pairing
