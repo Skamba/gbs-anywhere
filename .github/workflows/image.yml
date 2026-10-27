@@ -39,6 +39,23 @@ jobs:
     outputs:
       build: ${{ steps.check.outputs.build }}
     steps:
+      # Before anything is built: `build` and `packages` both need this job.
+      - uses: actions/checkout@v7
+        if: startsWith(github.ref, 'refs/tags/')
+
+      - name: Check the tag against Cargo.toml and CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(grep -m 1 '^version = ' Cargo.toml | cut -d '"' -f 2)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, but Cargo.toml says $version"
+            exit 1
+          fi
+          if ! grep -q "^## \[$version\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for $version"
+            exit 1
+          fi
+
       - uses: docker/login-action@v4
         if: github.event_name == 'schedule'
         with:
@@ -87,19 +104,6 @@ jobs:
       PUSH: ${{ github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@v7
-
-      - name: Check the tag against Cargo.toml and CHANGELOG.md
-        if: startsWith(github.ref, 'refs/tags/')
-        run: |
-          version=$(grep -m 1 '^version = ' Cargo.toml | cut -d '"' -f 2)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME, but Cargo.toml says $version"
-            exit 1
-          fi
-          if ! grep -q "^## \[$version\]" CHANGELOG.md; then
-            echo "::error::CHANGELOG.md has no section for $version"
-            exit 1
-          fi
 
       - name: Image name (lowercase)
         run: |
@@ -205,6 +209,7 @@ jobs:
   # gbs-anywhere without Docker (a Raspberry Pi, say). Built in Debian 12 so
   # they work with its glibc and newer (see packaging/build-release.sh).
   packages:
+    needs: check
     if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false
