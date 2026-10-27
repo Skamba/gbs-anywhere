@@ -16,21 +16,24 @@ file is for agents changing the code.
   reads the machine's replies (`GrinderModel`, used in tests).
 - `src/server/`: axum. `grinder_api.rs` is what the E64 WS calls
   (`/api/v2/*`); `wifi_grinder.rs` pairs with an E65/E80 GbS and turns its
-  brew jobs into shots of the same machine; `control_api.rs` is the JSON API
-  and page for people. `browser.rs` keeps web pages out: the app answers
-  only to home-network host names, refuses writes from other sites, and the
+  brew jobs into shots of the same machine, with its parts in
+  `wifi_grinder/` (`pair.rs` the pairing, `jobs.rs` the brew jobs,
+  `slot.rs` the one place that starts and stops the link);
+  `control_api.rs` is the JSON API for people and `page.rs` builds the app
+  page. `browser.rs` keeps web pages out: the app answers only to
+  home-network host names, refuses writes from other sites, and the
   grinder API refuses requests with browser headers. Every control route
   gets these checks through `route_layer`, so a new route needs nothing
   extra. `mod.rs` builds the server and its listeners. Around them:
-  `settings.rs` holds the settings people
-  change in the app (shot window, grinder address, which restarts the
-  E65/E80 link, update check) and is the only writer of the settings file;
-  `history.rs` records the shots from the machine's events; `logbook.rs`
-  keeps the last log lines for the app (a `tracing` layer next to the
-  console output); `update_check.rs` looks for a newer release;
-  `private_file.rs` writes the files only their owner may read (settings,
-  history, pairing, transcript); `utc.rs` formats times. `tests.rs` and `wifi_grinder/tests.rs` hold the end-to-end
-  tests.
+  `settings.rs` holds the settings people change in the app (shot window,
+  grinder address, which restarts the E65/E80 link, update check) and is
+  the only writer of the settings file; `history.rs` records the shots
+  from the machine's events; `logbook.rs` keeps the last log lines for the
+  app (a `tracing` layer next to the console output); `update_check.rs`
+  looks for a newer release; `private_file.rs` writes the files only their
+  owner may read (settings, history, pairing, transcript); `utc.rs` formats
+  times. `tests.rs` and `wifi_grinder/tests.rs` (by topic in
+  `wifi_grinder/tests/`) hold the end-to-end tests.
 - `src/integration/`: optional integrations that report shots by themselves,
   one folder each (see [Integrations](#integrations)). `mod.rs` has the
   shared rules (`Link`), `kind.rs` the setup forms and `manager.rs` the
@@ -38,7 +41,7 @@ file is for agents changing the code.
 - `web/`: the phone app, one page with no build step. `index.html` holds the
   markup and the small script that sets the theme before the first paint,
   `app.css` the styles, `app.js` the app's script, and `strings/<lang>.json`
-  its texts, one file per language. At startup `control_api.rs` fills the
+  its texts, one file per language. At startup `server/page.rs` fills the
   texts and the version (`PAGE_VERSION`) into `app.js`, then the styles and
   the script into `index.html`, so the page still comes in one response.
 - `src/main.rs`: flags and startup only. `src/lib.rs`: the crate root and
@@ -110,6 +113,11 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
 - Match the surrounding code: short doc comments saying what and why,
   `anyhow` with `.context(...)` for errors people will read, and messages in
   plain sentences.
+- Items are `pub(crate)` or private; only what `src/main.rs` uses is `pub`.
+  That way the compiler reports code nothing uses: remove it, or give it
+  `#[cfg(test)]` when only tests need it. A public doc comment links only
+  to public items (`cargo doc` checks it in CI); name the others in plain
+  backticks.
 - Keep `src/protocol/` free of I/O and clocks (callers pass `Instant`s), so
   the grinder's behaviour stays testable without a grinder.
 - The grinder-facing API (`/api/v2/*`, names in `wire.rs`) is exactly what
@@ -152,7 +160,7 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
   old words there.
 - A new `AbortCause` needs its row in `CAUSES` in `app.js`; a new
   `ShotOutcome` a `.k-<code>` rule in `app.css` and `history.kind.<code>` in
-  the catalogs. Tests in `control_api.rs` check both.
+  the catalogs. Tests in `page.rs` check both.
 - Lengths are measured on `Instant`. The wall clock only dates things, and
   may be unset (1970) or jump.
 - The page ships with its server, so it has no branches for older servers.
@@ -165,12 +173,12 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
 ## Integrations
 
 Each integration is a folder `src/integration/<id>/` with `mod.rs`
-(`pub static KIND: Kind`), `config.rs` (the form's `FIELDS`, a typed config,
-and a clap `Args` with `#[group(id = "<id>")]`), `run.rs` (implements
-`Integration`), `icon.svg` and `README.md`, plus more files as it needs them
-(`la_marzocco/cloud.rs`, `half_decent/shot.rs`). Register it in
-`src/integration/mod.rs` in four places: `pub mod`, `KINDS`, a `CliArgs`
-field and its line in `CliArgs::configured`.
+(`pub(crate) static KIND: Kind`), `config.rs` (the form's `FIELDS`, a typed
+config, and a clap `Args` with `#[group(id = "<id>")]`), `run.rs`
+(implements `Integration`), `icon.svg` and `README.md`, plus more files as
+it needs them (`la_marzocco/cloud.rs`, `half_decent/shot.rs`). Register it
+in `src/integration/mod.rs` in four places: `pub(crate) mod`, `KINDS`, a
+`CliArgs` field and its line in `CliArgs::configured`.
 The module docs there are the full spec; `la_marzocco/` is the worked example.
 
 - Report shots only through `Link::report`. It holds the rules every
@@ -217,12 +225,12 @@ The module docs there are the full spec; `la_marzocco/` is the worked example.
   `<key>.e64` or `<key>.wifi` for the grinder in use; give both.
   Integration texts that come from the server in English (`kind.*`,
   `integ.detail.*`) are the exception: they are only in `de.json`, and
-  English shows the server's text. The tests in `control_api.rs` read the
+  English shows the server's text. The tests in `page.rs` read the
   catalogs as JSON and check this: the same keys and placeholders in every
   language, both `.e64` and `.wifi` wordings, and every key the page passes
   literally to `t()`/`tv()` or names in `data-i18n` is in the catalog.
 - A new language is a file in `web/strings/`, its line in `LANGS` in
-  `control_api.rs` (the page takes its list from there), its button under
+  `page.rs` (the page takes its list from there), its button under
   Status → Settings → Language, and its fallback locale in `setLanguage()`.
 - Phone first: content at most 480 px wide, 16 px side padding, no
   horizontal scrolling.

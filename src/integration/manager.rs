@@ -16,7 +16,7 @@ use crate::server::settings::{SavedIntegration, SettingsFile};
 /// Where an integration came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Source {
+pub(crate) enum Source {
     /// Flags or environment variables; only those can turn it off.
     CommandLine,
     /// Added in the app; can be removed there.
@@ -25,30 +25,30 @@ pub enum Source {
 
 /// An integration as the API shows it.
 #[derive(Debug, Clone, Serialize)]
-pub struct View {
+pub(crate) struct View {
     #[serde(flatten)]
-    pub status: StatusSnapshot,
-    pub source: Source,
+    pub(crate) status: StatusSnapshot,
+    pub(crate) source: Source,
     /// Set on the command line and can be moved into the app (there is a
     /// settings file to keep it in).
-    pub adoptable: bool,
+    pub(crate) adoptable: bool,
     /// Moved into the app from the command line: deleting it lets its flags
     /// start it again at the next start.
-    pub from_command_line: bool,
+    pub(crate) from_command_line: bool,
 }
 
 /// The settings of an integration added in the app, as the app may see them
 /// to edit it: no passwords, only which of them are set.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct FormView {
-    pub kind: String,
-    pub settings: BTreeMap<String, String>,
-    pub secrets_set: Vec<String>,
+pub(crate) struct FormView {
+    pub(crate) kind: String,
+    pub(crate) settings: BTreeMap<String, String>,
+    pub(crate) secrets_set: Vec<String>,
 }
 
 /// Why a change failed. Nothing changed in any case.
 #[derive(Debug, PartialEq)]
-pub enum ChangeError {
+pub(crate) enum ChangeError {
     /// The settings do not work for this integration.
     Invalid(String),
     NotFound,
@@ -83,7 +83,7 @@ impl std::error::Error for ChangeError {}
 
 impl ChangeError {
     /// As a fixed code, for `code` in the API's errors.
-    pub fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::Invalid(_) => "integration_settings_invalid",
             Self::NotFound => "integration_not_found",
@@ -123,17 +123,17 @@ pub struct Integrations {
 }
 
 impl Integrations {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn list(&self) -> Vec<View> {
+    pub(crate) fn list(&self) -> Vec<View> {
         let persistent = self.persistent();
         self.lock().iter().map(|e| view(e, persistent)).collect()
     }
 
     /// Whether integrations added in the app survive a restart.
-    pub fn persistent(&self) -> bool {
+    pub(crate) fn persistent(&self) -> bool {
         self.file.get().is_some()
     }
 
@@ -170,7 +170,7 @@ impl Integrations {
 
     /// Adds one from the app: checks the settings, saves them and starts it.
     /// Returns its id.
-    pub fn add(
+    pub(crate) fn add(
         &self,
         server: &Arc<Server>,
         kind: &'static Kind,
@@ -206,7 +206,7 @@ impl Integrations {
     }
 
     /// Stops and forgets one that was added in the app.
-    pub fn remove(&self, id: &str) -> Result<(), ChangeError> {
+    pub(crate) fn remove(&self, id: &str) -> Result<(), ChangeError> {
         let mut entries = self.lock();
         let i = entries
             .iter()
@@ -228,7 +228,7 @@ impl Integrations {
     }
 
     /// The settings of one added in the app, for editing: passwords left out.
-    pub fn form(&self, id: &str) -> Result<FormView, ChangeError> {
+    pub(crate) fn form(&self, id: &str) -> Result<FormView, ChangeError> {
         let entries = self.lock();
         let entry = entries
             .iter()
@@ -253,7 +253,7 @@ impl Integrations {
 
     /// Changes the settings of one added in the app and restarts it. A
     /// password left out or empty keeps its saved value.
-    pub fn update(
+    pub(crate) fn update(
         &self,
         server: &Arc<Server>,
         id: &str,
@@ -300,7 +300,7 @@ impl Integrations {
     /// saved as an app entry with the same id, marked as moved. While that
     /// entry is in the settings file, the flags are ignored. It keeps
     /// running as it is.
-    pub fn adopt(&self, id: &str) -> Result<View, ChangeError> {
+    pub(crate) fn adopt(&self, id: &str) -> Result<View, ChangeError> {
         if !self.persistent() {
             return Err(ChangeError::NotPersistent);
         }

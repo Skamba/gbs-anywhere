@@ -6,9 +6,9 @@
 //!   phone app.
 //! * [`integration`] — machine integrations that report the shot on their
 //!   own (the La Marzocco cloud, ...), and the small API for writing one.
-//! * [`http`] — the HTTP client every request goes out with.
+//! * `http` — the HTTP client every request goes out with.
 
-pub mod http;
+pub(crate) mod http;
 pub mod integration;
 pub mod protocol;
 pub mod server;

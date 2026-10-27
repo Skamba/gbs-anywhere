@@ -33,22 +33,22 @@ use crate::integration::tenths;
 
 /// One reading: the scale's uptime and the weight on it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Reading {
-    pub ms: u64,
-    pub grams: f64,
+pub(crate) struct Reading {
+    pub(crate) ms: u64,
+    pub(crate) grams: f64,
 }
 
 /// A finished shot: first drops to flow stop, and the coffee in the cup.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Shot {
-    pub time: Duration,
+pub(crate) struct Shot {
+    pub(crate) time: Duration,
     /// Rounded to 0.1 g, the scale's resolution.
-    pub grams: f64,
+    pub(crate) grams: f64,
 }
 
 /// Where the detector is after a reading.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Progress {
+pub(crate) enum Progress {
     /// Waiting for a steady weight to measure from.
     Settling,
     /// Steady; waiting for the first drops.
@@ -101,7 +101,7 @@ const TARE_MAX_MS: u64 = 3000;
 
 /// Finds one shot. See the module docs.
 #[derive(Debug)]
-pub struct Detector {
+pub(crate) struct Detector {
     /// The last three readings as they came, for the median.
     raw: VecDeque<Reading>,
     /// Median-filtered readings, oldest first.
@@ -144,13 +144,13 @@ enum State {
 }
 
 impl Detector {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// With the grinder's recipe weight: the flow only stops once half of
     /// it is in the cup.
-    pub fn expecting(mut self, recipe_g: Option<f64>) -> Self {
+    pub(crate) fn expecting(mut self, recipe_g: Option<f64>) -> Self {
         let share = recipe_g.filter(|g| g.is_finite()).unwrap_or(0.0) * RECIPE_SHARE;
         self.min_grams = MIN_SHOT_G.max(share);
         self
@@ -163,7 +163,7 @@ impl Detector {
 
     /// For a detector started together with a tare: readings count only
     /// from the first one near zero (at most `TARE_MAX_MS` later).
-    pub fn after_tare() -> Self {
+    pub(crate) fn after_tare() -> Self {
         Self {
             tare: Some(None),
             ..Self::default()
@@ -171,7 +171,7 @@ impl Detector {
     }
 
     /// Takes the next reading.
-    pub fn push(&mut self, r: Reading) -> Progress {
+    pub(crate) fn push(&mut self, r: Reading) -> Progress {
         let restarted = self.raw.back().is_some_and(|last| r.ms <= last.ms);
         if restarted || matches!(self.state, State::Done) {
             *self = Self::new().with_min_grams(self.min_grams);

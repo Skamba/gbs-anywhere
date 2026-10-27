@@ -19,35 +19,35 @@ pub struct Kind {
     /// Human name, e.g. `La Marzocco cloud`.
     pub title: &'static str,
     /// One line for the list behind the app's + button: what it reads and what it needs.
-    pub summary: &'static str,
+    pub(crate) summary: &'static str,
     /// Inline SVG glyph (24×24, `currentColor`), from the folder's `icon.svg`.
-    pub icon: &'static str,
+    pub(crate) icon: &'static str,
     /// The setup form, in order.
-    pub fields: &'static [Field],
+    pub(crate) fields: &'static [Field],
     /// Turns filled-in settings into the integration. [`Kind::create`] has
     /// already checked required fields and numbers; check the rest here.
     #[serde(skip)]
-    pub build: fn(&Settings) -> anyhow::Result<Box<dyn Integration>>,
+    pub(crate) build: fn(&Settings) -> anyhow::Result<Box<dyn Integration>>,
 }
 
 /// One field of an integration's setup form.
 #[derive(Debug, Serialize)]
-pub struct Field {
+pub(crate) struct Field {
     /// Settings key, e.g. `username`.
-    pub key: &'static str,
-    pub label: &'static str,
+    pub(crate) key: &'static str,
+    pub(crate) label: &'static str,
     /// Shown under the field; empty for none.
-    pub help: &'static str,
-    pub input: Input,
-    pub required: bool,
+    pub(crate) help: &'static str,
+    pub(crate) input: Input,
+    pub(crate) required: bool,
     /// Used when left empty, shown as the placeholder; empty for none.
-    pub default: &'static str,
+    pub(crate) default: &'static str,
 }
 
 /// How a field is entered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Input {
+pub(crate) enum Input {
     Text,
     Email,
     /// Never sent back by the API, not trimmed.
@@ -59,7 +59,7 @@ impl Kind {
     /// Checks `settings` against the form and builds the integration.
     /// `from_app` also refuses keys that are not form fields, so the app
     /// cannot set what only the command line may (such as a test server URL).
-    pub fn create(
+    pub(crate) fn create(
         &self,
         settings: &Settings,
         from_app: bool,
@@ -87,7 +87,7 @@ impl Kind {
         (self.build)(settings)
     }
 
-    pub fn field(&self, key: &str) -> Option<&Field> {
+    pub(crate) fn field(&self, key: &str) -> Option<&Field> {
         self.fields.iter().find(|f| f.key == key)
     }
 
@@ -114,7 +114,7 @@ impl Kind {
 
     /// The form's values as the app may see them: everything but passwords,
     /// and which passwords have a value.
-    pub fn shown(&self, settings: &Settings) -> (BTreeMap<String, String>, Vec<String>) {
+    pub(crate) fn shown(&self, settings: &Settings) -> (BTreeMap<String, String>, Vec<String>) {
         let mut shown = BTreeMap::new();
         let mut secrets_set = Vec::new();
         for f in self.fields {
@@ -135,7 +135,7 @@ impl Kind {
 
     /// `new` as the app sent it, with each password that is missing or empty
     /// there taking its value from `old`.
-    pub fn keep_secrets(&self, mut new: Settings, old: &Settings) -> Settings {
+    pub(crate) fn keep_secrets(&self, mut new: Settings, old: &Settings) -> Settings {
         for f in self.fields.iter().filter(|f| f.input == Input::Password) {
             if new.secret(f.key).is_none()
                 && let Some(v) = old.secret(f.key)
@@ -153,12 +153,12 @@ impl Kind {
 pub struct Settings(BTreeMap<String, String>);
 
 impl Settings {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     /// Sets `key` unless `value` is `None`.
-    pub fn with(mut self, key: &str, value: Option<impl ToString>) -> Self {
+    pub(crate) fn with(mut self, key: &str, value: Option<impl ToString>) -> Self {
         if let Some(v) = value {
             self.0.insert(key.to_owned(), v.to_string());
         }
@@ -166,13 +166,13 @@ impl Settings {
     }
 
     /// Trimmed value; `None` when missing or blank.
-    pub fn text(&self, key: &str) -> Option<&str> {
+    pub(crate) fn text(&self, key: &str) -> Option<&str> {
         self.0.get(key).map(|v| v.trim()).filter(|v| !v.is_empty())
     }
 
     /// Value as typed (passwords may start or end with a space); `None` when
     /// missing or empty.
-    pub fn secret(&self, key: &str) -> Option<&str> {
+    pub(crate) fn secret(&self, key: &str) -> Option<&str> {
         self.0
             .get(key)
             .map(String::as_str)
@@ -180,7 +180,7 @@ impl Settings {
     }
 
     /// A number, accepting a decimal comma; `None` when blank.
-    pub fn number(&self, key: &str) -> anyhow::Result<Option<f64>> {
+    pub(crate) fn number(&self, key: &str) -> anyhow::Result<Option<f64>> {
         let Some(v) = self.text(key) else {
             return Ok(None);
         };
@@ -191,10 +191,6 @@ impl Settings {
             .filter(|n: &f64| n.is_finite())
             .with_context(|| format!("`{key}` must be a number, got `{v}`"))?;
         Ok(Some(n))
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
     }
 }
 

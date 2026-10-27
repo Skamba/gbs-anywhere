@@ -18,16 +18,14 @@ use std::time::Duration;
 use anyhow::Context;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
-use tokio::task::AbortHandle;
 
 use crate::integration::Settings;
-use crate::protocol::AbortCause;
 use crate::server::private_file::{make_private, save_private};
-use crate::server::wifi_grinder::{PairingLock, grinder_address};
+use crate::server::wifi_grinder::grinder_address;
 use crate::server::{Server, WifiConfig, WifiGrinder};
 
 /// The shot window unless set (`--shot-window-s`).
-pub const DEFAULT_SHOT_WINDOW_S: u32 = 180;
+pub(crate) const DEFAULT_SHOT_WINDOW_S: u32 = 180;
 
 /// The shortest shot window the app can set; 0 (no limit) is allowed too.
 pub const MIN_SHOT_WINDOW_S: u32 = 30;
@@ -53,25 +51,25 @@ pub struct SettingsFile {
 pub struct FileData {
     /// Integrations added in the app (with their passwords).
     #[serde(default)]
-    pub integrations: Vec<SavedIntegration>,
+    pub(crate) integrations: Vec<SavedIntegration>,
     /// Settings changed in the app.
     #[serde(default, skip_serializing_if = "AppSettings::is_empty")]
-    pub settings: AppSettings,
+    pub(crate) settings: AppSettings,
     /// Keys this version does not know (written by a newer one), kept.
     #[serde(flatten)]
-    pub other: Map<String, Value>,
+    pub(crate) other: Map<String, Value>,
 }
 
 /// One integration added in the app.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SavedIntegration {
-    pub id: String,
-    pub kind: String,
+    pub(crate) id: String,
+    pub(crate) kind: String,
     pub settings: Settings,
     /// Moved here from the command line: while it is here, the flags and
     /// environment variables of its kind are ignored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub from_command_line: bool,
+    pub(crate) from_command_line: bool,
 }
 
 impl FileData {
@@ -115,7 +113,7 @@ impl SettingsFile {
 
     /// Changes the file: `change` edits a copy, which is written and only
     /// then kept. When writing fails, nothing changed.
-    pub fn update(&self, change: impl FnOnce(&mut FileData)) -> anyhow::Result<()> {
+    pub(crate) fn update(&self, change: impl FnOnce(&mut FileData)) -> anyhow::Result<()> {
         let mut data = self.lock();
         let mut next = data.clone();
         change(&mut next);
@@ -137,10 +135,10 @@ impl SettingsFile {
 /// Settings changed in the app, as saved. A missing value was not changed
 /// there.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct AppSettings {
+pub(crate) struct AppSettings {
     /// Seconds the machine waits for a shot; 0 waits forever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shot_window_s: Option<u32>,
+    pub(crate) shot_window_s: Option<u32>,
     /// The E65/E80 grinder's address; `Some(None)` when it was removed in
     /// the app over a start address (`""` in the API, `null` in the file).
     #[serde(
@@ -148,17 +146,17 @@ pub struct AppSettings {
         deserialize_with = "present",
         skip_serializing_if = "Option::is_none"
     )]
-    pub grinder_host: Option<Option<String>>,
+    pub(crate) grinder_host: Option<Option<String>>,
     /// Whether to look for a newer release once a day.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub update_check: Option<bool>,
+    pub(crate) update_check: Option<bool>,
     /// Settings this version does not know (written by a newer one), kept.
     #[serde(flatten)]
-    pub other: Map<String, Value>,
+    pub(crate) other: Map<String, Value>,
 }
 
 impl AppSettings {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
@@ -188,7 +186,7 @@ pub struct Startup {
 /// Where a setting's value comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SettingSource {
+pub(crate) enum SettingSource {
     Default,
     CommandLine,
     App,
@@ -196,17 +194,17 @@ pub enum SettingSource {
 
 /// A change from `PUT /api/settings`: only the keys that were sent.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct SettingsChange {
+pub(crate) struct SettingsChange {
     /// `Some(None)` goes back to the start setting (`null`).
-    pub shot_window_s: Option<Option<u32>>,
-    pub grinder_host: Option<HostChange>,
+    pub(crate) shot_window_s: Option<Option<u32>>,
+    pub(crate) grinder_host: Option<HostChange>,
     /// `Some(None)` goes back to the start setting (`null`).
-    pub update_check: Option<Option<bool>>,
+    pub(crate) update_check: Option<Option<bool>>,
 }
 
 /// A new grinder address from the app.
 #[derive(Debug, Clone, PartialEq)]
-pub enum HostChange {
+pub(crate) enum HostChange {
     /// Back to `--grinder` / `GRINDER_HOST`, if set (`null`): the app's
     /// value is forgotten.
     Reset,
@@ -230,7 +228,7 @@ pub fn shot_window_ok(secs: f64) -> bool {
 
 impl SettingsChange {
     /// Checks a request body; the error is a sentence for the person.
-    pub fn parse(body: &Value) -> Result<Self, String> {
+    pub(crate) fn parse(body: &Value) -> Result<Self, String> {
         let Value::Object(obj) = body else {
             return Err("expected a JSON object with the settings to change".into());
         };
@@ -300,7 +298,7 @@ fn or_null<T>(
 
 /// Why a change was not made. Nothing changed in either case.
 #[derive(Debug, PartialEq)]
-pub enum SettingsError {
+pub(crate) enum SettingsError {
     /// The settings file could not be written.
     Save(String),
     /// The link to the new grinder address could not be set up.
@@ -320,7 +318,7 @@ impl std::error::Error for SettingsError {}
 
 impl SettingsError {
     /// As a fixed code, for `code` in the API's errors.
-    pub fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::Save(_) => "settings_not_saved",
             Self::Grinder(_) => "grinder_link_failed",
@@ -328,17 +326,12 @@ impl SettingsError {
     }
 }
 
-/// The settings as they are now, and the E65/E80 link they started.
+/// The settings as they are now.
 #[derive(Default)]
 pub(super) struct Live {
     startup: Startup,
     app: AppSettings,
     file: Option<Arc<SettingsFile>>,
-    link: Option<RunningLink>,
-}
-
-struct RunningLink {
-    task: AbortHandle,
 }
 
 /// The settings as read from the file, keeping only values the app could
@@ -530,12 +523,12 @@ impl Live {
         out.into()
     }
 
-    /// The link for `host`, ready to run; loads (or makes) the pairing.
-    fn prepare_link(&self, host: &str, lock: PairingLock) -> anyhow::Result<WifiGrinder> {
+    /// The link for `host`, ready to start; loads (or makes) the pairing.
+    fn prepare_link(&self, server: &Server, host: &str) -> anyhow::Result<WifiGrinder> {
         let mut cfg = WifiConfig::from_host(host)?;
         cfg.pairing_file = self.startup.pairing_file.clone();
         cfg.pairing_id = self.startup.pairing_id;
-        WifiGrinder::new(cfg, lock)
+        server.wifi_link(cfg)
     }
 }
 
@@ -574,18 +567,19 @@ impl Server {
             }
         }
         if let (Some(host), from) = now.grinder_host {
-            let lock = self.pairing_lock.clone();
-            let link = live.prepare_link(&host, lock).with_context(|| match from {
+            let link = live.prepare_link(self, &host).with_context(|| match from {
                 SettingSource::App => "the grinder address set in the app".to_owned(),
                 _ => "--grinder".to_owned(),
             })?;
-            self.run_link(&mut live, link);
+            // Under the settings lock, as every start and stop from here, so
+            // they apply in the order the changes came.
+            self.start_wifi_link(link);
         }
         Ok(())
     }
 
     /// `settings` in `GET /api/state`, and the reply to `PUT /api/settings`.
-    pub fn settings_json(&self) -> Value {
+    pub(crate) fn settings_json(&self) -> Value {
         self.live().json()
     }
 
@@ -593,7 +587,7 @@ impl Server {
     /// the start setting is dropped from the file. A new grinder address
     /// restarts the E65/E80 link (the pairing stays where it was kept); no
     /// address stops it.
-    pub fn change_settings(
+    pub(crate) fn change_settings(
         self: &Arc<Self>,
         change: SettingsChange,
     ) -> Result<Value, SettingsError> {
@@ -628,7 +622,7 @@ impl Server {
             // The old link still runs here, and keeps the pairing file until
             // its task has ended (see `PairingLock`).
             Some(host) if relink => Some(
-                live.prepare_link(host, self.pairing_lock.clone())
+                live.prepare_link(self, host)
                     .map_err(|e| SettingsError::Grinder(format!("{e:#}")))?,
             ),
             _ => None,
@@ -654,9 +648,9 @@ impl Server {
             tracing::info!("settings: grinder address is the start setting again");
         }
         if relink {
-            self.stop_link(&mut live);
+            self.stop_wifi_link();
             match link {
-                Some(link) => self.run_link(&mut live, link),
+                Some(link) => self.start_wifi_link(link),
                 None if *host_from == SettingSource::App => tracing::info!(
                     "grinder: address removed in the app (instead of --grinder), link stopped"
                 ),
@@ -664,44 +658,6 @@ impl Server {
             }
         }
         Ok(live.json())
-    }
-
-    fn run_link(self: &Arc<Self>, live: &mut Live, link: WifiGrinder) {
-        if live.startup.pairing_file.is_none() {
-            tracing::warn!(
-                "no --config or --grinder-pairing-file: the pairing lasts until restart"
-            );
-        }
-        tracing::info!("grinder: pairing over Local WiFi with {}", link.base_url());
-        // Taken here, under the settings lock, rather than in the task: an
-        // older link that is still finishing a step can then never take over
-        // again, so only this one reports and gets the pairing IDs typed in
-        // the app.
-        let (owner, ids, accept) = self.attach_wifi();
-        // Shown until the link reports for itself, so the app never sees an
-        // address without a link.
-        self.set_wifi(owner, link.connecting());
-        let task = tokio::spawn(link.run(self.clone(), owner, ids, accept)).abort_handle();
-        live.link = Some(RunningLink { task });
-    }
-
-    /// Stops the running link. A shot it was waiting for (a brew job) can no
-    /// longer reach the grinder, so that brew ends; a knob press of an E64 WS
-    /// on the same server goes on.
-    fn stop_link(&self, live: &mut Live) {
-        let Some(old) = live.link.take() else {
-            return;
-        };
-        // The task ends at its next await; if it is in the middle of a step
-        // right now, what it still reports is ignored once detached, and the
-        // next link waits for it to end before it touches the pairing file.
-        old.task.abort();
-        self.detach_wifi();
-        self.with(|m, now| {
-            if m.brewing_for_brew_job(now) {
-                let _ = m.give_up(now, AbortCause::GrinderAddressChanged);
-            }
-        });
     }
 
     fn live(&self) -> MutexGuard<'_, Live> {

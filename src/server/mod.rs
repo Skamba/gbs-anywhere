@@ -2,19 +2,20 @@
 //!
 //! Two HTTP faces over one shared [`crate::protocol::Machine`]:
 //!
-//! * the **grinder API** ([`grinder_router`]) — what a real Xenia serves on
+//! * the **grinder API** (`grinder_router`) — what a real Xenia serves on
 //!   port 80: `GET /api/v2/machine`, `GET /api/v2/mako`, and the grinder's
 //!   writes `POST /api/v2/brewratio` and `POST /api/v2/scripts/execute`;
-//! * the **control API** ([`control_router`]) — for a person, a CLI or a
+//! * the **control API** (`control_router`) — for a person, a CLI or a
 //!   support app: see the state, get "start the shot now" prompts as a
 //!   server-sent-event stream, report the measured time and weight.
 //!
-//! An E65/E80 GbS grinder works the other way round: [`wifi_grinder`] asks it
+//! An E65/E80 GbS grinder works the other way round: `wifi_grinder` asks it
 //! for brew jobs and drives the same machine from them.
 //!
-//! Around them: `browser` (keeps web pages out), [`settings`] (what people
-//! change in the app, and the settings file), [`logbook`] (the server's log
-//! for the app), the shot history and [`update_check`].
+//! Around them: `browser` (keeps web pages out), `page` (builds the app
+//! page the control API serves), [`settings`] (what people
+//! change in the app, and the settings file), `logbook` (the server's log
+//! for the app), the shot history and `update_check`.
 //!
 //! The `gbs-anywhere` binary is a thin wrapper: build a [`Server`], then
 //! [`serve`] it or mount the routers in another app.
@@ -22,15 +23,16 @@
 mod browser;
 mod control_api;
 mod grinder_api;
-pub mod history;
-pub mod logbook;
+pub(crate) mod history;
+pub(crate) mod logbook;
+mod page;
 mod private_file;
 pub mod settings;
 #[cfg(test)]
 mod tests;
-pub mod update_check;
+pub(crate) mod update_check;
 mod utc;
-pub mod wifi_grinder;
+pub(crate) mod wifi_grinder;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -44,17 +46,17 @@ use axum::extract::connect_info::Connected;
 use axum::serve::IncomingStream;
 pub use browser::AllowedHosts;
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 
-pub use control_api::{ShotInput, control_router, patch_ready, state_json};
-pub use grinder_api::grinder_router;
-pub use history::{History, Shot, ShotOutcome};
-pub use logbook::{LogBook, LogLayer, LogLine};
-pub use settings::{SettingsChange, SettingsError, SettingsFile, Startup};
+pub(crate) use control_api::control_router;
+pub use control_api::{patch_ready, state_json};
+pub(crate) use grinder_api::grinder_router;
+pub(crate) use history::History;
+pub use logbook::{LogBook, LogLayer};
+pub(crate) use settings::SettingsChange;
+pub use settings::{SettingsFile, Startup};
 pub use update_check::UpdateConfig;
-pub use wifi_grinder::{
-    PairingIdRefusal, WifiConfig, WifiGrinder, WifiLink, WifiPhase, WifiState, grinder_address,
-};
+pub(crate) use wifi_grinder::{WifiConfig, WifiGrinder, WifiLink};
 
 /// Shared state behind both routers.
 pub struct Server {
@@ -63,7 +65,7 @@ pub struct Server {
     transcript: Option<grinder_api::Transcript>,
     integrations: Integrations,
     icons_dir: OnceLock<PathBuf>,
-    /// The shot window and grinder address, and the E65/E80 link.
+    /// The shot window and grinder address.
     settings: Mutex<settings::Live>,
     /// Held by the E65/E80 link that may write the pairing file.
     pairing_lock: wifi_grinder::PairingLock,
@@ -82,27 +84,21 @@ struct Inner {
     machine: Machine,
     published: u64,
     grinder: GrinderLink,
-    /// Pairing IDs for the E65/E80 link, while one runs.
-    wifi_ids: Option<mpsc::Sender<u32>>,
-    /// "I accepted on the grinder" from the app, for the E65/E80 link while
-    /// one is waiting for it.
-    wifi_accept: Option<mpsc::Sender<()>>,
-    /// The E65/E80 link that may report its state: a replaced one may still
-    /// be finishing a step.
-    wifi_owner: u64,
+    /// The E65/E80 link, while one runs.
+    wifi: wifi_grinder::WifiSlot,
 }
 
 /// What we know about the grinder from its requests (or, for an E65/E80
 /// grinder, from our requests to it).
 #[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct GrinderLink {
-    pub peer: Option<SocketAddr>,
-    pub polls: u64,
-    pub requests: u64,
+pub(crate) struct GrinderLink {
+    pub(crate) peer: Option<SocketAddr>,
+    pub(crate) polls: u64,
+    pub(crate) requests: u64,
     #[serde(skip)]
-    pub last_poll: Option<Instant>,
+    pub(crate) last_poll: Option<Instant>,
     /// Set when gbs-anywhere pairs with an E65/E80 grinder (`--grinder`).
-    pub wifi: Option<WifiLink>,
+    pub(crate) wifi: Option<WifiLink>,
 }
 
 impl GrinderLink {
@@ -125,9 +121,7 @@ impl Server {
                 machine: Machine::new(config),
                 published: 0,
                 grinder: GrinderLink::default(),
-                wifi_ids: None,
-                wifi_accept: None,
-                wifi_owner: 0,
+                wifi: wifi_grinder::WifiSlot::default(),
             }),
             events: broadcast::channel(256).0,
             transcript: None,
@@ -146,7 +140,7 @@ impl Server {
 
     /// Changes on every start, so an app can tell that event and log numbers
     /// started over.
-    pub fn boot_id(&self) -> &str {
+    pub(crate) fn boot_id(&self) -> &str {
         &self.boot_id
     }
 
@@ -177,15 +171,6 @@ impl Server {
         self.apply(&mut self.lock(), f)
     }
 
-    /// Like [`Server::with`], for the E65/E80 link `owner`: `None`, and the
-    /// machine untouched, once that link was replaced. Its task may still
-    /// be finishing a step when it is stopped, and must not start or end a
-    /// brew after that.
-    fn with_wifi<R>(&self, owner: u64, f: impl FnOnce(&mut Machine, Instant) -> R) -> Option<R> {
-        let mut inner = self.lock();
-        (inner.wifi_owner == owner).then(|| self.apply(&mut inner, f))
-    }
-
     fn apply<R>(&self, inner: &mut Inner, f: impl FnOnce(&mut Machine, Instant) -> R) -> R {
         let r = f(&mut inner.machine, Instant::now());
         let after = inner.published;
@@ -205,17 +190,17 @@ impl Server {
     /// Like [`Server::subscribe`], with the newest event's `seq` so far:
     /// every event after it comes through the receiver. Taken under the
     /// machine's lock, which events are sent under.
-    pub fn subscribe_at(&self) -> (broadcast::Receiver<EventRecord>, u64) {
+    pub(crate) fn subscribe_at(&self) -> (broadcast::Receiver<EventRecord>, u64) {
         let inner = self.lock();
         (self.events.subscribe(), inner.published)
     }
 
     /// The kept events with `seq > after`, oldest first.
-    pub fn events_after(&self, after: u64) -> std::collections::VecDeque<EventRecord> {
+    pub(crate) fn events_after(&self, after: u64) -> std::collections::VecDeque<EventRecord> {
         self.lock().machine.events_after(after).cloned().collect()
     }
 
-    pub fn grinder_link(&self) -> GrinderLink {
+    pub(crate) fn grinder_link(&self) -> GrinderLink {
         self.lock().grinder.clone()
     }
 
@@ -226,7 +211,7 @@ impl Server {
         let _ = self.icons_dir.set(dir);
     }
 
-    pub fn icons_dir(&self) -> Option<&Path> {
+    pub(crate) fn icons_dir(&self) -> Option<&Path> {
         self.icons_dir.get().map(PathBuf::as_path)
     }
 
@@ -236,7 +221,7 @@ impl Server {
     }
 
     /// The server's log as the app shows it.
-    pub fn log(&self) -> &Arc<LogBook> {
+    pub(crate) fn log(&self) -> &Arc<LogBook> {
         &self.log
     }
 
@@ -244,98 +229,6 @@ impl Server {
     /// grinder; a poll makes the app show the grinder as connected.
     fn note_request(&self, peer: Option<SocketAddr>, poll: bool) {
         self.lock().grinder.note(peer, poll);
-    }
-
-    /// A new E65/E80 link starts: it takes the pairing IDs typed in the app
-    /// and the "I accepted" confirmations from now on. Returns its owner
-    /// number for [`Server::set_wifi`] and where those arrive.
-    fn attach_wifi(&self) -> (u64, mpsc::Receiver<u32>, mpsc::Receiver<()>) {
-        // Room for one each: only the latest typed ID, and the latest
-        // confirmation, matter.
-        let (tx, rx) = mpsc::channel(1);
-        let (atx, arx) = mpsc::channel(1);
-        let mut inner = self.lock();
-        inner.wifi_owner += 1;
-        inner.wifi_ids = Some(tx);
-        inner.wifi_accept = Some(atx);
-        (inner.wifi_owner, rx, arx)
-    }
-
-    /// The E65/E80 link stopped: forget what it said. What an E64 WS told
-    /// (its address, request counts) stays; the last poll goes, so the
-    /// grinder no longer shows as connected unless an E64 WS polls.
-    fn detach_wifi(&self) {
-        let mut inner = self.lock();
-        inner.wifi_owner += 1;
-        inner.wifi_ids = None;
-        inner.wifi_accept = None;
-        inner.grinder.wifi = None;
-        inner.grinder.last_poll = None;
-    }
-
-    /// The link's state, unless that link was replaced meanwhile. The time
-    /// it entered its state carries over while the state stays the same
-    /// (`state_age_ms`).
-    fn set_wifi(&self, owner: u64, mut link: WifiLink) {
-        let mut inner = self.lock();
-        if inner.wifi_owner == owner {
-            link.state_since = match &inner.grinder.wifi {
-                Some(old) if old.state == link.state => old.state_since,
-                _ => None,
-            }
-            .or_else(|| Some(Instant::now()));
-            inner.grinder.wifi = Some(link);
-        }
-    }
-
-    /// A poll of an E65/E80 grinder went through.
-    fn note_wifi_poll(&self, owner: u64, peer: Option<SocketAddr>) {
-        let mut inner = self.lock();
-        if inner.wifi_owner == owner {
-            inner.grinder.note(peer, true);
-        }
-    }
-
-    /// Hands the pairing ID an E65/E80 grinder shows to its link, for when
-    /// gbs-anywhere lost it. Taken only while the link asks for one; the link
-    /// checks it with the grinder before keeping it.
-    pub fn use_grinder_pairing_id(&self, id: u32) -> Result<(), PairingIdRefusal> {
-        let (tx, asks, paired) = {
-            let inner = self.lock();
-            let wifi = inner.grinder.wifi.as_ref();
-            let asks = wifi.is_some_and(|w| w.phase == Some(WifiPhase::Asking));
-            let paired = wifi.is_some_and(|w| w.pairing_id.is_some());
-            (inner.wifi_ids.clone(), asks, paired)
-        };
-        let tx = tx.ok_or(PairingIdRefusal::NoLink)?;
-        if !asks {
-            return Err(if paired {
-                PairingIdRefusal::NotNeeded
-            } else {
-                PairingIdRefusal::NotAsking
-            });
-        }
-        tx.try_send(id).map_err(|_| PairingIdRefusal::Busy)
-    }
-
-    /// The person confirmed they accepted gbs-anywhere on the grinder, so the
-    /// E65/E80 link waits a moment, then checks the pairing as confirmed.
-    /// Taken only while the link waits for it.
-    pub fn grinder_accepted(&self) -> Result<(), PairingIdRefusal> {
-        let (tx, awaiting) = {
-            let inner = self.lock();
-            let awaiting = inner
-                .grinder
-                .wifi
-                .as_ref()
-                .is_some_and(|w| w.phase == Some(WifiPhase::Accepting));
-            (inner.wifi_accept.clone(), awaiting)
-        };
-        let tx = tx.ok_or(PairingIdRefusal::NoLink)?;
-        if !awaiting {
-            return Err(PairingIdRefusal::NotAccepting);
-        }
-        tx.try_send(()).map_err(|_| PairingIdRefusal::Busy)
     }
 
     async fn write_transcript(&self, line: &str) {
@@ -346,7 +239,7 @@ impl Server {
 
     /// Ends the live streams (`/api/events/stream`, `/api/log/stream`), so
     /// that their connections close and the server can stop.
-    pub fn stop(&self) {
+    pub(crate) fn stop(&self) {
         self.stopping.send_replace(true);
     }
 
@@ -493,7 +386,7 @@ impl Signals {
 /// Binds all listeners and serves until `shutdown` is done (say,
 /// [`shutdown_signal`]), or until they all fail. Ports that cannot be bound
 /// are logged and skipped; it fails if none bind. On `shutdown` it takes no
-/// new connections, ends the live streams ([`Server::stop`]) and gives the
+/// new connections, ends the live streams (`Server::stop`) and gives the
 /// requests still open up to a few seconds to finish.
 pub async fn serve(
     state: Arc<Server>,
@@ -563,13 +456,13 @@ pub async fn serve(
 
 /// Both ends of a request's connection, as `ConnectInfo<Conn>`.
 #[derive(Debug, Clone, Copy)]
-pub struct Conn {
+pub(crate) struct Conn {
     /// Who sent it.
-    pub peer: SocketAddr,
+    pub(crate) peer: SocketAddr,
     /// The address it came in on: on the home network, the one the grinder
     /// can reach this server at; in a Docker container, the container's.
     /// `None` when the system could not tell.
-    pub local: Option<SocketAddr>,
+    pub(crate) local: Option<SocketAddr>,
 }
 
 impl Connected<IncomingStream<'_, TcpListener>> for Conn {
