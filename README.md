@@ -355,7 +355,9 @@ ready to copy into a bug report.
 ## Options
 
 Extra flags go after the image name (Docker), in `GBS_ANYWHERE_ARGS` (Debian
-package) or after `--` (cargo):
+package) or after `--` (cargo). A flag given again wins over the one before
+(lists such as `--allow-host` add up instead), so `--control 0.0.0.0:8787`
+there turns on the control address the image and the package turn off:
 
 | flag | default | what |
 |---|---|---|

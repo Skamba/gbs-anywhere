@@ -35,11 +35,15 @@ use gbs_anywhere::server::{self, LogBook, ServeConfig, Server, SettingsFile, Sta
 use serde_json::{Map, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+// A flag given again wins over the one before, so flags added after the
+// image name (Docker) or in `GBS_ANYWHERE_ARGS` (the Debian package) can
+// change those the launcher passes (`--control off`). Lists add up.
 #[derive(Parser)]
 #[command(
     name = "gbs-anywhere",
     version = gbs_anywhere::version(),
-    about = "Grind-by-Sync for the Mahlkönig E64 WS and E65/E80 GbS with any espresso machine"
+    about = "Grind-by-Sync for the Mahlkönig E64 WS and E65/E80 GbS with any espresso machine",
+    args_override_self = true
 )]
 struct Args {
     /// Grinder-facing ports. The grinder talks to port 80.
@@ -51,8 +55,14 @@ struct Args {
     bind: IpAddr,
 
     /// Control API address (JSON + event stream for an app). `off` disables.
-    #[arg(long, default_value = "127.0.0.1:8787")]
-    control: String,
+    // In full, so clap leaves it to `control_address` to say "off".
+    #[arg(
+        long,
+        default_value = "127.0.0.1:8787",
+        value_name = "ADDR|off",
+        value_parser = control_address
+    )]
+    control: ::std::option::Option<SocketAddr>,
 
     /// Append every E64 WS request and our reply to this file.
     #[arg(short, long)]
@@ -175,17 +185,13 @@ async fn main() -> anyhow::Result<()> {
         }
         x.set_icons_dir(dir.clone());
     }
-    let control = match args.control.as_str() {
-        "off" | "" => None,
-        s => Some(s.parse::<SocketAddr>()?),
-    };
     let cfg = ServeConfig {
         grinder: args
             .ports
             .iter()
             .map(|p| SocketAddr::new(args.bind, *p))
             .collect(),
-        control,
+        control: args.control,
         app_on_grinder_ports: !args.no_app,
         allowed_hosts: server::AllowedHosts::new(args.allow_host.clone()),
         accept_browser_headers: args.accept_browser_headers,
@@ -432,6 +438,16 @@ fn shot_window(s: &str) -> Result<f64, String> {
     }
 }
 
+/// Parses `--control`: an address with its port, or `off`.
+fn control_address(s: &str) -> Result<Option<SocketAddr>, String> {
+    match s.trim() {
+        "off" | "" => Ok(None),
+        addr => addr.parse().map(Some).map_err(|_| {
+            format!("`{addr}` is not an IP address with a port, such as 127.0.0.1:8787, or `off`")
+        }),
+    }
+}
+
 /// Parses a name for `--allow-host`: `*` alone is a wildcard, anything else
 /// is compared as given, so a pattern such as `*.ts.net` would never match.
 fn full_host_name(s: &str) -> Result<String, String> {
@@ -517,6 +533,94 @@ mod tests {
             };
             assert!(e.to_string().contains("between 30 and 3600"), "{bad}: {e}");
         }
+    }
+
+    #[test]
+    fn the_control_address_is_checked_with_its_flag() {
+        let parse = |args: &[&str]| Args::try_parse_from(args).map(|a| a.control);
+        assert_eq!(
+            parse(&["gbs-anywhere"]).unwrap(),
+            Some("127.0.0.1:8787".parse().unwrap())
+        );
+        assert_eq!(parse(&["gbs-anywhere", "--control", "off"]).unwrap(), None);
+        assert_eq!(
+            parse(&["gbs-anywhere", "--control", "[::1]:8787"]).unwrap(),
+            Some("[::1]:8787".parse().unwrap())
+        );
+        for bad in ["localhost:8787", "8787", "0.0.0.0"] {
+            let Err(e) = parse(&["gbs-anywhere", "--control", bad]) else {
+                panic!("{bad} was taken");
+            };
+            let e = e.to_string();
+            assert!(e.contains("--control") && e.contains(bad), "{bad}: {e}");
+        }
+    }
+
+    /// The flags a launcher passes before the person's: the words after the
+    /// binary in `line`, up to the first `$` variable.
+    fn launcher_flags(line: &str) -> Vec<String> {
+        line.split_whitespace()
+            .skip(1)
+            .take_while(|w| !w.starts_with('$'))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn the_image_and_the_package_pass_the_same_flags() {
+        let docker = include_str!("../Dockerfile")
+            .lines()
+            .find_map(|l| l.strip_prefix("ENTRYPOINT "))
+            .expect("the Dockerfile's ENTRYPOINT");
+        let docker: Vec<String> = serde_json::from_str(docker).expect("ENTRYPOINT [...]");
+        let service = include_str!("../packaging/deb/gbs-anywhere.service")
+            .lines()
+            .find_map(|l| l.strip_prefix("ExecStart="))
+            .expect("the unit's ExecStart");
+        assert!(service.ends_with(" $GBS_ANYWHERE_ARGS"), "{service}");
+        assert_eq!(
+            docker[1..],
+            launcher_flags(service),
+            "{docker:?} vs {service}"
+        );
+
+        // The person's flags come after those and win.
+        let mut args = vec!["gbs-anywhere".to_owned()];
+        args.extend(docker[1..].iter().cloned());
+        let launched = Args::try_parse_from(&args).unwrap();
+        assert_eq!(launched.control, None);
+        assert!(launched.no_stdin);
+        args.extend(
+            [
+                "--control",
+                "0.0.0.0:8787",
+                "--no-stdin",
+                "-p",
+                "8080",
+                "-p",
+                "8081",
+            ]
+            .map(str::to_owned),
+        );
+        let changed = Args::try_parse_from(&args).unwrap();
+        assert_eq!(changed.control, Some("0.0.0.0:8787".parse().unwrap()));
+        assert!(changed.no_stdin);
+        assert_eq!(changed.ports, [8080, 8081], "lists add up, as before");
+    }
+
+    #[test]
+    fn a_list_given_again_adds_up() {
+        let parse = |args: &[&str]| Args::try_parse_from(args).unwrap();
+        let hosts = parse(&[
+            "gbs-anywhere",
+            "--allow-host",
+            "a.example,b.example",
+            "--allow-host",
+            "c.example",
+        ]);
+        assert_eq!(hosts.allow_host, ["a.example", "b.example", "c.example"]);
+        let ports = parse(&["gbs-anywhere", "-p", "80,8080"]);
+        assert_eq!(ports.ports, [80, 8080]);
     }
 
     #[test]

@@ -486,6 +486,7 @@ pub async fn serve(
     cfg: ServeConfig,
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
+    use anyhow::Context;
     let mut tasks = Vec::new();
     let grinder_app = if cfg.app_on_grinder_ports {
         control_router(state.clone(), cfg.allowed_hosts.clone())
@@ -506,7 +507,9 @@ pub async fn serve(
         anyhow::bail!("no grinder-facing port could be bound");
     }
     if let Some(addr) = cfg.control {
-        let l = TcpListener::bind(addr).await?;
+        let l = TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("--control: cannot listen on {addr}"))?;
         tracing::info!("control API on http://{addr}/api/state");
         tasks.push(spawn_server(
             l,
