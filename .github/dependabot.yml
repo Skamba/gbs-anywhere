@@ -20,6 +20,8 @@ updates:
         patterns: ["*"]
         update-types: [minor, patch]
 
+  # The workflows pin each action to a commit with its version in a
+  # comment; Dependabot updates both.
   - package-ecosystem: github-actions
     directory: /
     schedule:
