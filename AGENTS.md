@@ -75,8 +75,10 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
 
 - These pass, as CI (`.github/workflows/ci.yml`) runs them on every push and
   pull request: `cargo fmt --all --check`,
-  `cargo clippy --all-targets --locked -- -D warnings` and
-  `cargo test --locked`.
+  `cargo clippy --all-targets --locked -- -D warnings`,
+  `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked`,
+  `cargo test --locked`, and the build with the minimum Rust version (see
+  [Code conventions](#code-conventions)).
 - For page changes, open the page at phone width (about 390 px) in light and
   dark mode and look at the result. There is no JavaScript test suite, so
   also check by hand what reviews keep finding:
@@ -100,9 +102,10 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
 ## Code conventions
 
 - Rust 2024; the minimum Rust version is `rust-version` in Cargo.toml.
-  CI builds with the latest stable only, so nothing checks it: don't use
-  std or language features newer than that version. `unsafe` is forbidden
-  by a lint.
+  Don't use std or language features newer than that version: the `msrv`
+  job in CI runs `cargo check --all-targets --locked` with it (locally:
+  `cargo +<version> check --all-targets --locked`), and everything else
+  builds with the latest stable. `unsafe` is forbidden by a lint.
 - Match the surrounding code: short doc comments saying what and why,
   `anyhow` with `.context(...)` for errors people will read, and messages in
   plain sentences.
