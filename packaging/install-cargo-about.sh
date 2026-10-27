@@ -2,7 +2,7 @@
 # Installs cargo-about, which writes the third-party notices (about.toml,
 # about.hbs), into $CARGO_HOME/bin. This is its release binary, checked
 # against the SHA-256 GitHub lists for it. Used by the Dockerfile and by the
-# release packages in image.yml, on Debian with the official Rust image.
+# release packages (build-release.sh), on Debian with the official Rust image.
 set -eu
 
 CARGO_ABOUT=0.9.2

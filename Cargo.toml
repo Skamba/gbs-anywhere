@@ -37,8 +37,9 @@ all = { level = "warn", priority = -1 }
 [profile.release]
 strip = true
 
-# The Debian package attached to each release, made by cargo-deb in image.yml
-# after `cargo build --release` and `cargo about generate` (see there).
+# The Debian package attached to each release, made by cargo-deb in
+# packaging/build-release.sh after `cargo build --release` and
+# `cargo about generate` (see there); image.yml runs that script.
 [package.metadata.deb]
 maintainer = "gbs-anywhere <https://github.com/Skamba/gbs-anywhere/issues>"
 copyright = "2026 Skamba and the gbs-anywhere contributors"
