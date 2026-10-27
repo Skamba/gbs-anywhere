@@ -617,6 +617,50 @@ async fn control_api_rejects_what_it_cannot_do() {
 }
 
 #[tokio::test]
+async fn a_broken_settings_or_pairing_file_stops_startup_and_says_which() {
+    let (_, x) = start_server().await;
+    let dir = temp_dir("broken");
+    let settings = dir.join("settings.json");
+    std::fs::write(&settings, "{\"integrations\": [").unwrap();
+    let Err(e) = SettingsFile::open(&settings) else {
+        panic!("a broken settings file was taken");
+    };
+    let e = format!("{e:#}");
+    assert!(
+        e.contains(&format!("{}: not a settings file", settings.display())),
+        "{e}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&settings).unwrap(),
+        "{\"integrations\": [",
+        "left as it was"
+    );
+
+    let pairing = dir.join("grinder-pairing.json");
+    std::fs::write(&pairing, "not json").unwrap();
+    let startup = Startup {
+        grinder_host: Some("127.0.0.1:65009".to_owned()),
+        pairing_file: Some(pairing.clone()),
+        ..Startup::default()
+    };
+    let Err(e) = x.start_settings(startup, None) else {
+        panic!("a broken pairing file was taken");
+    };
+    let e = format!("{e:#}");
+    assert!(e.starts_with("--grinder: "), "{e}");
+    assert!(
+        e.contains(&format!(
+            "{}: not a grinder pairing file (delete it to pair again)",
+            pairing.display()
+        )),
+        "{e}"
+    );
+    assert_eq!(std::fs::read_to_string(&pairing).unwrap(), "not json");
+    assert!(x.grinder_link().wifi.is_none(), "no link started");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn settings_change_in_the_app_and_are_saved() {
     let (base, x) = start_server().await;
     let dir = temp_dir("settings");
