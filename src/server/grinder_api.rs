@@ -45,7 +45,7 @@ struct AcceptBrowsers(bool);
 /// any device can send the others. Requests with a browser's headers, and
 /// bodies far bigger than the grinder's, are refused, so a web page cannot
 /// act as the grinder.
-pub fn grinder_router(state: Arc<Server>, accept_browsers: bool) -> axum::Router {
+pub(crate) fn grinder_router(state: Arc<Server>, accept_browsers: bool) -> axum::Router {
     axum::Router::new()
         .fallback(any(handle))
         .layer(Extension(AcceptBrowsers(accept_browsers)))

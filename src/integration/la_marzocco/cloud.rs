@@ -22,7 +22,7 @@ use super::TITLE;
 use super::config::Config;
 
 /// The customer-app API the La Marzocco Home app uses.
-pub const BASE_URL: &str = "https://lion.lamarzocco.io/api/customer-app";
+pub(crate) const BASE_URL: &str = "https://lion.lamarzocco.io/api/customer-app";
 const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Tokens last an hour; refresh this long before that.
 const TOKEN_LIFETIME: Duration = Duration::from_secs(3600);
@@ -34,8 +34,8 @@ const TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(600);
 
 /// Key material of one "installation" of the app.
 #[derive(Clone)]
-pub struct InstallationKey {
-    pub installation_id: String,
+pub(crate) struct InstallationKey {
+    pub(crate) installation_id: String,
     key: SigningKey,
     /// 32 bytes derived from the id and the public key (see [`derive_secret`]).
     secret: [u8; 32],
@@ -53,7 +53,7 @@ impl InstallationKey {
     /// Derives the same installation for the same credentials every time, so
     /// the app registration done with `POST /auth/init` stays valid across
     /// restarts without storing anything.
-    pub fn derive(username: &str, password: &str) -> Self {
+    pub(crate) fn derive(username: &str, password: &str) -> Self {
         let seed = Sha256::new()
             .chain_update(b"gbs-anywhere La Marzocco installation v1\0")
             .chain_update(username.trim().to_lowercase().as_bytes())
@@ -84,18 +84,18 @@ impl InstallationKey {
     }
 
     /// Public key, base64 of DER `SubjectPublicKeyInfo` (the `pk` in `/auth/init`).
-    pub fn public_key_b64(&self) -> String {
+    pub(crate) fn public_key_b64(&self) -> String {
         B64.encode(public_key_der(&self.key))
     }
 
     /// `installation_id.base64(sha256(public key DER))`.
-    pub fn base_string(&self) -> String {
+    pub(crate) fn base_string(&self) -> String {
         let hash = Sha256::digest(public_key_der(&self.key));
         format!("{}.{}", self.installation_id, B64.encode(hash))
     }
 
     /// Headers for `POST /auth/init`.
-    pub fn registration_headers(&self) -> Vec<(&'static str, String)> {
+    pub(crate) fn registration_headers(&self) -> Vec<(&'static str, String)> {
         vec![
             ("X-App-Installation-Id", self.installation_id.clone()),
             (
@@ -106,7 +106,7 @@ impl InstallationKey {
     }
 
     /// Headers for every other request: nonce, timestamp, proof, signature.
-    pub fn request_headers(&self) -> Vec<(&'static str, String)> {
+    pub(crate) fn request_headers(&self) -> Vec<(&'static str, String)> {
         let nonce = uuid::Uuid::new_v4().to_string();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -147,7 +147,7 @@ fn uuid_from_bytes(b: &[u8]) -> String {
 }
 
 /// `sha256("{id}.{base64(pub)}.{base64(sha256(id))}")`.
-pub fn derive_secret(installation_id: &str, public_key_der: &[u8]) -> [u8; 32] {
+pub(crate) fn derive_secret(installation_id: &str, public_key_der: &[u8]) -> [u8; 32] {
     let id_hash = Sha256::digest(installation_id.as_bytes());
     let triple = format!(
         "{installation_id}.{}.{}",
@@ -159,7 +159,7 @@ pub fn derive_secret(installation_id: &str, public_key_der: &[u8]) -> [u8; 32] {
 
 /// La Marzocco's proof: fold the input into the 32-byte secret with
 /// XOR-and-rotate, then hash. Base64 of the result.
-pub fn request_proof(input: &str, secret: &[u8; 32]) -> String {
+pub(crate) fn request_proof(input: &str, secret: &[u8; 32]) -> String {
     let mut work = *secret;
     for &b in input.as_bytes() {
         let idx = usize::from(b % 32);
@@ -181,7 +181,7 @@ struct Token {
 }
 
 /// A minimal client for the customer-app API.
-pub struct CloudClient {
+pub(crate) struct CloudClient {
     http: reqwest::Client,
     base_url: String,
     username: String,
@@ -193,19 +193,19 @@ pub struct CloudClient {
 /// One coffee from the machine's log.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LastCoffee {
+pub(crate) struct LastCoffee {
     /// Unix time in milliseconds.
-    pub time: i64,
-    pub extraction_seconds: f64,
+    pub(crate) time: i64,
+    pub(crate) extraction_seconds: f64,
     /// Weight in the cup in grams (with a Connected Scale), else absent.
     #[serde(default)]
-    pub dose_value: Option<f64>,
+    pub(crate) dose_value: Option<f64>,
     #[serde(default)]
-    pub dose_mode: Option<String>,
+    pub(crate) dose_mode: Option<String>,
     #[serde(default = "default_true")]
-    pub valid: bool,
+    pub(crate) valid: bool,
     #[serde(default)]
-    pub invalid_reason: Option<String>,
+    pub(crate) invalid_reason: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -217,7 +217,7 @@ fn default_true() -> bool {
 /// out means no coffees. A reply without an `output` object, or anything
 /// else in place of the list, is still an error, so a change of format
 /// does not go unnoticed.
-pub fn parse_last_coffees(v: &Value) -> anyhow::Result<Vec<LastCoffee>> {
+pub(crate) fn parse_last_coffees(v: &Value) -> anyhow::Result<Vec<LastCoffee>> {
     let Some(output) = v.get("output").and_then(Value::as_object) else {
         bail!("LAST_COFFEE: unexpected shape: no output object");
     };
@@ -234,18 +234,16 @@ pub fn parse_last_coffees(v: &Value) -> anyhow::Result<Vec<LastCoffee>> {
 /// A machine on the account.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Thing {
-    pub serial_number: String,
+pub(crate) struct Thing {
+    pub(crate) serial_number: String,
     #[serde(default)]
-    pub r#type: String,
+    pub(crate) r#type: String,
     #[serde(default)]
-    pub model_name: String,
-    #[serde(default)]
-    pub name: String,
+    pub(crate) model_name: String,
 }
 
 impl CloudClient {
-    pub fn new(cfg: &Config) -> anyhow::Result<Self> {
+    pub(crate) fn new(cfg: &Config) -> anyhow::Result<Self> {
         let http = crate::http::builder()
             .timeout(HTTP_TIMEOUT)
             .build()
@@ -260,13 +258,13 @@ impl CloudClient {
         })
     }
 
-    pub fn installation_id(&self) -> &str {
+    pub(crate) fn installation_id(&self) -> &str {
         &self.key.installation_id
     }
 
     /// `POST /auth/init`: registers this installation's public key. Safe to
     /// repeat.
-    pub async fn register(&self) -> anyhow::Result<()> {
+    pub(crate) async fn register(&self) -> anyhow::Result<()> {
         let mut req = self
             .http
             .post(format!("{}/auth/init", self.base_url))
@@ -384,13 +382,13 @@ impl CloudClient {
         bail!("{what}: still unauthorized after signing in again")
     }
 
-    pub async fn things(&mut self) -> anyhow::Result<Vec<Thing>> {
+    pub(crate) async fn things(&mut self) -> anyhow::Result<Vec<Thing>> {
         let v = self.get("things", "machine list").await?;
         serde_json::from_value(v).context("things: unexpected shape")
     }
 
     /// The machine's recent coffees, newest first.
-    pub async fn last_coffees(
+    pub(crate) async fn last_coffees(
         &mut self,
         serial: &str,
         days: u32,
@@ -408,10 +406,10 @@ impl CloudClient {
 /// An error that trying again in a few minutes won't fix, such as a refused
 /// login: the task waits much longer before the next try.
 #[derive(Debug)]
-pub struct Permanent(String);
+pub(crate) struct Permanent(String);
 
 impl Permanent {
-    pub fn new(message: impl Into<String>) -> Self {
+    pub(crate) fn new(message: impl Into<String>) -> Self {
         Self(message.into())
     }
 }

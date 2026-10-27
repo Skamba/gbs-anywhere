@@ -2,10 +2,10 @@
 //! cloud, a home-automation hub, a scale, ...) and reports the shot to the
 //! grinder so nobody has to type it.
 //!
-//! An integration is a long-running task. It gets a [`Link`] to the machine
+//! An integration is a long-running task. It gets a `Link` to the machine
 //! emulation, which tells it when the grinder is waiting for a shot
-//! ([`Link::grinder_brews`], one [`Brew`] at a time) and takes the measured
-//! numbers for that brew ([`Link::report`]), and a [`Status`] to tell people how it is doing (shown
+//! (`Link::grinder_brews`, one `Brew` at a time) and takes the measured
+//! numbers for that brew (`Link::report`), and a `Status` to tell people how it is doing (shown
 //! in the app and in `GET /api/state`). Everything in between, protocols and
 //! logins and reconnects, is the integration's own business.
 //!
@@ -15,8 +15,8 @@
 //! [`Integrations`] runs them all, so several can run side by side. The
 //! first one to report a shot wins.
 //!
-//! Included: [`la_marzocco`], which reads the La Marzocco cloud's coffee
-//! log, and [`half_decent`], which weighs the shot on a Half Decent Scale.
+//! Included: `la_marzocco`, which reads the La Marzocco cloud's coffee
+//! log, and `half_decent`, which weighs the shot on a Half Decent Scale.
 //!
 //! # Adding one
 //!
@@ -24,9 +24,9 @@
 //!
 //! | file | what |
 //! |---|---|
-//! | `mod.rs` | module docs and `pub static KIND: Kind`, wiring the files below |
+//! | `mod.rs` | module docs and `pub(crate) static KIND: Kind`, wiring the files below |
 //! | `config.rs` | the setup form (`FIELDS`), the typed config built from [`Settings`], and the `clap::Args` for its flags |
-//! | `run.rs` | the task: a type implementing [`Integration`] |
+//! | `run.rs` | the task: a type implementing `Integration` |
 //! | `icon.svg` | 24×24 glyph drawn with `currentColor`; no vendor logos (trademarks) |
 //! | `README.md` | what it needs, how it behaves, its flags |
 //!
@@ -38,22 +38,22 @@
 //!   `settings()` maps them to the same keys. Give the struct
 //!   `#[group(id = "<id>")]` (every folder's is called `Args`) and a
 //!   `next_help_heading`.
-//!   [`Kind::create`] checks required fields and numbers for both; check
+//!   `Kind::create` checks required fields and numbers for both; check
 //!   anything else when building the config.
 //! * `run.rs`: in `run`, loop forever: connect, set the status, wait for
-//!   the next [`Brew`] from [`Link::grinder_brews`], measure while
-//!   [`Link::waits_for`] that brew, call [`Link::report`] with it; on failure
-//!   set [`Status::error`] and back off with [`Backoff::retry`].
-//!   Status lines are English. Give each one a key with [`Detail::keyed`]
+//!   the next `Brew` from `Link::grinder_brews`, measure while
+//!   `Link::waits_for` that brew, call `Link::report` with it; on failure
+//!   set `Status::error` and back off with `Backoff::retry`.
+//!   Status lines are English. Give each one a key with `Detail::keyed`
 //!   (`<id>.<state>`, e.g. `la_marzocco.last_coffee`) and its numbers with
-//!   [`Detail::var`], and the app can show it in the person's language
+//!   `Detail::var`, and the app can show it in the person's language
 //!   (`integ.detail.<key>` in `web/strings/<lang>.json`); a line without a
 //!   key, or one the catalog lacks, is shown in English. Errors stay English.
-//! * Then list it here: `pub mod <id>;`, its `KIND` in [`KINDS`], and its
+//! * Then list it here: `pub(crate) mod <id>;`, its `KIND` in [`KINDS`], and its
 //!   args in [`CliArgs`] and [`CliArgs::configured`]. `cargo test` checks
 //!   that each kind's flags turn it on.
 //!
-//! [`Link::report`] applies the rules every integration must follow: a shot
+//! `Link::report` applies the rules every integration must follow: a shot
 //! only counts while the grinder is waiting after a knob press (on an E65/E80
 //! GbS: after a Grind-by-Sync grind), only for the brew it was measured in,
 //! and a missing weight falls back to the recipe weight the grinder sent. Keep vendor code free of those so all
@@ -62,8 +62,8 @@
 mod kind;
 mod manager;
 
-pub mod half_decent;
-pub mod la_marzocco;
+pub(crate) mod half_decent;
+pub(crate) mod la_marzocco;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -77,8 +77,10 @@ use crate::protocol::machine::{EventRecord, Machine};
 use crate::protocol::{MachineError, MachineEvent, Phase, ShotResult};
 use crate::server::Server;
 
-pub use kind::{Field, Input, Kind, Settings};
-pub use manager::{ChangeError, Integrations, Source, View};
+pub(crate) use kind::{Field, Input};
+pub use kind::{Kind, Settings};
+pub(crate) use manager::ChangeError;
+pub use manager::Integrations;
 
 /// Every integration, in the order the app lists them.
 pub static KINDS: &[&Kind] = &[&la_marzocco::KIND, &half_decent::KIND];
@@ -106,10 +108,10 @@ impl CliArgs {
 }
 
 /// The future an integration runs as.
-pub type BoxFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+pub(crate) type BoxFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 /// Something that reports shots on its own.
-pub trait Integration: Send + 'static {
+pub(crate) trait Integration: Send + 'static {
     /// Runs until the process ends or it is removed: reconnect and retry
     /// inside. Returning marks the integration as stopped.
     fn run(self: Box<Self>, link: Link) -> BoxFuture;
@@ -121,9 +123,9 @@ pub trait Integration: Send + 'static {
 
 /// An integration's handle on the machine emulation.
 #[derive(Clone)]
-pub struct Link {
-    pub server: Arc<Server>,
-    pub status: Status,
+pub(crate) struct Link {
+    pub(crate) server: Arc<Server>,
+    pub(crate) status: Status,
 }
 
 /// One brew the grinder asked for (a knob press, or an E65/E80
@@ -131,14 +133,14 @@ pub struct Link {
 /// measures and reports against it, so a shot is only ever reported for the
 /// brew it was measured in, never for the next one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Brew {
+pub(crate) struct Brew {
     /// `Phase::Running.since`, which is also the `at` of its `ShotStarted`.
     started: Instant,
 }
 
 /// What happened to a reported shot.
 #[derive(Debug, Clone, PartialEq)]
-pub enum ReportOutcome {
+pub(crate) enum ReportOutcome {
     /// Shown to the grinder with this weight (grams) and where it came from.
     Reported { grams: f64, source: String },
     /// The grinder was not waiting: no knob press (or E65/E80 grind), or
@@ -164,19 +166,19 @@ fn waiting_brew(m: &mut Machine, now: Instant) -> Option<Brew> {
 
 impl Link {
     /// The brew the grinder asked for and is waiting on, if any.
-    pub fn waiting_brew(&self) -> Option<Brew> {
+    pub(crate) fn waiting_brew(&self) -> Option<Brew> {
         self.server.with(waiting_brew)
     }
 
     /// Whether the grinder still waits for the result of `brew`.
-    pub fn waits_for(&self, brew: Brew) -> bool {
+    pub(crate) fn waits_for(&self, brew: Brew) -> bool {
         self.waiting_brew() == Some(brew)
     }
 
     /// The brews the grinder asks for (knob presses, or E65/E80
     /// Grind-by-Sync grinds): first the one it is waiting on already, if
     /// any, then each new one.
-    pub fn grinder_brews(&self) -> GrinderBrews {
+    pub(crate) fn grinder_brews(&self) -> GrinderBrews {
         // Subscribed first, so a brew that starts in between is not missed.
         let events = self.server.subscribe();
         GrinderBrews {
@@ -191,7 +193,7 @@ impl Link {
     /// `weight` in grams with a label saying where it came from (`None` when
     /// the integration has no weight: the grinder's recipe weight is used).
     /// Applies the rules and logs the outcome under this integration's name.
-    pub fn report(
+    pub(crate) fn report(
         &self,
         brew: Brew,
         time: Duration,
@@ -244,7 +246,7 @@ impl Link {
 }
 
 /// The grinder's brews as they start. See [`Link::grinder_brews`].
-pub struct GrinderBrews {
+pub(crate) struct GrinderBrews {
     events: broadcast::Receiver<EventRecord>,
     server: Arc<Server>,
     /// The brew already waiting when this was made.
@@ -257,7 +259,7 @@ impl GrinderBrews {
     /// Waits for the next brew the grinder is waiting on. Each brew comes
     /// once, and brews that are over by the time they would come (answered,
     /// aborted, timed out) are skipped. `None` once the server is gone.
-    pub async fn next(&mut self) -> Option<Brew> {
+    pub(crate) async fn next(&mut self) -> Option<Brew> {
         if let Some(brew) = self.pending.take()
             && self.take(brew)
         {
@@ -308,12 +310,12 @@ impl GrinderBrews {
 // ---------------------------------------------------------------------------
 
 /// The values a keyed status line is filled with. See [`Detail::var`].
-pub type DetailVars = serde_json::Map<String, serde_json::Value>;
+pub(crate) type DetailVars = serde_json::Map<String, serde_json::Value>;
 
 /// Rounded to 0.1, as status lines show times and weights. Use it for both the
 /// English text and the value, so every language shows the same number (a
 /// vendor cloud may also send float noise like 37.4000015).
-pub fn tenths(x: f64) -> f64 {
+pub(crate) fn tenths(x: f64) -> f64 {
     (x * 10.0).round() / 10.0
 }
 
@@ -321,7 +323,7 @@ pub fn tenths(x: f64) -> f64 {
 /// app can say it in the person's language. Plain text converts into a line
 /// without a key, which every language shows as it is.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct Detail {
+pub(crate) struct Detail {
     text: String,
     key: Option<&'static str>,
     vars: DetailVars,
@@ -330,7 +332,7 @@ pub struct Detail {
 impl Detail {
     /// `text`, which the app may replace with its own wording for `key`:
     /// `<integration id>.<state>`, such as `la_marzocco.last_coffee`.
-    pub fn keyed(key: &'static str, text: impl Into<String>) -> Self {
+    pub(crate) fn keyed(key: &'static str, text: impl Into<String>) -> Self {
         Self {
             text: text.into(),
             key: Some(key),
@@ -339,14 +341,14 @@ impl Detail {
     }
 
     /// The English line.
-    pub fn text(&self) -> &str {
+    pub(crate) fn text(&self) -> &str {
         &self.text
     }
 
     /// Adds a value the app fills into its wording. Numbers are in plain
     /// units, with the unit in the name (`age_ms`, `time_ms`, `weight_g`,
     /// `every_s`); text goes in as it is (`host`).
-    pub fn var(mut self, name: &str, value: impl Into<serde_json::Value>) -> Self {
+    pub(crate) fn var(mut self, name: &str, value: impl Into<serde_json::Value>) -> Self {
         self.vars.insert(name.to_owned(), value.into());
         self
     }
@@ -370,7 +372,7 @@ impl From<String> for Detail {
 /// Coarse state, for a dot in the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Health {
+pub(crate) enum Health {
     /// Connecting or logging in.
     Starting,
     /// Ready and idle.
@@ -384,30 +386,30 @@ pub enum Health {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct StatusSnapshot {
+pub(crate) struct StatusSnapshot {
     /// This integration, e.g. `la_marzocco` or `la_marzocco-2`.
-    pub id: String,
+    pub(crate) id: String,
     /// Its kind ([`Kind::id`]).
-    pub kind: String,
-    pub title: String,
-    pub health: Health,
+    pub(crate) kind: String,
+    pub(crate) title: String,
+    pub(crate) health: Health,
     /// What is being watched, once known: `MI000000 · Linea Mini R`.
-    pub subject: String,
+    pub(crate) subject: String,
     /// The current state in one line, e.g. `last coffee 3 min ago: 25.1 s`.
-    pub detail: String,
+    pub(crate) detail: String,
     /// Names `detail` for translation, e.g. `la_marzocco.last_coffee`;
     /// `None` when the integration gives no key for it.
-    pub detail_key: Option<&'static str>,
+    pub(crate) detail_key: Option<&'static str>,
     /// The values the app fills into its wording for `detail_key`: e.g.
     /// `{"age_ms": 180000, "time_ms": 25100}`. An `age_ms` is as of now,
     /// the rest as of when `detail` was set (whose English words keep the
     /// age of then).
-    pub detail_vars: DetailVars,
-    pub last_error: Option<String>,
+    pub(crate) detail_vars: DetailVars,
+    pub(crate) last_error: Option<String>,
     /// How long the current health has been in place.
-    pub health_age_ms: u64,
-    pub reports: u32,
-    pub last_report: Option<ShotResult>,
+    pub(crate) health_age_ms: u64,
+    pub(crate) reports: u32,
+    pub(crate) last_report: Option<ShotResult>,
 }
 
 #[derive(Debug)]
@@ -425,7 +427,7 @@ struct StatusInner {
 
 /// Shared, cheap to clone. Integrations set it; the server reads it.
 #[derive(Debug, Clone)]
-pub struct Status {
+pub(crate) struct Status {
     id: Arc<str>,
     kind: Arc<str>,
     title: Arc<str>,
@@ -433,7 +435,7 @@ pub struct Status {
 }
 
 impl Status {
-    pub fn new(id: impl Into<Arc<str>>, kind: &str, title: &str) -> Self {
+    pub(crate) fn new(id: impl Into<Arc<str>>, kind: &str, title: &str) -> Self {
         Self {
             id: id.into(),
             kind: kind.into(),
@@ -451,37 +453,37 @@ impl Status {
         }
     }
 
-    pub fn id(&self) -> &str {
+    pub(crate) fn id(&self) -> &str {
         &self.id
     }
 
-    pub fn title(&self) -> &str {
+    pub(crate) fn title(&self) -> &str {
         &self.title
     }
 
     /// Names what is being watched (machine, account); shown above the
     /// detail line. Keep it stable.
-    pub fn subject(&self, subject: impl Into<String>) {
+    pub(crate) fn subject(&self, subject: impl Into<String>) {
         self.lock().subject = subject.into();
     }
 
     /// The state and its line: plain English text, or a [`Detail`] with a
     /// key the app can translate.
-    pub fn starting(&self, detail: impl Into<Detail>) {
+    pub(crate) fn starting(&self, detail: impl Into<Detail>) {
         self.set(Health::Starting, detail.into());
     }
 
-    pub fn connected(&self, detail: impl Into<Detail>) {
+    pub(crate) fn connected(&self, detail: impl Into<Detail>) {
         self.set(Health::Connected, detail.into());
     }
 
-    pub fn watching(&self, detail: impl Into<Detail>) {
+    pub(crate) fn watching(&self, detail: impl Into<Detail>) {
         self.set(Health::Watching, detail.into());
     }
 
     /// Records a failure; the message stays visible as `last_error` until the
     /// next successful state.
-    pub fn error(&self, message: impl Into<String>) {
+    pub(crate) fn error(&self, message: impl Into<String>) {
         let message = message.into();
         let mut s = self.lock();
         if s.health != Health::Failing {
@@ -516,7 +518,7 @@ impl Status {
         s.last_report = Some(shot);
     }
 
-    pub fn snapshot(&self) -> StatusSnapshot {
+    pub(crate) fn snapshot(&self) -> StatusSnapshot {
         let s = self.lock();
         let mut detail_vars = s.detail.vars.clone();
         // An age goes on from when the line was set.
@@ -553,14 +555,14 @@ impl Status {
 
 /// Exponential backoff between attempts: `min`, doubling to `max`.
 #[derive(Debug, Clone)]
-pub struct Backoff {
+pub(crate) struct Backoff {
     min: Duration,
     max: Duration,
     next: Duration,
 }
 
 impl Backoff {
-    pub fn new(min: Duration, max: Duration) -> Self {
+    pub(crate) fn new(min: Duration, max: Duration) -> Self {
         Self {
             min,
             max,
@@ -569,31 +571,31 @@ impl Backoff {
     }
 
     /// Back to `min`; call after a success.
-    pub fn reset(&mut self) {
+    pub(crate) fn reset(&mut self) {
         self.next = self.min;
     }
 
     /// The delay the next [`Backoff::wait`] will sleep.
-    pub fn peek(&self) -> Duration {
+    pub(crate) fn peek(&self) -> Duration {
         self.next
     }
 
     /// Sleeps the current delay and doubles it for next time.
-    pub async fn wait(&mut self) -> Duration {
+    pub(crate) async fn wait(&mut self) -> Duration {
         let d = self.advance();
         tokio::time::sleep(d).await;
         d
     }
 
     /// The current delay, doubling it for next time (no sleep).
-    pub fn advance(&mut self) -> Duration {
+    pub(crate) fn advance(&mut self) -> Duration {
         let d = self.next;
         self.next = (d * 2).min(self.max);
         d
     }
 
     /// Logs `<title>: retrying in N s`, then waits as [`Backoff::wait`] does.
-    pub async fn retry(&mut self, title: &str) -> Duration {
+    pub(crate) async fn retry(&mut self, title: &str) -> Duration {
         tracing::info!("{title}: retrying in {} s", self.peek().as_secs());
         self.wait().await
     }

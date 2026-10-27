@@ -4,7 +4,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// `2026-10-11T12:08:01.663Z`.
-pub fn with_millis(t: SystemTime) -> String {
+pub(crate) fn with_millis(t: SystemTime) -> String {
     let millis = t
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -13,7 +13,7 @@ pub fn with_millis(t: SystemTime) -> String {
 }
 
 /// `2026-10-11T12:08:01Z`.
-pub fn with_seconds(t: SystemTime) -> String {
+pub(crate) fn with_seconds(t: SystemTime) -> String {
     format!("{}Z", format(t))
 }
 
@@ -29,7 +29,7 @@ fn format(t: SystemTime) -> String {
 
 /// The seconds since 1970 of a time as [`with_seconds`] or [`with_millis`]
 /// write it (the milliseconds left out), or `None` for anything else.
-pub fn seconds(text: &str) -> Option<u64> {
+pub(crate) fn seconds(text: &str) -> Option<u64> {
     let text = text.strip_suffix('Z')?;
     let text = text.split_once('.').map_or(text, |(whole, _)| whole);
     let (date, time) = text.split_once('T')?;

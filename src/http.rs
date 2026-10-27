@@ -7,7 +7,7 @@
 use std::sync::Once;
 
 /// A client builder, with the TLS crypto provider installed.
-pub fn builder() -> reqwest::ClientBuilder {
+pub(crate) fn builder() -> reqwest::ClientBuilder {
     static PROVIDER: Once = Once::new();
     PROVIDER.call_once(|| {
         // Fails only when a provider is already installed, which is fine.
@@ -17,9 +17,11 @@ pub fn builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
 }
 
-/// A client with reqwest's defaults, like `reqwest::Client::new()`. Panics
-/// where that does: when the system's TLS setup cannot be loaded.
-pub fn client() -> reqwest::Client {
+/// A client with reqwest's defaults, like `reqwest::Client::new()`, for the
+/// tests. Panics where that does: when the system's TLS setup cannot be
+/// loaded.
+#[cfg(test)]
+pub(crate) fn client() -> reqwest::Client {
     builder()
         .build()
         .expect("an HTTP client with default settings")

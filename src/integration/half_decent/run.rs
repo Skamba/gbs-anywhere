@@ -60,8 +60,8 @@ fn away() -> Detail {
 }
 
 /// The integration. See the module docs.
-pub struct HalfDecent {
-    pub cfg: Config,
+pub(crate) struct HalfDecent {
+    pub(crate) cfg: Config,
 }
 
 impl Integration for HalfDecent {
@@ -72,7 +72,7 @@ impl Integration for HalfDecent {
 
 /// A message from the scale, as far as this integration cares.
 #[derive(Debug, PartialEq)]
-pub enum FromScale {
+pub(crate) enum FromScale {
     /// A weight reading (these have no `type`).
     Reading(Reading),
     /// The firmware version, from the answer to `status`.
@@ -89,7 +89,7 @@ struct Wire {
     firmware_version: Option<String>,
 }
 
-pub fn parse(text: &str) -> FromScale {
+pub(crate) fn parse(text: &str) -> FromScale {
     let Ok(w) = serde_json::from_str::<Wire>(text) else {
         return FromScale::Other;
     };

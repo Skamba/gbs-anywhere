@@ -117,7 +117,7 @@ fn from_other_site(headers: &HeaderMap, authority: Option<&str>) -> bool {
 
 /// Only browsers send these; the grinder never does. A browser sends
 /// `Origin` with every write, `Sec-Fetch-Site` over HTTPS only.
-pub fn from_browser(headers: &HeaderMap) -> bool {
+pub(crate) fn from_browser(headers: &HeaderMap) -> bool {
     headers.contains_key(header::ORIGIN) || headers.contains_key("sec-fetch-site")
 }
 
@@ -197,7 +197,7 @@ impl Told {
 /// apart per kind, which keeps the memory small. Past either limit, the log
 /// says once that the rest go to the debug log. A device is an IP address:
 /// behind a reverse proxy, every device counts as the proxy.
-pub fn tell_once(kind: &'static str, peer: Option<IpAddr>, what: &str) -> bool {
+pub(crate) fn tell_once(kind: &'static str, peer: Option<IpAddr>, what: &str) -> bool {
     static TOLD: OnceLock<Mutex<Told>> = OnceLock::new();
     TOLD.get_or_init(Mutex::default)
         .lock()
@@ -206,20 +206,20 @@ pub fn tell_once(kind: &'static str, peer: Option<IpAddr>, what: &str) -> bool {
 }
 
 /// Text from a request, cut short and made printable for the log.
-pub fn short(text: &str) -> String {
+pub(crate) fn short(text: &str) -> String {
     printable(text, 64)
 }
 
 /// Kinds of what [`tell_once`] tells once, as the log names them.
-pub const REFUSED_HOST: &str = "refused host names";
-pub const REFUSED_SITE: &str = "refused requests from other sites";
-pub const REFUSED_GRINDER: &str = "refused requests on the grinder's routes";
-pub const UNKNOWN_GRINDER: &str = "unknown requests on the grinder's routes";
-pub const UNPARSABLE_GRINDER: &str = "unparsable writes on the grinder's routes";
+pub(crate) const REFUSED_HOST: &str = "refused host names";
+pub(crate) const REFUSED_SITE: &str = "refused requests from other sites";
+pub(crate) const REFUSED_GRINDER: &str = "refused requests on the grinder's routes";
+pub(crate) const UNKNOWN_GRINDER: &str = "unknown requests on the grinder's routes";
+pub(crate) const UNPARSABLE_GRINDER: &str = "unparsable writes on the grinder's routes";
 
 /// For the app's routes: a host name of the home network, and for writes, no
 /// other site.
-pub async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) -> Response {
+pub(crate) async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) -> Response {
     // Unknown when the router is served without its peers' addresses.
     let peer = req
         .extensions()

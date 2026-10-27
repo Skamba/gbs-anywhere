@@ -40,10 +40,10 @@ use anyhow::Context;
 use serde::Serialize;
 use tokio::sync::OwnedMutexGuard;
 
-pub use config::{WifiConfig, grinder_address};
+pub(crate) use config::{WifiConfig, grinder_address};
 use jobs::Jobs;
 use pairing_file::Pairing;
-pub use pairing_file::PairingLock;
+pub(crate) use pairing_file::PairingLock;
 use reply::unreachable;
 use slot::Attached;
 pub(super) use slot::WifiSlot;
@@ -100,57 +100,57 @@ const HANDLED_CAP: usize = 16;
 /// The Local WiFi link as the app shows it (`grinder.wifi` in
 /// `GET /api/state`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct WifiLink {
+pub(crate) struct WifiLink {
     /// The grinder's address, as configured.
-    pub grinder: String,
-    pub state: WifiState,
+    pub(crate) grinder: String,
+    pub(crate) state: WifiState,
     /// Since when `state` holds, set by the server as the link reports it
     /// (see `Server::set_wifi`); the API shows it as `state_age_ms`.
     #[serde(skip)]
-    pub state_since: Option<Instant>,
+    pub(crate) state_since: Option<Instant>,
     /// Where in the pairing the link is, while `state` is `pairing`; `None`
     /// otherwise.
-    pub phase: Option<WifiPhase>,
+    pub(crate) phase: Option<WifiPhase>,
     /// Since when `phase` holds; the API shows it as `phase_age_ms`.
     #[serde(skip)]
-    pub phase_since: Option<Instant>,
+    pub(crate) phase_since: Option<Instant>,
     /// While pairing: the Pairing Code the grinder shows next to
     /// gbs-anywhere for this attempt (`pairingCode`).
-    pub pairing_code: Option<u32>,
+    pub(crate) pairing_code: Option<u32>,
     /// While asking: the last pairing ID the grinder did not take, so the
     /// app can say so.
-    pub unknown_pairing_id: Option<u32>,
+    pub(crate) unknown_pairing_id: Option<u32>,
     /// The grinder went quiet while pairing and came back without the
     /// pairing request: a pairing accepted before did not stick, and the
     /// app asks to accept again. Cleared once paired,
     /// or once the grinder turns out to have the pairing after all.
-    pub pairing_lost: bool,
+    pub(crate) pairing_lost: bool,
     /// How long gbs-anywhere sends the grinder nothing after a pairing check
     /// went unanswered (phase `quiet`), so an app can count down to the next
     /// check.
-    pub quiet_ms: u64,
+    pub(crate) quiet_ms: u64,
     /// What is going on, in one sentence.
-    pub detail: String,
+    pub(crate) detail: String,
     /// While `failing`: why, in English words, without the steps that led
     /// there (`detail` has them all), e.g. `operation timed out`.
-    pub failure: Option<String>,
+    pub(crate) failure: Option<String>,
     /// What went wrong with the last shot, in English words, until the next
     /// one goes through.
-    pub problem: Option<String>,
+    pub(crate) problem: Option<String>,
     /// The same as a fixed code, for the app to match on.
-    pub problem_cause: Option<ProblemCause>,
+    pub(crate) problem_cause: Option<ProblemCause>,
     /// The Pairing ID in use, the pairing's lasting number (`pairingId`);
     /// `None` while unpaired.
-    pub pairing_id: Option<u32>,
+    pub(crate) pairing_id: Option<u32>,
     /// The grinder does not answer at all (off, in standby or gone from the
     /// network), as opposed to answering with an error. Cleared as soon as
     /// it answers again.
-    pub unreachable: bool,
+    pub(crate) unreachable: bool,
     /// Not paired, and the grinder answered the pairing application with a
     /// client error, as one not set up for pairing would: the app says it is
     /// not set up rather than failing. Cleared once it takes one, or fails
     /// some other way.
-    pub not_set_up: bool,
+    pub(crate) not_set_up: bool,
 }
 
 /// Why the last shot did not go through to the grinder
@@ -159,7 +159,7 @@ pub struct WifiLink {
 /// grinder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
-pub enum ProblemCause {
+pub(crate) enum ProblemCause {
     /// The brew ended for this cause; the grinder got no answer.
     Shot(AbortCause),
     /// The shot was measured, but its answer did not reach the grinder.
@@ -170,7 +170,9 @@ pub enum ProblemCause {
 /// `grinder_result_<what happened>`, as [`AbortCause`]'s do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ResultProblem {
+// The variants are named as their codes, which share the prefix on purpose.
+#[allow(clippy::enum_variant_names)]
+pub(crate) enum ResultProblem {
     /// The grinder did not take it in time, and it was given up.
     GrinderResultExpired,
     /// The grinder refused it.
@@ -180,8 +182,10 @@ pub enum ResultProblem {
 }
 
 impl ProblemCause {
-    /// Every problem the link reports, one entry per case.
-    pub const ALL: [Self; 6] = [
+    /// Every problem the link reports, one entry per case, for the tests
+    /// that check the page words each.
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 6] = [
         Self::Shot(AbortCause::GrinderShotDropped),
         Self::Shot(AbortCause::GrinderShotRefused),
         Self::Shot(AbortCause::GrinderUnpaired),
@@ -201,7 +205,7 @@ struct Problem {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WifiState {
+pub(crate) enum WifiState {
     Connecting,
     /// Pairing with the grinder; `WifiLink::phase` says where in it.
     Pairing,
@@ -214,7 +218,7 @@ pub enum WifiState {
 /// its state is [`WifiState::Pairing`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WifiPhase {
+pub(crate) enum WifiPhase {
     /// The code is shown: gbs-anywhere waits for the person to accept it on
     /// the grinder and confirm that in the app (`POST /api/grinder/accepted`
     /// is taken only now), for as long as it takes. Meanwhile it checks the
@@ -237,7 +241,7 @@ pub enum WifiPhase {
 
 /// Why a pairing ID or a confirmation from the app was not taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairingIdRefusal {
+pub(crate) enum PairingIdRefusal {
     /// No `--grinder` link runs.
     NoLink,
     /// The link has a working pairing; it needs no ID.
@@ -274,7 +278,7 @@ impl std::fmt::Display for PairingIdRefusal {
 
 impl PairingIdRefusal {
     /// As a fixed code, for `code` in the API's errors.
-    pub fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::NoLink => "grinder_not_set_up",
             Self::NotNeeded => "grinder_already_paired",
@@ -287,7 +291,7 @@ impl PairingIdRefusal {
 
 /// The task. Build it with `Server::wifi_link`, then start it with
 /// `Server::start_wifi_link`.
-pub struct WifiGrinder {
+pub(crate) struct WifiGrinder {
     cfg: WifiConfig,
     http: reqwest::Client,
     pairing: Pairing,

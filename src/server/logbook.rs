@@ -17,24 +17,24 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
 /// Lines kept.
-pub const CAPACITY: usize = 1000;
+pub(crate) const CAPACITY: usize = 1000;
 
 /// One log line as the app gets it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct LogLine {
+pub(crate) struct LogLine {
     /// Counts up from 1 for every line since the start.
-    pub seq: u64,
+    pub(crate) seq: u64,
     /// UTC, RFC 3339 with milliseconds.
-    pub at: String,
+    pub(crate) at: String,
     /// When, on a clock that does not jump: the API says how long ago as
     /// `age_ms`, which a phone can place on its own clock when the server's
     /// is not set.
     #[serde(skip)]
-    pub logged: Instant,
+    pub(crate) logged: Instant,
     /// `error`, `warn` or `info`, lower case like the API's other codes.
-    pub level: &'static str,
+    pub(crate) level: &'static str,
     /// The message as printed, without colour codes.
-    pub text: String,
+    pub(crate) text: String,
 }
 
 /// The last lines, and a feed of new ones.
@@ -50,7 +50,7 @@ struct Lines {
 }
 
 impl LogBook {
-    pub fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         Self {
             lines: Mutex::new(Lines {
                 kept: VecDeque::with_capacity(capacity),
@@ -67,12 +67,12 @@ impl LogBook {
         GLOBAL.clone()
     }
 
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         self.capacity
     }
 
     /// Adds a line; the oldest goes once the book is full.
-    pub fn push(&self, level: Level, text: &str) -> LogLine {
+    pub(crate) fn push(&self, level: Level, text: &str) -> LogLine {
         let mut lines = self.lock();
         lines.seq += 1;
         let line = LogLine {
@@ -93,7 +93,7 @@ impl LogBook {
     }
 
     /// Lines with `seq > after`, oldest first, and the newest `seq`.
-    pub fn after(&self, after: u64) -> (Vec<LogLine>, u64) {
+    pub(crate) fn after(&self, after: u64) -> (Vec<LogLine>, u64) {
         let lines = self.lock();
         let newer = lines
             .kept
@@ -106,13 +106,13 @@ impl LogBook {
 
     /// New lines as they are added.
     #[cfg(test)]
-    pub fn subscribe(&self) -> broadcast::Receiver<LogLine> {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<LogLine> {
         self.live.subscribe()
     }
 
     /// New lines as they are added, and the newest `seq` so far: every line
     /// after it comes through the receiver.
-    pub fn subscribe_at(&self) -> (broadcast::Receiver<LogLine>, u64) {
+    pub(crate) fn subscribe_at(&self) -> (broadcast::Receiver<LogLine>, u64) {
         let lines = self.lock();
         (self.live.subscribe(), lines.seq)
     }

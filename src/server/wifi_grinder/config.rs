@@ -14,44 +14,44 @@ use crate::protocol::wifi;
 
 /// Where the grinder is and where the pairing is kept.
 #[derive(Debug, Clone)]
-pub struct WifiConfig {
+pub(crate) struct WifiConfig {
     /// `https://<grinder>:30001`, or a plain-HTTP fake in tests.
-    pub base_url: String,
+    pub(crate) base_url: String,
     /// Keeps the pairing across restarts. Without it, every start pairs anew.
-    pub pairing_file: Option<PathBuf>,
+    pub(crate) pairing_file: Option<PathBuf>,
     /// The pairing ID the grinder shows. Used when the file has none, or when
     /// the grinder refuses the file's.
-    pub pairing_id: Option<u32>,
+    pub(crate) pairing_id: Option<u32>,
     /// Between job requests.
-    pub poll: Duration,
+    pub(crate) poll: Duration,
     /// How long nothing is sent after a pairing check got no answer (see
     /// `RESTART_QUIET`).
-    pub restart_quiet: Duration,
+    pub(crate) restart_quiet: Duration,
     /// How long refused job requests take to count as a cleared pairing (see
     /// `REFUSED_FOR`).
-    pub refused_for: Duration,
+    pub(crate) refused_for: Duration,
     /// How long from the confirmation in the app to the pairing check (see
     /// `ACCEPT_SETTLE`).
-    pub accept_settle: Duration,
+    pub(crate) accept_settle: Duration,
     /// Between pairing checks while nobody has confirmed in the app (see
     /// `UNCONFIRMED_POLL`).
-    pub unconfirmed_poll: Duration,
+    pub(crate) unconfirmed_poll: Duration,
     /// The wait after a failed request, from `min_backoff` doubling up to
     /// `max_backoff`, and at most `unpaired_backoff` while unpaired (see
     /// `UNPAIRED_BACKOFF`).
-    pub min_backoff: Duration,
-    pub max_backoff: Duration,
-    pub unpaired_backoff: Duration,
+    pub(crate) min_backoff: Duration,
+    pub(crate) max_backoff: Duration,
+    pub(crate) unpaired_backoff: Duration,
     /// How long the app is asked for the pairing ID at a time (see
     /// `ASK_WINDOW`).
-    pub ask_window: Duration,
+    pub(crate) ask_window: Duration,
 }
 
 impl WifiConfig {
     /// From an address as people type it: `192.168.1.30`, `grinder.local`,
     /// `host:port`, or (on the command line, for tests) a full URL. The app
     /// can only set what [`grinder_address`] allows.
-    pub fn from_host(host: &str) -> anyhow::Result<Self> {
+    pub(crate) fn from_host(host: &str) -> anyhow::Result<Self> {
         let host = host.trim().trim_end_matches('/');
         if host.is_empty() {
             bail!("the grinder address is empty");
@@ -96,7 +96,7 @@ const MAX_URL_LEN: usize = 2048;
 /// requests always go to `https://<host>:<port>` on the grinder. Returns it
 /// tidied up: trimmed, in lower case, an IPv6 address in brackets, and
 /// without an empty port.
-pub fn grinder_address(input: &str) -> anyhow::Result<String> {
+pub(crate) fn grinder_address(input: &str) -> anyhow::Result<String> {
     let s = input.trim();
     if s.is_empty() || s.len() > MAX_ADDRESS_LEN {
         bail!("{ADDRESS_HINT}");

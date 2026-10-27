@@ -8,7 +8,7 @@ use super::cloud::BASE_URL;
 use crate::integration::{Field, Input, Settings};
 
 /// The form in the app. `base_url` is not on it: command line only.
-pub const FIELDS: &[Field] = &[
+pub(crate) const FIELDS: &[Field] = &[
     Field {
         key: "username",
         label: "E-mail",
@@ -49,20 +49,20 @@ const DEFAULT_POLL_S: f64 = 3.0;
 
 /// Account and machine to watch.
 #[derive(Debug, Clone)]
-pub struct Config {
+pub(crate) struct Config {
     /// La Marzocco Home account.
-    pub username: String,
-    pub password: String,
+    pub(crate) username: String,
+    pub(crate) password: String,
     /// Machine serial (e.g. `MI000000`). `None`: the account's only machine.
-    pub serial: Option<String>,
+    pub(crate) serial: Option<String>,
     /// How often to ask for new coffees while the grinder is waiting.
-    pub poll: Duration,
+    pub(crate) poll: Duration,
     /// API base URL; only tests point this elsewhere.
-    pub base_url: String,
+    pub(crate) base_url: String,
 }
 
 impl Config {
-    pub fn from_settings(s: &Settings) -> anyhow::Result<Self> {
+    pub(crate) fn from_settings(s: &Settings) -> anyhow::Result<Self> {
         let poll_s = s.number("poll_s")?.unwrap_or(DEFAULT_POLL_S);
         if !(1.0..=60.0).contains(&poll_s) {
             bail!("check between once a second and once a minute (poll_s from 1 to 60)");
@@ -85,33 +85,33 @@ impl Config {
 #[derive(Debug, Clone, clap::Args)]
 #[group(id = "la_marzocco")]
 #[command(next_help_heading = "La Marzocco cloud")]
-pub struct Args {
+pub(crate) struct Args {
     /// La Marzocco Home account e-mail. Enables reporting shots from the
     /// machine's own coffee log in the La Marzocco cloud.
     #[arg(long, env = "LM_USERNAME")]
-    pub lm_username: Option<String>,
+    pub(crate) lm_username: Option<String>,
 
     /// La Marzocco Home account password.
     #[arg(long, env = "LM_PASSWORD", hide_env_values = true)]
-    pub lm_password: Option<String>,
+    pub(crate) lm_password: Option<String>,
 
     /// Machine serial number, e.g. MI000000. Needed with more than one
     /// machine on the account.
     #[arg(long, env = "LM_SERIAL")]
-    pub lm_serial: Option<String>,
+    pub(crate) lm_serial: Option<String>,
 
     /// Seconds between checks of the coffee log while the grinder waits.
     #[arg(long, env = "LM_POLL_S", default_value_t = DEFAULT_POLL_S)]
-    pub lm_poll_s: f64,
+    pub(crate) lm_poll_s: f64,
 
     /// API base URL (for tests against a fake server).
     #[arg(long, env = "LM_BASE_URL", default_value = BASE_URL, hide = true)]
-    pub lm_base_url: String,
+    pub(crate) lm_base_url: String,
 }
 
 impl Args {
     /// The settings, or `None` when `--lm-username` is not given.
-    pub fn settings(&self) -> Option<Settings> {
+    pub(crate) fn settings(&self) -> Option<Settings> {
         self.lm_username.as_ref()?;
         Some(
             Settings::new()

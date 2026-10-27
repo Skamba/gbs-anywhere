@@ -113,6 +113,11 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
 - Match the surrounding code: short doc comments saying what and why,
   `anyhow` with `.context(...)` for errors people will read, and messages in
   plain sentences.
+- Items are `pub(crate)` or private; only what `src/main.rs` uses is `pub`.
+  That way the compiler reports code nothing uses: remove it, or give it
+  `#[cfg(test)]` when only tests need it. A public doc comment links only
+  to public items (`cargo doc` checks it in CI); name the others in plain
+  backticks.
 - Keep `src/protocol/` free of I/O and clocks (callers pass `Instant`s), so
   the grinder's behaviour stays testable without a grinder.
 - The grinder-facing API (`/api/v2/*`, names in `wire.rs`) is exactly what
@@ -168,12 +173,12 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
 ## Integrations
 
 Each integration is a folder `src/integration/<id>/` with `mod.rs`
-(`pub static KIND: Kind`), `config.rs` (the form's `FIELDS`, a typed config,
-and a clap `Args` with `#[group(id = "<id>")]`), `run.rs` (implements
-`Integration`), `icon.svg` and `README.md`, plus more files as it needs them
-(`la_marzocco/cloud.rs`, `half_decent/shot.rs`). Register it in
-`src/integration/mod.rs` in four places: `pub mod`, `KINDS`, a `CliArgs`
-field and its line in `CliArgs::configured`.
+(`pub(crate) static KIND: Kind`), `config.rs` (the form's `FIELDS`, a typed
+config, and a clap `Args` with `#[group(id = "<id>")]`), `run.rs`
+(implements `Integration`), `icon.svg` and `README.md`, plus more files as
+it needs them (`la_marzocco/cloud.rs`, `half_decent/shot.rs`). Register it
+in `src/integration/mod.rs` in four places: `pub(crate) mod`, `KINDS`, a
+`CliArgs` field and its line in `CliArgs::configured`.
 The module docs there are the full spec; `la_marzocco/` is the worked example.
 
 - Report shots only through `Link::report`. It holds the rules every

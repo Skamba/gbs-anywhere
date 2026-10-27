@@ -25,7 +25,7 @@ use crate::server::wifi_grinder::grinder_address;
 use crate::server::{Server, WifiConfig, WifiGrinder};
 
 /// The shot window unless set (`--shot-window-s`).
-pub const DEFAULT_SHOT_WINDOW_S: u32 = 180;
+pub(crate) const DEFAULT_SHOT_WINDOW_S: u32 = 180;
 
 /// The shortest shot window the app can set; 0 (no limit) is allowed too.
 pub const MIN_SHOT_WINDOW_S: u32 = 30;
@@ -51,25 +51,25 @@ pub struct SettingsFile {
 pub struct FileData {
     /// Integrations added in the app (with their passwords).
     #[serde(default)]
-    pub integrations: Vec<SavedIntegration>,
+    pub(crate) integrations: Vec<SavedIntegration>,
     /// Settings changed in the app.
     #[serde(default, skip_serializing_if = "AppSettings::is_empty")]
-    pub settings: AppSettings,
+    pub(crate) settings: AppSettings,
     /// Keys this version does not know (written by a newer one), kept.
     #[serde(flatten)]
-    pub other: Map<String, Value>,
+    pub(crate) other: Map<String, Value>,
 }
 
 /// One integration added in the app.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SavedIntegration {
-    pub id: String,
-    pub kind: String,
+    pub(crate) id: String,
+    pub(crate) kind: String,
     pub settings: Settings,
     /// Moved here from the command line: while it is here, the flags and
     /// environment variables of its kind are ignored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub from_command_line: bool,
+    pub(crate) from_command_line: bool,
 }
 
 impl FileData {
@@ -113,7 +113,7 @@ impl SettingsFile {
 
     /// Changes the file: `change` edits a copy, which is written and only
     /// then kept. When writing fails, nothing changed.
-    pub fn update(&self, change: impl FnOnce(&mut FileData)) -> anyhow::Result<()> {
+    pub(crate) fn update(&self, change: impl FnOnce(&mut FileData)) -> anyhow::Result<()> {
         let mut data = self.lock();
         let mut next = data.clone();
         change(&mut next);
@@ -135,10 +135,10 @@ impl SettingsFile {
 /// Settings changed in the app, as saved. A missing value was not changed
 /// there.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct AppSettings {
+pub(crate) struct AppSettings {
     /// Seconds the machine waits for a shot; 0 waits forever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shot_window_s: Option<u32>,
+    pub(crate) shot_window_s: Option<u32>,
     /// The E65/E80 grinder's address; `Some(None)` when it was removed in
     /// the app over a start address (`""` in the API, `null` in the file).
     #[serde(
@@ -146,17 +146,17 @@ pub struct AppSettings {
         deserialize_with = "present",
         skip_serializing_if = "Option::is_none"
     )]
-    pub grinder_host: Option<Option<String>>,
+    pub(crate) grinder_host: Option<Option<String>>,
     /// Whether to look for a newer release once a day.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub update_check: Option<bool>,
+    pub(crate) update_check: Option<bool>,
     /// Settings this version does not know (written by a newer one), kept.
     #[serde(flatten)]
-    pub other: Map<String, Value>,
+    pub(crate) other: Map<String, Value>,
 }
 
 impl AppSettings {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
@@ -186,7 +186,7 @@ pub struct Startup {
 /// Where a setting's value comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SettingSource {
+pub(crate) enum SettingSource {
     Default,
     CommandLine,
     App,
@@ -194,17 +194,17 @@ pub enum SettingSource {
 
 /// A change from `PUT /api/settings`: only the keys that were sent.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct SettingsChange {
+pub(crate) struct SettingsChange {
     /// `Some(None)` goes back to the start setting (`null`).
-    pub shot_window_s: Option<Option<u32>>,
-    pub grinder_host: Option<HostChange>,
+    pub(crate) shot_window_s: Option<Option<u32>>,
+    pub(crate) grinder_host: Option<HostChange>,
     /// `Some(None)` goes back to the start setting (`null`).
-    pub update_check: Option<Option<bool>>,
+    pub(crate) update_check: Option<Option<bool>>,
 }
 
 /// A new grinder address from the app.
 #[derive(Debug, Clone, PartialEq)]
-pub enum HostChange {
+pub(crate) enum HostChange {
     /// Back to `--grinder` / `GRINDER_HOST`, if set (`null`): the app's
     /// value is forgotten.
     Reset,
@@ -228,7 +228,7 @@ pub fn shot_window_ok(secs: f64) -> bool {
 
 impl SettingsChange {
     /// Checks a request body; the error is a sentence for the person.
-    pub fn parse(body: &Value) -> Result<Self, String> {
+    pub(crate) fn parse(body: &Value) -> Result<Self, String> {
         let Value::Object(obj) = body else {
             return Err("expected a JSON object with the settings to change".into());
         };
@@ -298,7 +298,7 @@ fn or_null<T>(
 
 /// Why a change was not made. Nothing changed in either case.
 #[derive(Debug, PartialEq)]
-pub enum SettingsError {
+pub(crate) enum SettingsError {
     /// The settings file could not be written.
     Save(String),
     /// The link to the new grinder address could not be set up.
@@ -318,7 +318,7 @@ impl std::error::Error for SettingsError {}
 
 impl SettingsError {
     /// As a fixed code, for `code` in the API's errors.
-    pub fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::Save(_) => "settings_not_saved",
             Self::Grinder(_) => "grinder_link_failed",
@@ -579,7 +579,7 @@ impl Server {
     }
 
     /// `settings` in `GET /api/state`, and the reply to `PUT /api/settings`.
-    pub fn settings_json(&self) -> Value {
+    pub(crate) fn settings_json(&self) -> Value {
         self.live().json()
     }
 
@@ -587,7 +587,7 @@ impl Server {
     /// the start setting is dropped from the file. A new grinder address
     /// restarts the E65/E80 link (the pairing stays where it was kept); no
     /// address stops it.
-    pub fn change_settings(
+    pub(crate) fn change_settings(
         self: &Arc<Self>,
         change: SettingsChange,
     ) -> Result<Value, SettingsError> {

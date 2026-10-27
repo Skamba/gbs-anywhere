@@ -163,7 +163,7 @@ use crate::server::{Conn, Server, SettingsChange, history, page};
 
 /// The app's routes, answering only to home-network host names (`hosts`
 /// adds more) and refusing writes from other sites.
-pub fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::Router {
+pub(crate) fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::Router {
     // The page is built now, so a broken template fails when the server
     // starts, not on someone's first visit.
     page::page();
@@ -712,18 +712,18 @@ fn change_error(e: &ChangeError) -> Response {
 /// A measured shot as a person enters it. Time is required; the weight is
 /// in grams. Without one (or with 0), the machine uses the recipe weight.
 #[derive(Debug, Deserialize)]
-pub struct ShotInput {
-    pub time_s: Option<f64>,
-    pub time_ms: Option<u32>,
-    pub weight_g: Option<f64>,
+pub(crate) struct ShotInput {
+    pub(crate) time_s: Option<f64>,
+    pub(crate) time_ms: Option<u32>,
+    pub(crate) weight_g: Option<f64>,
     /// `weight_g`'s name in 0.2.1 and before, so a client that still sends
     /// it does not fall back to the recipe weight. `weight_g` wins when both
     /// are there.
-    pub volume_ml: Option<f64>,
+    pub(crate) volume_ml: Option<f64>,
 }
 
 impl ShotInput {
-    pub fn into_result(self) -> Result<ShotResult, &'static str> {
+    pub(crate) fn into_result(self) -> Result<ShotResult, &'static str> {
         let time = match (self.time_ms, self.time_s) {
             (Some(ms), _) => Some(Duration::from_millis(ms.into())),
             (None, Some(s)) => ShotResult::time_from_secs(s),

@@ -13,7 +13,7 @@ use super::WifiConfig;
 /// await, and it may be saving the pairing right then: the next link waits
 /// for it before it loads the pairing, so it starts from what the old one
 /// saved and the file always has one writer.
-pub type PairingLock = Arc<tokio::sync::Mutex<()>>;
+pub(crate) type PairingLock = Arc<tokio::sync::Mutex<()>>;
 
 /// What survives a restart.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

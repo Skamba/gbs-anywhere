@@ -22,48 +22,48 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// The API version the grinder speaks.
-pub const API_VERSION: u32 = 1;
+pub(crate) const API_VERSION: u32 = 1;
 
 /// The grinder's port for this API.
-pub const DEFAULT_PORT: u16 = 30001;
+pub(crate) const DEFAULT_PORT: u16 = 30001;
 
-pub const PATH_PAIRING_APPLICATION: &str = "/grinderApi/pairingApplication";
-pub const PATH_PAIRING_STATUS: &str = "/grinderApi/pairingStatus";
-pub const PATH_BREW_JOBS: &str = "/grinderApi/brewJobs";
-pub const PATH_BREW_ACCEPT: &str = "/grinderApi/brewAccept";
-pub const PATH_BREW_DONE: &str = "/grinderApi/brewDone";
+pub(crate) const PATH_PAIRING_APPLICATION: &str = "/grinderApi/pairingApplication";
+pub(crate) const PATH_PAIRING_STATUS: &str = "/grinderApi/pairingStatus";
+pub(crate) const PATH_BREW_JOBS: &str = "/grinderApi/brewJobs";
+pub(crate) const PATH_BREW_ACCEPT: &str = "/grinderApi/brewAccept";
+pub(crate) const PATH_BREW_DONE: &str = "/grinderApi/brewDone";
 
 /// `status` of a successful reply.
-pub const STATUS_OK: &str = "Ok";
+pub(crate) const STATUS_OK: &str = "Ok";
 /// `pairingStatus`: the application expired or the grinder restarted.
-pub const STATUS_APPLICATION_UNKNOWN: &str = "ClientErrorPairingAppIdNotFound";
+pub(crate) const STATUS_APPLICATION_UNKNOWN: &str = "ClientErrorPairingAppIdNotFound";
 /// `pairingApplication`: this device id is paired already.
-pub const STATUS_ALREADY_PAIRED: &str = "ClientErrorDevAlreadyPaired";
+pub(crate) const STATUS_ALREADY_PAIRED: &str = "ClientErrorDevAlreadyPaired";
 /// `brewAccept`: the job is gone (taken, timed out, or never existed).
-pub const STATUS_JOB_UNKNOWN: &str = "ClientErrorBrewJobNotExisting";
+pub(crate) const STATUS_JOB_UNKNOWN: &str = "ClientErrorBrewJobNotExisting";
 /// `brewDone`: no accepted job with that `grindUuid` (it timed out).
-pub const STATUS_ONGOING_JOB_UNKNOWN: &str = "ClientErrorOngoingJobNotExisting";
+pub(crate) const STATUS_ONGOING_JOB_UNKNOWN: &str = "ClientErrorOngoingJobNotExisting";
 
 /// Asks the grinder to pair. It lists the device under the available devices
 /// while someone has pairing started on the grinder.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PairingApplication {
-    pub version: u32,
+pub(crate) struct PairingApplication {
+    pub(crate) version: u32,
     /// Shown on the grinder.
-    pub name: String,
-    pub model: String,
-    pub manufacturer: String,
+    pub(crate) name: String,
+    pub(crate) model: String,
+    pub(crate) manufacturer: String,
     /// Identifies this machine to the grinder; keep it across restarts.
-    pub brew_device_id: String,
-    pub num_of_group_heads: u32,
+    pub(crate) brew_device_id: String,
+    pub(crate) num_of_group_heads: u32,
     /// Whether the machine sends `brewProgress` during a shot.
-    pub progress_supported: bool,
+    pub(crate) progress_supported: bool,
 }
 
 impl PairingApplication {
     /// gbs-anywhere as a one-group machine without live progress.
-    pub fn new(brew_device_id: &str) -> Self {
+    pub(crate) fn new(brew_device_id: &str) -> Self {
         Self {
             version: API_VERSION,
             name: "gbs-anywhere".to_owned(),
@@ -79,52 +79,52 @@ impl PairingApplication {
 /// Reply to [`PATH_PAIRING_APPLICATION`].
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PairingApplicationRes {
-    pub status: String,
-    pub application_id: Option<u32>,
+pub(crate) struct PairingApplicationRes {
+    pub(crate) status: String,
+    pub(crate) application_id: Option<u32>,
     /// The number the grinder shows next to the device, to tell it apart.
-    pub pairing_code: Option<u32>,
+    pub(crate) pairing_code: Option<u32>,
 }
 
 /// Reply to [`PATH_PAIRING_STATUS`].
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PairingStatusRes {
-    pub status: String,
+pub(crate) struct PairingStatusRes {
+    pub(crate) status: String,
     #[serde(default)]
-    pub accepted: bool,
+    pub(crate) accepted: bool,
     /// Sent once accepted. Also shown on the grinder under Configuration,
     /// once paired.
-    pub pairing_id: Option<u32>,
+    pub(crate) pairing_id: Option<u32>,
 }
 
 /// One job per Grind-by-Sync grind: the grinder wants this shot's numbers.
 /// Numbers are read as floats, so `28000.0` works as well as `28000`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BrewJob {
-    pub grind_uuid: String,
+pub(crate) struct BrewJob {
+    pub(crate) grind_uuid: String,
     /// Counted from 0 (group 1 on the grinder's screen is 0); absent for a
     /// one-group machine.
-    pub group_head_id: Option<u32>,
+    pub(crate) group_head_id: Option<u32>,
     /// The dose (single, double, ...) as a number; echoed back in
     /// [`BrewAccept`].
-    pub dose_type_expected: Option<Value>,
+    pub(crate) dose_type_expected: Option<Value>,
     /// The recipe's target time.
-    pub duration_expected_ms: Option<f64>,
+    pub(crate) duration_expected_ms: Option<f64>,
     /// The recipe's target weight in the cup; 0 when the recipe has none.
-    pub brew_weight_expected_mg: Option<f64>,
+    pub(crate) brew_weight_expected_mg: Option<f64>,
 }
 
 impl BrewJob {
     /// The recipe's target weight in grams, if any.
-    pub fn target_grams(&self) -> Option<f64> {
+    pub(crate) fn target_grams(&self) -> Option<f64> {
         let mg = self.brew_weight_expected_mg?;
         (mg.is_finite() && mg > 0.0).then(|| mg / 1000.0)
     }
 
     /// The recipe's target time in milliseconds, if any (at least 1 ms).
-    pub fn target_ms(&self) -> Option<u32> {
+    pub(crate) fn target_ms(&self) -> Option<u32> {
         let ms = self.duration_expected_ms?;
         (ms.is_finite() && ms >= 1.0).then(|| ms.min(f64::from(u32::MAX)) as u32)
     }
@@ -133,28 +133,28 @@ impl BrewJob {
 /// Reply to [`PATH_BREW_JOBS`].
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BrewJobsRes {
-    pub status: String,
+pub(crate) struct BrewJobsRes {
+    pub(crate) status: String,
     #[serde(default)]
-    pub brew_jobs: Vec<BrewJob>,
+    pub(crate) brew_jobs: Vec<BrewJob>,
 }
 
 /// The machine takes a job: the shot is on its way.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BrewAccept {
-    pub version: u32,
-    pub pairing_id: u32,
-    pub grind_uuid: String,
-    pub group_head_id: u32,
-    pub dose_type: Option<Value>,
+pub(crate) struct BrewAccept {
+    pub(crate) version: u32,
+    pub(crate) pairing_id: u32,
+    pub(crate) grind_uuid: String,
+    pub(crate) group_head_id: u32,
+    pub(crate) dose_type: Option<Value>,
 }
 
 impl BrewAccept {
     /// Takes the job for its group, or the first group (0) when it names
     /// none. Grind-by-Sync only learns from shots of the group selected on the
     /// grinder ("Grouphead Selection"), shown there counted from 1.
-    pub fn new(pairing_id: u32, job: &BrewJob) -> Self {
+    pub(crate) fn new(pairing_id: u32, job: &BrewJob) -> Self {
         Self {
             version: API_VERSION,
             pairing_id,
@@ -167,7 +167,7 @@ impl BrewAccept {
 
 /// How a shot ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum BrewResult {
+pub(crate) enum BrewResult {
     Success,
     /// The grinder skips it.
     Canceled,
@@ -176,24 +176,24 @@ pub enum BrewResult {
 /// The finished shot.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BrewDone {
-    pub version: u32,
-    pub pairing_id: u32,
-    pub grind_uuid: String,
-    pub duration_final_ms: u32,
-    pub mass_final_mg: u64,
+pub(crate) struct BrewDone {
+    pub(crate) version: u32,
+    pub(crate) pairing_id: u32,
+    pub(crate) grind_uuid: String,
+    pub(crate) duration_final_ms: u32,
+    pub(crate) mass_final_mg: u64,
     /// New for every shot.
-    pub brew_event_uuid: String,
-    pub result: BrewResult,
+    pub(crate) brew_event_uuid: String,
+    pub(crate) result: BrewResult,
 }
 
 impl BrewDone {
     /// Most a shot can weigh when sent: a typo, not coffee, beyond this.
-    pub const MAX_MASS_MG: u64 = 5_000_000;
+    pub(crate) const MAX_MASS_MG: u64 = 5_000_000;
 
     /// The answer to `job`: `time_ms` and `grams` as measured (`grams` is
     /// kept between 0 and [`Self::MAX_MASS_MG`]).
-    pub fn new(
+    pub(crate) fn new(
         pairing_id: u32,
         job: &BrewJob,
         result: BrewResult,
@@ -221,13 +221,13 @@ impl BrewDone {
 /// Any request that only needs the pairing ([`PATH_BREW_JOBS`]).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Paired {
-    pub version: u32,
-    pub pairing_id: u32,
+pub(crate) struct Paired {
+    pub(crate) version: u32,
+    pub(crate) pairing_id: u32,
 }
 
 impl Paired {
-    pub fn new(pairing_id: u32) -> Self {
+    pub(crate) fn new(pairing_id: u32) -> Self {
         Self {
             version: API_VERSION,
             pairing_id,
@@ -238,7 +238,7 @@ impl Paired {
 /// A reply body as text. The grinder labels its replies UTF-8 but sends
 /// some text (its own name: "Mahlkönig") as Latin-1, so bytes that are not
 /// valid UTF-8 are read as Latin-1 instead of failing.
-pub fn decode(body: &[u8]) -> Cow<'_, str> {
+pub(crate) fn decode(body: &[u8]) -> Cow<'_, str> {
     match std::str::from_utf8(body) {
         Ok(s) => Cow::Borrowed(s),
         Err(_) => Cow::Owned(body.iter().map(|&b| char::from(b)).collect()),

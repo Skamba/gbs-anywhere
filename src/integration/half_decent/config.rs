@@ -5,9 +5,9 @@ use anyhow::bail;
 use crate::integration::{Field, Input, Settings};
 
 /// The scale's own name on the network.
-pub const DEFAULT_HOST: &str = "hds.local";
+pub(crate) const DEFAULT_HOST: &str = "hds.local";
 
-pub const FIELDS: &[Field] = &[Field {
+pub(crate) const FIELDS: &[Field] = &[Field {
     key: "host",
     label: "Scale IP address",
     help: "The scale's IP address, e.g. 192.168.1.40 (hds.local works outside Docker). \
@@ -19,13 +19,13 @@ pub const FIELDS: &[Field] = &[Field {
 
 /// Which scale to read.
 #[derive(Debug, Clone)]
-pub struct Config {
+pub(crate) struct Config {
     /// `host` or `host:port`.
-    pub host: String,
+    pub(crate) host: String,
 }
 
 impl Config {
-    pub fn from_settings(s: &Settings) -> anyhow::Result<Self> {
+    pub(crate) fn from_settings(s: &Settings) -> anyhow::Result<Self> {
         Ok(Self {
             host: host(s.text("host").unwrap_or(DEFAULT_HOST))?,
         })
@@ -60,16 +60,16 @@ fn host(input: &str) -> anyhow::Result<String> {
 #[derive(Debug, Clone, clap::Args)]
 #[group(id = "half_decent")]
 #[command(next_help_heading = "Half Decent Scale")]
-pub struct Args {
+pub(crate) struct Args {
     /// The scale's address: its IP address, or hds.local outside Docker.
     /// Enables reporting shots weighed on a Half Decent Scale over WiFi.
     #[arg(long, env = "HDS_HOST")]
-    pub hds_host: Option<String>,
+    pub(crate) hds_host: Option<String>,
 }
 
 impl Args {
     /// The settings, or `None` when `--hds-host` is not given.
-    pub fn settings(&self) -> Option<Settings> {
+    pub(crate) fn settings(&self) -> Option<Settings> {
         Some(Settings::new().with("host", Some(self.hds_host.as_ref()?)))
     }
 }

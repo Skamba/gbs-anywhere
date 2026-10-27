@@ -23,7 +23,7 @@ use crate::server::Server;
 use crate::server::private_file::{make_private, save_private};
 
 /// Shots kept.
-pub const CAPACITY: usize = 200;
+pub(crate) const CAPACITY: usize = 200;
 
 /// Far more than [`CAPACITY`] shots take: a bigger file is not a history.
 const MAX_FILE_BYTES: u64 = 4 << 20;
@@ -32,7 +32,7 @@ const MAX_FILE_BYTES: u64 = 4 << 20;
 /// `success` and `error`; they read as `succeeded` and `failed`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ShotOutcome {
+pub(crate) enum ShotOutcome {
     /// Measured and sent to the grinder.
     #[serde(alias = "success")]
     Succeeded,
@@ -59,39 +59,39 @@ impl ShotOutcome {
 /// One shot in the history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(from = "StoredShot")]
-pub struct Shot {
-    pub id: String,
+pub(crate) struct Shot {
+    pub(crate) id: String,
     /// When the grinder asked for it (UTC): `ended_at` less how long the
     /// shot took in whole seconds, counted on the machine's clock.
-    pub started_at: String,
+    pub(crate) started_at: String,
     /// When it ended, as the wall clock read then (UTC). A clock step during
     /// the shot does not change how far apart the two are.
-    pub ended_at: String,
-    pub outcome: ShotOutcome,
+    pub(crate) ended_at: String,
+    pub(crate) outcome: ShotOutcome,
     /// How long it ran, from the grinder's request to its end, counted on
     /// the machine's clock (as `running_ms` on its `shot_reported` or
     /// `shot_aborted` event). Files from before it was kept give
     /// `ended_at` less `started_at`, in whole seconds.
-    pub running_ms: Option<u64>,
+    pub(crate) running_ms: Option<u64>,
     /// Only for a success.
-    pub time_ms: Option<u32>,
-    pub weight_g: Option<f64>,
+    pub(crate) time_ms: Option<u32>,
+    pub(crate) weight_g: Option<f64>,
     /// Only for a success: whether the grinder adjusts from its time, as on
     /// its `shot_reported` event. None when the shot's window is not known
     /// (an E65/E80 brew job without a target time); older files have none.
-    pub in_grinder_range: Option<bool>,
+    pub(crate) in_grinder_range: Option<bool>,
     /// Only for a success: the integration that reported it, as on its
     /// `shot_reported` event. None when it was typed in the app or sent
     /// through the API, and in older files.
-    pub integration_id: Option<String>,
+    pub(crate) integration_id: Option<String>,
     /// What the grinder aims for, when it said.
-    pub target_time_ms: Option<u32>,
-    pub target_weight_g: Option<f64>,
+    pub(crate) target_time_ms: Option<u32>,
+    pub(crate) target_weight_g: Option<f64>,
     /// Why it was not a success, in words.
-    pub reason: Option<String>,
+    pub(crate) reason: Option<String>,
     /// The same as a fixed code, for the app to match on. Older files have
     /// none and get it from `reason` when read.
-    pub cause: Option<AbortCause>,
+    pub(crate) cause: Option<AbortCause>,
 }
 
 /// A shot as files keep it, including those written by earlier builds:
@@ -170,7 +170,7 @@ fn cause_of(reason: &str) -> Option<AbortCause> {
 
 /// The shots, and the file they are kept in.
 #[derive(Default)]
-pub struct History {
+pub(crate) struct History {
     shots: Mutex<VecDeque<Shot>>,
     file: OnceLock<PathBuf>,
     /// Whether the last save worked. Each save writes every shot, so the
@@ -185,14 +185,14 @@ struct HistoryFile {
 
 impl History {
     /// Newest first.
-    pub fn list(&self) -> Vec<Shot> {
+    pub(crate) fn list(&self) -> Vec<Shot> {
         self.lock().iter().cloned().collect()
     }
 
     /// Whether the history survives a restart: the last save worked (a
     /// volume can fill up or turn read-only later). The file is set only
     /// once the first save worked, so without one this stays false.
-    pub fn persistent(&self) -> bool {
+    pub(crate) fn persistent(&self) -> bool {
         self.saved.load(Ordering::Relaxed)
     }
 
@@ -489,7 +489,7 @@ fn wall_time(at: Instant) -> SystemTime {
 
 impl Server {
     /// The shots so far.
-    pub fn history(&self) -> &History {
+    pub(crate) fn history(&self) -> &History {
         &self.history
     }
 

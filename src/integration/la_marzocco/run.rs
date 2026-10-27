@@ -18,8 +18,8 @@ const MAX_BACKOFF: Duration = Duration::from_secs(300);
 const PERMANENT_RETRY: Duration = Duration::from_secs(3600);
 
 /// The integration. See the module docs.
-pub struct LaMarzocco {
-    pub cfg: Config,
+pub(crate) struct LaMarzocco {
+    pub(crate) cfg: Config,
 }
 
 impl Integration for LaMarzocco {
@@ -33,7 +33,7 @@ impl Integration for LaMarzocco {
 /// The coffee to report: the newest one logged after `after_ms`, if valid.
 /// Invalid ones (the cloud's own judgement) are skipped so the grinder keeps
 /// waiting for a real shot.
-pub fn new_coffee(coffees: &[LastCoffee], after_ms: i64) -> Option<&LastCoffee> {
+pub(crate) fn new_coffee(coffees: &[LastCoffee], after_ms: i64) -> Option<&LastCoffee> {
     coffees
         .iter()
         .filter(|c| c.time > after_ms)

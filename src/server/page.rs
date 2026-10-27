@@ -648,7 +648,7 @@ mod tests {
     fn error_codes() -> BTreeSet<String> {
         use crate::integration::ChangeError;
         use crate::protocol::MachineError;
-        use crate::server::SettingsError;
+        use crate::server::settings::SettingsError;
         use crate::server::wifi_grinder::PairingIdRefusal;
         let machine = [
             MachineError::NotRunning,
