@@ -28,6 +28,53 @@
     return node;
   }
 
+  /** What tells a focusable element from its siblings across a rebuild:
+   *  its data-key, else its id, else the action it runs (data-act). */
+  const focusKey = (e) => (e && e.nodeType === 1 && (e.dataset.key || e.id || (e.dataset.act && "act:" + e.dataset.act))) || null;
+  function byFocusKey(box, key) {
+    for (const e of box.querySelectorAll("[data-key], [id], [data-act]")) if (focusKey(e) === key) return e;
+    return null;
+  }
+  /** Puts `nodes` into `box` in order. Nodes already in it stay where they
+   *  are (an open form keeps its focus and what was typed), the rest is
+   *  replaced around them. */
+  function place(box, nodes) {
+    const keep = new Set(nodes.filter((n) => n.parentNode === box));
+    for (const c of [...box.childNodes]) if (!keep.has(c)) c.remove();
+    let prev = null;
+    for (const n of nodes) {
+      if (prev ? prev.nextSibling !== n : box.firstChild !== n) {
+        if (prev) prev.after(n); else box.prepend(n);
+      }
+      prev = n;
+    }
+  }
+  // The signature each box was last built with (see patch).
+  const builtWith = new WeakMap();
+  /** Rebuilds `box` from `build()` (a list of nodes) only when `sig`
+   *  differs from the one it was last built with, so what does not change
+   *  is not redone between polls. The element that had the focus gets it
+   *  back by its key (focusKey), a field with its caret. Returns whether it
+   *  rebuilt. */
+  function patch(box, sig, build) {
+    if (builtWith.get(box) === sig) return false;
+    builtWith.set(box, sig);
+    const at = document.activeElement;
+    const key = at && at !== box && box.contains(at) ? focusKey(at) : null;
+    const caret = key && at.tagName === "INPUT" ? [at.selectionStart, at.selectionEnd] : null;
+    place(box, build());
+    if (key && !box.contains(document.activeElement)) {
+      const again = byFocusKey(box, key);
+      if (again) {
+        again.focus({ preventScroll: true });
+        if (caret && again.tagName === "INPUT") { try { again.setSelectionRange(caret[0], caret[1]); } catch (_) {} }
+      }
+    }
+    return true;
+  }
+  /** Rebuilds `box` on the next patch, whatever its signature. */
+  const repatch = (box) => builtWith.delete(box);
+
   /** A plain click: not one that opens a new tab or window. */
   const plainClick = (e) => !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0);
 
@@ -611,7 +658,7 @@
       // The grinder alone on a line says nothing System status doesn't.
       if (items.length === 1 && items[0] === grinder) items.length = 0;
     }
-    box.replaceChildren(...(items.length ? [el("div", { class: "checks-in" }, ...items.map(([cls, ic, text]) =>
+    patch(box, JSON.stringify(items), () => (items.length ? [el("div", { class: "checks-in" }, ...items.map(([cls, ic, text]) =>
       el("span", { class: cls }, ic ? icon(ic, 14, ic === "check" ? 2.6 : 2.2) : null, text)))] : []));
   }
 
@@ -1112,23 +1159,27 @@
     const age = S.grinder.last_poll_age_ms;
     const typed = S.settings && S.settings.grinder_host;
     const facts = [
-      ["ip", e65 ? (typed || (wifi && urlHost(wifi.grinder)) || "–") : (hostOf(S.grinder.peer) || "–")],
+      ["grinder.fact.ip", e65 ? (typed || (wifi && urlHost(wifi.grinder)) || "–") : (hostOf(S.grinder.peer) || "–")],
     ];
     // The address an E64 WS polls; in Docker's range, with a note that it
     // is likely the container's own, until a grinder polled: then it found
     // the right one.
     const own = e65 ? null : ownAddress();
     const shown = own && own.ip && !(own.docker && age != null);
-    if (shown) facts.push(["serverIp", own.ip]);
+    if (shown) facts.push(["grinder.fact.serverIp", own.ip]);
     $("g-ip-docker").hidden = !(shown && own.docker);
-    if (e65) facts.push(["pairingId", wifi && wifi.pairing_id != null ? String(wifi.pairing_id) : t("grinder.fact.notPaired")]);
-    if (wifi && wifi.pairing_code != null && wifi.state === "pairing") facts.push(["pairingCode", String(wifi.pairing_code)]);
-    facts.push(["lastContact", age == null ? t("grinder.fact.never") : ago(age)]);
+    if (e65) facts.push(["grinder.fact.pairingId", wifi && wifi.pairing_id != null ? String(wifi.pairing_id) : t("grinder.fact.notPaired")]);
+    if (wifi && wifi.pairing_code != null && wifi.state === "pairing") facts.push(["grinder.fact.pairingCode", String(wifi.pairing_code)]);
+    facts.push(["grinder.fact.lastContact", age == null ? t("grinder.fact.never") : ago(age)]);
     // Idle only with a grinder to brew for; a shot under way still shows.
     const phase = S.shot.phase;
     const inShot = phase === "running" || phase === "finishing";
-    facts.push(["group", inShot ? t("grinder.group." + phase) : on ? t("grinder.group.idle") : "–"]);
-    $("g-facts").replaceChildren(...facts.map(([k, v]) => el("div", null, el("dt", { text: t("grinder.fact." + k) }), el("dd", { text: v }))));
+    facts.push(["grinder.fact.group", inShot ? t("grinder.group." + phase) : on ? t("grinder.group.idle") : "–"]);
+    // Rebuilt when the names change; the values (the last contact moves on
+    // with every poll) are written in place.
+    const box = $("g-facts");
+    patch(box, JSON.stringify([lang, facts.map((x) => x[0])]), () => facts.map(([k]) => el("div", null, el("dt", { text: t(k) }), el("dd"))));
+    facts.forEach(([, v], n) => setText(box.children[n].lastChild, v));
   }
 
   $("g-setup").addEventListener("click", () => openSetup("setup"));
@@ -1140,7 +1191,7 @@
   /** The ⋮ button that opens the menu `key`. */
   function menuButton(key, label) {
     return el("button", {
-      type: "button", class: "kebab", "aria-label": label, "data-menu": key,
+      type: "button", class: "kebab", "aria-label": label, "data-menu": key, "data-key": "kebab:" + key,
       "aria-haspopup": "menu", "aria-expanded": String(menuFor === key),
       onclick: (e) => {
         e.stopPropagation();
@@ -1149,11 +1200,11 @@
       },
     }, kebab());
   }
-  /** The open menu: `actions` are [name, icon, class, run]. */
-  function menuList(label, actions) {
+  /** The open menu `key`: `actions` are [name, icon, class, run]. */
+  function menuList(key, label, actions) {
     return el("div", { class: "menu", role: "menu", "aria-label": label },
-      actions.map(([name, ic, cls, run]) => el("button", {
-        type: "button", role: "menuitem", class: cls,
+      actions.map(([name, ic, cls, run], n) => el("button", {
+        type: "button", role: "menuitem", class: cls, "data-key": key + ":" + n,
         onclick: () => { closeMenu(false); run(); },
       }, icon(ic, 18, 2), name)));
   }
@@ -1187,7 +1238,6 @@
   const gMore = menuButton("grinder", "");
   gMore.hidden = true;   // until the state is in
   $("g-end").append(gMore);
-  let gMenuSig = "";
   function grinderActions() {
     const acts = [[S.settings && S.settings.grinder_host ? t("grinder.host.change") : t("grinder.host.enter"), "edit", "", () => hostEditor(true)]];
     if (wifiPaired()) acts.push([t("grinder.clear"), "trash", "danger", () => openSetup("repair")]);
@@ -1196,22 +1246,17 @@
   function renderGrinderMenu() {
     const open = menuFor === "grinder";
     const acts = grinderActions();
-    const sig = JSON.stringify([lang, open, acts.map((a) => a[0])]);
-    if (sig === gMenuSig) return;
-    gMenuSig = sig;
     gMore.hidden = false;
     gMore.setAttribute("aria-label", t("grinder.more"));
     gMore.setAttribute("aria-expanded", String(open));
-    const old = $("g-card").querySelector(":scope > .menu");
-    if (old) old.remove();
-    if (open) $("g-card").append(menuList(t("grinder.menu"), acts));
+    patch($("g-menu"), JSON.stringify([lang, open, acts.map((a) => a[0])]), () => (open ? [menuList("grinder", t("grinder.menu"), acts)] : []));
   }
 
   // Integrations list. Rebuilt only when something shown changes; an open
   // edit form stays in place while the other cards change around it.
-  let integSig = "", editing = null, editForm = null, integOpen = store.get("integOpen") !== "0";
+  let editing = null, editForm = null, integOpen = store.get("integOpen") !== "0";
   /** Rebuilds the integrations list on the next render, and renders. */
-  function invalidateIntegrations() { integSig = ""; renderStatus(); }
+  function invalidateIntegrations() { repatch($("integ-list")); renderStatus(); }
   function renderIntegrations() {
     const list = S.integrations || [];
     $("integ-count").textContent = String(list.length);
@@ -1222,20 +1267,28 @@
     $("integ-empty").hidden = list.length > 0 || adding;
     // Deleted from another phone while being edited here: the form goes.
     if (editing && !list.some((i) => i.id === editing)) { editing = null; editForm = null; }
-    const sig = JSON.stringify([list.map((i) => [i.id, i.title, i.subject, i.health, i.detail, integDetail(i), i.last_error, i.reports, i.source, i.adoptable, i.kind]),
+    // Not for a status line that moves on by itself ("last coffee 5 min
+    // ago", a live weight): that is written in place, so an open ⋮ menu
+    // keeps its focus.
+    const sig = JSON.stringify([lang, list.map((i) => [i.id, i.title, i.subject, i.health, i.reports, i.source, i.adoptable, i.kind]),
       !!kinds, menuFor, editing]);
-    if (sig === integSig) return;
-    integSig = sig;
     const box = $("integ-list");
-    const nodes = list.map((i) => (i.id === editing && editForm) || integItem(i));
-    if (editForm && editForm.parentNode === box) {
-      // The other cards change around the open form, which keeps its focus
-      // and what was typed.
-      const at = nodes.indexOf(editForm);
-      for (const c of [...box.children]) if (c !== editForm) c.remove();
-      editForm.before(...nodes.slice(0, at));
-      editForm.after(...nodes.slice(at + 1));
-    } else box.replaceChildren(...nodes);
+    patch(box, sig, () => list.map((i) => (i.id === editing && editForm) || integItem(i)));
+    list.forEach((i, n) => {
+      const line = box.children[n] && box.children[n].querySelector(":scope > .integ-detail");
+      if (!line) return;   // the edit form
+      const text = integLine(i);
+      setText(line, text);
+      line.hidden = !text;
+    });
+  }
+
+  /** An integration's status line: its error while failing, else what it
+   *  says it does. */
+  function integLine(i) {
+    const text = i.health === "failing" ? (i.last_error || i.detail || t("integ.errorFallback"))
+      : i.health === "stopped" ? t("integ.stopped") : integDetail(i);
+    return sentence(text).replace(/\.$/, "");
   }
 
   function integItem(i) {
@@ -1253,15 +1306,14 @@
         el("span", { class: "pill-sm t-" + tone }, el("span", { class: "dot" }), label),
         actions.length ? more : null));
     const bad = i.health === "failing" || i.health === "stopped";
-    const detailText = i.health === "failing" ? (i.last_error || i.detail || t("integ.errorFallback"))
-      : i.health === "stopped" ? t("integ.stopped") : integDetail(i);
     const foot = [];
     if (i.reports > 0) foot.push(t("integ.reports", { n: i.reports }));
     if (i.source === "command_line") foot.push(t("integ.fromStart"));
+    // The status line is filled in by renderIntegrations.
     const item = el("div", { class: "integ" }, head,
-      detailText ? el("p", { class: "integ-detail" + (bad ? " bad" : ""), text: sentence(detailText).replace(/\.$/, "") }) : null,
+      el("p", { class: "integ-detail" + (bad ? " bad" : ""), hidden: true }),
       foot.length ? el("p", { class: "foot", text: foot.join(" · ") }) : null);
-    if (menuFor === key) item.append(menuList(t("integ.menu", { title: i.title }), actions));
+    if (menuFor === key) item.append(menuList(key, t("integ.menu", { title: i.title }), actions));
     return item;
   }
 
@@ -1777,7 +1829,6 @@
     setLanguage();
     applyStatic();
     renderLanguage();
-    integSig = "";
     win.msg = "";
     setHint();
     rebuildLogLines();
@@ -1900,6 +1951,7 @@
   let hHidden = {};
   try { hHidden = JSON.parse(store.get("historyHidden") || "{}") || {}; } catch (_) {}
   let histLoading = false, histTried = 0, histError = "";
+  let histGen = 0;   // counts the history loads, for renderHistory's signature
 
   async function loadHistory() {
     if (histLoading) return;
@@ -1907,6 +1959,7 @@
     histTried = Date.now();
     try {
       hist = await api("/api/history");
+      histGen++;
       histState = "ok";
     } catch (e) {
       // Tried again shortly (see refresh).
@@ -1971,19 +2024,19 @@
     const chips = $("h-chips"), groups = $("h-groups"), empty = $("h-empty"), foot = $("h-foot");
     chips.hidden = !hist;
     if (!hist) {
-      groups.replaceChildren(); empty.hidden = false; foot.hidden = true;
-      empty.textContent = histState === "failed" ? t("history.failed", { error: histError }) : t("history.loading");
+      patch(groups, "", () => []); empty.hidden = false; foot.hidden = true;
+      setText(empty, histState === "failed" ? t("history.failed", { error: histError }) : t("history.loading"));
       return;
     }
-    chips.replaceChildren(...HKINDS.map((k) => {
-      const on = !hHidden[k];
-      const n = shots.filter((s) => s.outcome === k).length;
-      return el("button", {
-        type: "button", class: "chip-hit k-" + k, "aria-pressed": String(on),
-        "aria-label": t("history.chip", { label: kindLabel(k), n }),
-        onclick: () => { hHidden[k] = on; store.set("historyHidden", JSON.stringify(hHidden)); renderHistory(); },
-      }, el("span", { class: "chip" }, kindLabel(k), el("span", { class: "chip-count", text: fmt.int.format(n) })));
-    }));
+    // Rebuilt only when something shown changes (every poll renders), so
+    // a chip keeps the focus; a tapped one gets it back by its key.
+    const counts = HKINDS.map((k) => shots.filter((s) => s.outcome === k).length);
+    const shown = (k) => !hHidden[k];
+    patch(chips, JSON.stringify([lang, locale, HKINDS.map(shown), counts]), () => HKINDS.map((k, i) => el("button", {
+      type: "button", class: "chip-hit k-" + k, "aria-pressed": String(shown(k)), "data-key": "chip:" + k,
+      "aria-label": t("history.chip", { label: kindLabel(k), n: counts[i] }),
+      onclick: () => { hHidden[k] = shown(k); store.set("historyHidden", JSON.stringify(hHidden)); renderHistory(); },
+    }, el("span", { class: "chip" }, kindLabel(k), el("span", { class: "chip-count", text: fmt.int.format(counts[i]) })))));
     // Newest first by the time shown, so a shot dated wrongly (the clock
     // was not set, or stepped) cannot split the days; those without a
     // known day come last, newest recorded first.
@@ -1998,7 +2051,10 @@
       byDay.get(label).items.push(x);
     }
     const days = [...byDay.values()];
-    groups.replaceChildren(...days.map((g) => el("section", { class: "day" },
+    // The days are named from today ("Today", "Yesterday"), which moves on
+    // at midnight; a timeout without its times says the shot window.
+    const today = new Date().toDateString();
+    patch(groups, JSON.stringify([lang, locale, HKINDS.map(shown), histGen, today, windowS()]), () => days.map((g) => el("section", { class: "day" },
       el("h2", { text: g.label }),
       el("ul", null, g.items.map(({ s, d }) => {
         const sub = shotSub(s);
@@ -2009,10 +2065,10 @@
           el("span", { class: "h-badge", text: ignored ? t("history.ignored") : kindLabel(s.outcome) }));
       })))));
     empty.hidden = visible.length > 0;
-    empty.textContent = shots.length === 0 ? t("history.empty") : t("history.noMatch");
+    setText(empty, shots.length === 0 ? t("history.empty") : t("history.noMatch"));
     foot.hidden = false;
     const kept = { n: hist.capacity || 200 };
-    foot.textContent = hist.persistent === false ? t("history.keptMemory", kept) : t("history.kept", kept);
+    setText(foot, hist.persistent === false ? t("history.keptMemory", kept) : t("history.kept", kept));
   }
 
   // --- Log ---------------------------------------------------------------------
@@ -2518,22 +2574,19 @@
     setText($("wz-progress"), progress);
 
     // Rebuilt only when something shown changes, so a field keeps what is
-    // typed and the focus stays put between polls.
+    // typed and the focus stays put between polls; after a rebuild the
+    // focus goes back to the same head, field or answer (see patch).
     const sig = JSON.stringify([lang, wz.kind, at, cards, states, wz.open, F ? F.sig(at) : null]);
     if (sig !== wz.sig) {
       wz.sig = sig;
-      $("wz-bars").replaceChildren(...steps.map((n) => el("span", { class: "wz-bar " + F.card(n, at) })));
-      const active = document.activeElement;
-      const keep = active && $("wz-steps").contains(active) && active.id ? active.id : null;
-      $("wz-steps").replaceChildren(
+      patch($("wz-bars"), sig, () => steps.map((n) => el("span", { class: "wz-bar " + F.card(n, at) })));
+      patch($("wz-steps"), sig, () => [
         ...(F ? F.top(at) : []),
         ...cards.map((n, i) => setupCardEl(F, n, states[i], at)),
-        ...(F ? F.end(at) : []));
+        ...(F ? F.end(at) : [])]);
       wz.reveal = null;
-      if (!wz.focus) wz.focus = keep;
     }
-    // Where an answer moves the focus to (or back where it was, after a
-    // rebuild); a field keeps its caret at the end.
+    // Where an answer moves the focus to; a field keeps its caret at the end.
     const target = wz.focus && $(wz.focus);
     wz.focus = null;
     if (target && document.activeElement !== target) {

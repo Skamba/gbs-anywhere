@@ -287,7 +287,9 @@ nav.tabs a[aria-current="page"] { background: var(--nav-on); color: var(--ink); 
 
 /* Status tab */
 .g-card { position: relative; }
-.g-card > .menu { top: 56px; right: 14px; }
+/* The slot takes no room in the card's stack; the menu inside it floats. */
+.menu-slot { display: contents; }
+#g-menu > .menu { top: 56px; right: 14px; }
 .g-setup { align-self: flex-start; }
 .tile-icon { flex: none; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--tile); color: var(--nav-ink); }
 .pill-sm {
