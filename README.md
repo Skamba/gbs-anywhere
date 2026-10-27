@@ -359,7 +359,7 @@ package) or after `--` (cargo):
 
 | flag | default | what |
 |---|---|---|
-| `--shot-window-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever); **Time to pull the shot** set in the app wins; `--brew-timeout-s`, its name until 0.2.1, still works |
+| `--shot-window-s <s>` | 180 | give up on a shot with no numbers after this long (30 to 3600, as in the app; 0 waits forever); **Time to pull the shot** set in the app wins; `--brew-timeout-s`, its name until 0.2.1, still works |
 | `--config <file>` | off (Docker: `/data/gbs-anywhere.json`, package: `/var/lib/gbs-anywhere/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings, integrations moved from the command line); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
 | `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
@@ -368,7 +368,7 @@ package) or after `--` (cargo):
 | `--control <addr>` | `127.0.0.1:8787` (Docker and package: `off`) | a second address for the app and its API, besides the ports above; `off` turns it off |
 | `--no-stdin` | off (Docker and package: on) | no console prompt, for running as a service |
 | `--allow-host <names>` | off | also open the app by these host names, each in full (e.g. `gbs.tail1234.ts.net`), comma-separated; `*` alone allows any name, even that of a web page that re-points its own name to this address; the IP address and home-network names always work; also `ALLOW_HOST` |
-| `--finishing-hold-s <s>` | 6 | how long the machine shows a shot as finishing before it is ready again (up to 3600); keep it at least one E64 WS poll |
+| `--finishing-hold-s <s>` | 6 | how long the machine shows a shot as finishing before it is ready again, 3 to 60: the E64 WS polls every 2 s and takes the shot only from a poll that sees it finish, and the next shot waits for it |
 | `--serial <sn>` | built in | the machine serial number the E64 WS is shown |
 | `--accept-browser-headers` | off | let requests with browser headers reach the E64 WS's routes; only if the log says your E64 WS was refused (then please report it) |
 | `--grinder <host>` | off | pair with this E65/E80 GbS over its Local WiFi; also `GRINDER_HOST`; an address set in the app wins |

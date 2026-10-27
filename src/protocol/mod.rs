@@ -21,6 +21,8 @@ pub mod machine;
 pub mod wifi;
 pub mod wire;
 
+use std::time::Duration;
+
 pub use grinder::{BrewState, GrinderEvent, GrinderModel};
 pub use machine::{
     AbortCause, GrinderRange, Machine, MachineConfig, MachineError, MachineEvent, Phase, ShotResult,
@@ -42,6 +44,18 @@ pub const START_BREW_SCRIPT_ID: i64 = 9;
 /// The grinder re-sends the start-brew request until the machine enters
 /// `ACTIVE SERVING`, at most this many times.
 pub const START_BREW_MAX_SENDS: u32 = 3;
+
+/// How often the E64 WS polls `GET /api/v2/mako`.
+pub const E64_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The shortest finishing hold (`--finishing-hold-s`): the E64 WS takes a
+/// shot's result only from a poll that sees `ACTIVE FINISHING`, so the hold
+/// spans at least one poll ([`E64_POLL_INTERVAL`]), with room for a late one.
+pub const MIN_FINISHING_HOLD: Duration = Duration::from_secs(3);
+
+/// The longest finishing hold: while a shot is shown as finishing, the
+/// machine starts no other, so an E65/E80's next brew job waits for it.
+pub const MAX_FINISHING_HOLD: Duration = Duration::from_secs(60);
 
 /// The grinder does not adjust from a shot of 10 s or less
 /// (`REAL_EXTRACTION_TIME_MS <= 10000`) and leaves it to the person to grind

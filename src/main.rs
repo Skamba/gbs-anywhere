@@ -26,7 +26,11 @@ use std::time::Duration;
 use clap::Parser;
 use gbs_anywhere::integration;
 use gbs_anywhere::protocol::machine::EventRecord;
-use gbs_anywhere::protocol::{MachineConfig, MachineEvent, ShotResult};
+use gbs_anywhere::protocol::{
+    E64_POLL_INTERVAL, MAX_FINISHING_HOLD, MIN_FINISHING_HOLD, MachineConfig, MachineEvent,
+    ShotResult,
+};
+use gbs_anywhere::server::settings::{self, MAX_SHOT_WINDOW_S, MIN_SHOT_WINDOW_S};
 use gbs_anywhere::server::{self, LogBook, ServeConfig, Server, SettingsFile, Startup};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -54,14 +58,16 @@ struct Args {
     #[arg(short, long)]
     log: Option<PathBuf>,
 
-    /// Seconds to show ACTIVE FINISHING before going back to ON (>= 1 poll).
-    #[arg(long, default_value_t = 6.0, value_parser = up_to_an_hour)]
+    /// Seconds to show ACTIVE FINISHING before going back to ON: 3 to 60, so
+    /// the E64 WS, polling every 2 s, sees it.
+    #[arg(long, default_value_t = 6.0, value_name = "S", value_parser = finishing_hold)]
     finishing_hold_s: f64,
 
     /// The shot window: abort a shot after this many seconds without a
-    /// reported result; 0 waits forever [default: 180]. A shot window set in
-    /// the app wins. Also taken as --brew-timeout-s, its name in 0.2.1.
-    #[arg(long, value_parser = up_to_an_hour, value_name = "S", alias = "brew-timeout-s")]
+    /// reported result, 30 to 3600; 0 waits forever [default: 180]. A shot
+    /// window set in the app wins. Also taken as --brew-timeout-s, its name
+    /// in 0.2.1.
+    #[arg(long, value_parser = shot_window, value_name = "S", alias = "brew-timeout-s")]
     shot_window_s: Option<f64>,
 
     /// Serial number to report (MA_SN).
@@ -387,13 +393,42 @@ fn handle_line(x: &Server, line: &str) -> String {
     }
 }
 
-/// Parses a flag in seconds, from 0 to an hour.
-fn up_to_an_hour(s: &str) -> Result<f64, String> {
-    let secs: f64 = s.parse().map_err(|_| format!("`{s}` is not a number"))?;
-    if (0.0..=3600.0).contains(&secs) {
+/// A flag's number of seconds.
+fn seconds(s: &str) -> Result<f64, String> {
+    s.parse()
+        .ok()
+        .filter(|secs: &f64| secs.is_finite())
+        .ok_or_else(|| format!("`{s}` is not a number"))
+}
+
+/// Parses `--finishing-hold-s`: long enough for the E64 WS to see the shot
+/// finish in one of its polls, short enough not to hold up the next shot.
+fn finishing_hold(s: &str) -> Result<f64, String> {
+    let secs = seconds(s)?;
+    let (min, max) = (
+        MIN_FINISHING_HOLD.as_secs_f64(),
+        MAX_FINISHING_HOLD.as_secs_f64(),
+    );
+    if (min..=max).contains(&secs) {
         Ok(secs)
     } else {
-        Err("must be between 0 and 3600 seconds".to_owned())
+        Err(format!(
+            "must be between {min} and {max} seconds: the E64 WS polls every {} s and takes a \
+             shot only from a poll that sees it finish",
+            E64_POLL_INTERVAL.as_secs_f64()
+        ))
+    }
+}
+
+/// Parses `--shot-window-s`: the shot windows the app can set too.
+fn shot_window(s: &str) -> Result<f64, String> {
+    let secs = seconds(s)?;
+    if settings::shot_window_ok(secs) {
+        Ok(secs)
+    } else {
+        Err(format!(
+            "must be 0 (no limit) or between {MIN_SHOT_WINDOW_S} and {MAX_SHOT_WINDOW_S} seconds"
+        ))
     }
 }
 
@@ -443,14 +478,19 @@ mod tests {
     #[test]
     fn second_flags_reject_what_would_not_fit() {
         let parse = |flag: &str, value: &str| Args::try_parse_from(["gbs-anywhere", flag, value]);
+        let hold = |value: &str| parse("--finishing-hold-s", value).map(|a| a.finishing_hold_s);
+        let window = |value: &str| parse("--shot-window-s", value).map(|a| a.shot_window_s);
+        assert_eq!(hold("3").unwrap(), 3.0);
+        assert_eq!(hold("60").unwrap(), 60.0);
         assert_eq!(
-            parse("--finishing-hold-s", "2.5").unwrap().finishing_hold_s,
-            2.5
+            Args::try_parse_from(["gbs-anywhere"])
+                .unwrap()
+                .finishing_hold_s,
+            6.0
         );
-        assert_eq!(
-            parse("--shot-window-s", "0").unwrap().shot_window_s,
-            Some(0.0)
-        );
+        for ok in [0.0, 30.0, 150.6, 3600.0] {
+            assert_eq!(window(&ok.to_string()).unwrap(), Some(ok));
+        }
         assert_eq!(
             parse("--brew-timeout-s", "90").unwrap().shot_window_s,
             Some(90.0),
@@ -459,8 +499,23 @@ mod tests {
         let none = Args::try_parse_from(["gbs-anywhere"]).unwrap();
         assert_eq!(none.shot_window_s, None, "the default is not a flag");
         for bad in ["-1", "3601", "1e20", "NaN", "inf", "soon"] {
-            assert!(parse("--finishing-hold-s", bad).is_err(), "{bad}");
-            assert!(parse("--shot-window-s", bad).is_err(), "{bad}");
+            assert!(hold(bad).is_err(), "{bad}");
+            assert!(window(bad).is_err(), "{bad}");
+        }
+        // Shorter than a poll and a margin, or holding up the next shot.
+        for bad in ["0", "0.5", "2", "2.5", "60.1", "3600"] {
+            let Err(e) = hold(bad) else {
+                panic!("{bad} was taken");
+            };
+            assert!(e.to_string().contains("between 3 and 60"), "{bad}: {e}");
+        }
+        // As in the app: a limit shorter than 30 s ends shots before they
+        // are pulled.
+        for bad in ["0.4", "1", "29", "29.9"] {
+            let Err(e) = window(bad) else {
+                panic!("{bad} was taken");
+            };
+            assert!(e.to_string().contains("between 30 and 3600"), "{bad}: {e}");
         }
     }
 

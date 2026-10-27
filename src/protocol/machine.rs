@@ -36,7 +36,12 @@ use super::{
 pub struct MachineConfig {
     pub identity: MachineIdentity,
     /// How long `ACTIVE FINISHING` is shown before going back to `ON`. The
-    /// grinder polls about every 2 s, so this must span at least one poll.
+    /// E64 WS takes the result only from a poll that sees it, so this is
+    /// [`MIN_FINISHING_HOLD`] to [`MAX_FINISHING_HOLD`] (`--finishing-hold-s`
+    /// checks it).
+    ///
+    /// [`MIN_FINISHING_HOLD`]: super::MIN_FINISHING_HOLD
+    /// [`MAX_FINISHING_HOLD`]: super::MAX_FINISHING_HOLD
     #[serde(rename = "finishing_hold_s", serialize_with = "as_secs_f64")]
     pub finishing_hold: Duration,
     /// The shot window: a shot with no reported result is aborted after this
@@ -803,6 +808,58 @@ mod tests {
             m.mako(t2 + Duration::from_secs(60)).status,
             MachineStatus::On
         );
+    }
+
+    /// Runs a shot the grinder asked for, reports it, and polls like the
+    /// grinder: the first poll `phase` before the report, then `gaps` apart
+    /// (in turn, from the `first` one). Says whether the grinder took it.
+    fn taken(hold: Duration, phase: Duration, gaps: &[Duration], first: usize) -> bool {
+        let t0 = Instant::now();
+        let mut m = Machine::new(MachineConfig {
+            finishing_hold: hold,
+            ..MachineConfig::default()
+        });
+        let mut g = GrinderModel::default();
+        g.observe(&m.mako(t0));
+        g.request_start();
+        m.on_start_request(t0, Some(9));
+        g.observe(&m.mako(t0 + POLL));
+        let reported = t0 + Duration::from_secs(30);
+        let mut t = reported - phase;
+        g.observe(&m.mako(t));
+        m.report_shot(reported, ShotResult::new(Duration::from_secs(28), 36.0))
+            .unwrap();
+        for gap in gaps.iter().cycle().skip(first).take(20) {
+            t += *gap;
+            let accepted = g
+                .observe(&m.mako(t))
+                .iter()
+                .any(|e| matches!(e, GrinderEvent::ShotAccepted { .. }));
+            if accepted {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn a_shot_held_for_the_shortest_hold_is_always_taken() {
+        // About every 2 s, some polls late.
+        let gaps = [2000, 2400, 1600, 2900, 2000].map(Duration::from_millis);
+        let mut missed = 0;
+        for first in 0..gaps.len() {
+            for tenths in 0..20 {
+                let phase = Duration::from_millis(tenths * 100);
+                assert!(
+                    taken(crate::protocol::MIN_FINISHING_HOLD, phase, &gaps, first),
+                    "phase {phase:?}, from gap {first}"
+                );
+                if !taken(Duration::from_secs(1), phase, &gaps, first) {
+                    missed += 1;
+                }
+            }
+        }
+        assert!(missed > 0, "a hold shorter than a poll misses shots");
     }
 
     #[test]

@@ -319,7 +319,14 @@ pub enum HostChange {
 
 /// Whether the app can set this shot window.
 fn window_ok(secs: u32) -> bool {
-    secs == 0 || (MIN_SHOT_WINDOW_S..=MAX_SHOT_WINDOW_S).contains(&secs)
+    shot_window_ok(f64::from(secs))
+}
+
+/// Whether a shot window of `secs` is allowed: 0 (no limit), or
+/// [`MIN_SHOT_WINDOW_S`] to [`MAX_SHOT_WINDOW_S`]. The same for the app, the
+/// settings file and `--shot-window-s` (which may have fractions).
+pub fn shot_window_ok(secs: f64) -> bool {
+    secs == 0.0 || (f64::from(MIN_SHOT_WINDOW_S)..=f64::from(MAX_SHOT_WINDOW_S)).contains(&secs)
 }
 
 impl SettingsChange {
