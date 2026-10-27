@@ -16,6 +16,10 @@ const MAX_BACKOFF: Duration = Duration::from_secs(300);
 /// ([`is_permanent`]). Changing the settings in the app restarts the
 /// integration at once.
 const PERMANENT_RETRY: Duration = Duration::from_secs(3600);
+/// How many refusals in a row get the normal backoff before the hour: a
+/// login signed while this computer's clock was still unset can be refused
+/// once and work a minute later.
+const REFUSALS_BEFORE_THE_HOUR: u32 = 3;
 
 /// The integration. See the module docs.
 pub(crate) struct LaMarzocco {
@@ -43,12 +47,14 @@ pub(crate) fn new_coffee(coffees: &[LastCoffee], after_ms: i64) -> Option<&LastC
 
 async fn run(link: Link, cfg: Config) {
     let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
+    let mut refusals = 0u32;
     loop {
         link.status
             .starting(Detail::keyed("la_marzocco.logging_in", "logging in"));
         let e = match connect(&cfg).await {
             Ok((client, machine)) => {
                 backoff.reset();
+                refusals = 0;
                 link.status.subject(&machine.subject);
                 link.status
                     .connected(idle_line(machine.last.as_ref(), now_ms()));
@@ -65,7 +71,8 @@ async fn run(link: Link, cfg: Config) {
             Some(choice) => tracing::warn!("{TITLE}: {}", choice.log),
             None => tracing::warn!("{TITLE}: {e:#}"),
         }
-        if is_permanent(&e) {
+        refusals = if is_permanent(&e) { refusals + 1 } else { 0 };
+        if waits_an_hour(refusals) {
             link.status.error(format!("{e:#}; trying again in an hour"));
             tracing::info!("{TITLE}: trying again in an hour, or once its settings change");
             tokio::time::sleep(PERMANENT_RETRY).await;
@@ -74,6 +81,12 @@ async fn run(link: Link, cfg: Config) {
             backoff.retry(TITLE).await;
         }
     }
+}
+
+/// Whether `refusals` permanent errors in a row wait the hour rather than
+/// the normal backoff.
+fn waits_an_hour(refusals: u32) -> bool {
+    refusals >= REFUSALS_BEFORE_THE_HOUR
 }
 
 /// Whether trying again in a few minutes won't fix `e`: the login was
@@ -292,10 +305,10 @@ struct Seen {
 }
 
 impl Seen {
-    /// Takes in a fetched list (newest first).
+    /// Takes in a fetched list, in whatever order the cloud sent it.
     fn note(&mut self, list: &[LastCoffee]) {
-        if let Some(c) = list.first() {
-            self.newest_ms = Some(self.newest_ms.map_or(c.time, |n| n.max(c.time)));
+        if let Some(t) = list.iter().map(|c| c.time).max() {
+            self.newest_ms = Some(self.newest_ms.map_or(t, |n| n.max(t)));
         }
     }
 }
@@ -429,6 +442,22 @@ mod tests {
     use crate::integration::{Health, Status};
     use crate::protocol::MachineConfig;
     use crate::server::Server;
+
+    #[test]
+    fn the_newest_coffee_is_found_in_any_order() {
+        let list: Vec<LastCoffee> = [5_000, 9_000, 7_000]
+            .into_iter()
+            .map(|t| serde_json::from_value(coffee(t, 25.0, 36.0)).unwrap())
+            .collect();
+        let mut seen = Seen {
+            newest_ms: Some(1_000),
+            idle: None,
+        };
+        seen.note(&list);
+        assert_eq!(seen.newest_ms, Some(9_000));
+        seen.note(&list[..1]);
+        assert_eq!(seen.newest_ms, Some(9_000), "never goes back");
+    }
 
     #[test]
     fn ages_read_naturally() {
@@ -820,7 +849,10 @@ mod tests {
         let e = connect_error(&cfg).await;
         assert!(!is_permanent(&e), "{e:#}");
 
-        // The card says when the next try comes.
+        // A refusal is tried again soon at first, in case this computer's
+        // clock was just being set; only refusals in a row wait the hour.
+        assert!(!waits_an_hour(1) && !waits_an_hour(2));
+        assert!(waits_an_hour(3) && waits_an_hour(4));
         cloud.refuse_login.store(true, Ordering::SeqCst);
         let l = Link {
             server: Server::new(MachineConfig::default()),
@@ -833,6 +865,6 @@ mod tests {
         .await;
         let error = l.status.snapshot().last_error.unwrap();
         assert!(error.contains("login refused"), "{error}");
-        assert!(error.ends_with("trying again in an hour"), "{error}");
+        assert!(!error.contains("in an hour"), "{error}");
     }
 }

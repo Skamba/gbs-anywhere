@@ -110,8 +110,9 @@ before.
   `/api/log/stream`, and no longer skips events when it falls behind.
 - La Marzocco cloud: a refused login, or a machine it can't pick (none on
   the account, the serial number not on it, or more than one and no serial
-  number), is tried again after an hour instead of every 5 minutes; changing
-  its settings in the app tries again at once. The card says when.
+  number), is tried again after an hour once it was refused three times in
+  a row, instead of every 5 minutes forever; changing its settings in the
+  app tries again at once. The card says when.
 - The app now uses the same words for the grinder's state everywhere. A
   Pairing Code waiting to be accepted shows as "Pairing", not "Grinder not
   set up". A grinder that doesn't answer within 15 s counts as not
