@@ -325,7 +325,10 @@ impl CloudClient {
             .with_context(|| path.to_owned())?;
         let status = resp.status();
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            bail!("{path}: login refused (check the e-mail address and password)");
+            return Err(Permanent::new(format!(
+                "{path}: login refused (check the e-mail address and password)"
+            ))
+            .into());
         }
         if !status.is_success() {
             return Err(refused(path, resp).await);
@@ -401,6 +404,25 @@ impl CloudClient {
         parse_last_coffees(&v)
     }
 }
+
+/// An error that trying again in a few minutes won't fix, such as a refused
+/// login: the task waits much longer before the next try.
+#[derive(Debug)]
+pub struct Permanent(String);
+
+impl Permanent {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl std::fmt::Display for Permanent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Permanent {}
 
 /// A refused request as an error with its status only. The reply itself can
 /// repeat account details, so it goes to the debug log, which the app's log
