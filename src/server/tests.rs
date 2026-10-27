@@ -95,10 +95,60 @@ async fn call(method: reqwest::Method, url: String, body: Option<Value>) -> (u16
     (res.status().as_u16(), res.json().await.unwrap())
 }
 
+/// One server-sent event.
+#[derive(Debug)]
+struct Sse {
+    event: String,
+    id: u64,
+    data: Value,
+}
+
+/// Opens a live stream at `url`, with `last_event_id` if given.
+async fn open_stream(url: String, last_event_id: Option<u64>) -> reqwest::Response {
+    let mut req = crate::http::client().get(url);
+    if let Some(id) = last_event_id {
+        req = req.header("last-event-id", id.to_string());
+    }
+    let res = req.send().await.unwrap();
+    assert_eq!(res.headers()["content-type"], "text/event-stream");
+    res
+}
+
+/// Reads events from `stream` until one has the id `last`.
+async fn read_until(stream: &mut reqwest::Response, last: u64) -> Vec<Sse> {
+    let mut text = String::new();
+    let mut events = Vec::new();
+    while events.last().is_none_or(|e: &Sse| e.id != last) {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), stream.chunk())
+            .await
+            .unwrap_or_else(|_| panic!("event {last} in time; got {events:?}"))
+            .unwrap()
+            .expect("the stream stays open");
+        text.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some((block, rest)) = text.split_once("\n\n") {
+            let (mut event, mut id, mut data) = (None, None, None);
+            for line in block.lines() {
+                match line.split_once(": ") {
+                    Some(("event", v)) => event = Some(v.to_owned()),
+                    Some(("id", v)) => id = v.parse().ok(),
+                    Some(("data", v)) => data = serde_json::from_str(v).ok(),
+                    // Keep-alive comments.
+                    _ => {}
+                }
+            }
+            if let (Some(event), Some(id), Some(data)) = (event, id, data) {
+                events.push(Sse { event, id, data });
+            }
+            text = rest.to_owned();
+        }
+    }
+    events
+}
+
 /// Sends `request` exactly as written and returns the status of the reply,
 /// for requests no HTTP client would send.
 async fn raw_status(base: &str, request: &str) -> u16 {
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut conn = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
         .await
         .unwrap();
@@ -292,9 +342,63 @@ async fn other_devices_looking_for_their_kind_are_not_grinder_traffic() {
         .await
         .unwrap();
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
-    assert_eq!(state["grinder"]["requests"], 3);
+    assert_eq!(state["grinder"]["requests"], 1, "only the grinder's own");
     assert_eq!(state["grinder"]["polls"], 1, "only the poll is a poll");
     assert_ne!(state["grinder"]["peer"], Value::Null);
+}
+
+#[tokio::test]
+async fn only_the_grinders_own_requests_say_where_it_is() {
+    use tracing_subscriber::layer::SubscriberExt;
+    let (base, x) = start_server().await;
+    // The log as the binary keeps it, for this test's thread (and so its
+    // server) only.
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::registry().with(LogLayer::new(x.log().clone())),
+    );
+    let http = crate::http::client();
+    // Any device can send these, a web page's plain read included.
+    let unknown = format!("/api/v2/routes-test-{}", uuid::Uuid::new_v4().simple());
+    let long = format!("/api/v2/routes-test-{}", "y".repeat(10_000));
+    for _ in 0..3 {
+        for path in [&unknown, &long] {
+            let res = http.get(format!("{base}{path}")).send().await.unwrap();
+            assert_eq!(res.text().await.unwrap(), "{}");
+        }
+        for path in [PATH_BREWRATIO, PATH_SCRIPTS_EXECUTE] {
+            let res = http.post(format!("{base}{path}")).body("nope").send();
+            assert_eq!(res.await.unwrap().status(), 200, "answered as before");
+        }
+    }
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["grinder"]["peer"], Value::Null);
+    assert_eq!(state["grinder"]["requests"], 0);
+    assert_eq!(state["grinder"]["last_poll_age_ms"], Value::Null);
+
+    // Each is told once per device, in one short line.
+    let (lines, _) = x.log().after(0);
+    let told = |what: &str| -> Vec<String> {
+        lines
+            .iter()
+            .filter(|l| l.text.contains(what))
+            .map(|l| l.text.clone())
+            .collect()
+    };
+    let unknown_told = told("unknown grinder request");
+    assert_eq!(unknown_told.len(), 2, "{unknown_told:#?}");
+    assert!(
+        unknown_told.iter().all(|l| l.len() < 300),
+        "{unknown_told:#?}"
+    );
+    let unparsable = told("unparsable grinder write");
+    assert_eq!(unparsable.len(), 2, "{unparsable:#?}");
+    assert_eq!(lines.len(), 4, "nothing else: {lines:#?}");
+
+    let mut grinder = Grinder::new(&base);
+    grinder.poll().await;
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_ne!(state["grinder"]["peer"], Value::Null);
+    assert_eq!(state["grinder"]["requests"], 1);
 }
 
 #[tokio::test]
@@ -343,6 +447,80 @@ async fn an_abort_says_why_over_the_api() {
         (&aborted["cause"], &aborted["reason"]),
         (&json!("shot_aborted_by_user"), &json!("aborted by user"))
     );
+}
+
+#[tokio::test]
+async fn the_event_stream_names_events_by_kind_and_resumes() {
+    let (base, x) = start_server().await;
+    let url = format!("{base}/api/events/stream");
+    let mut live = open_stream(url.clone(), None).await;
+    let post = reqwest::Method::POST;
+    call(post.clone(), format!("{base}/api/shot/start"), None).await;
+    call(post, format!("{base}/api/shot/abort"), None).await;
+    let events = read_until(&mut live, 2).await;
+    let got: Vec<_> = events.iter().map(|e| (e.event.as_str(), e.id)).collect();
+    assert_eq!(got, [("shot_started", 1), ("shot_aborted", 2)]);
+    for e in &events {
+        assert_eq!(e.data["kind"], e.event.as_str());
+        assert_eq!(e.data["seq"], e.id);
+        assert!(e.data["age_ms"].is_u64());
+    }
+    // After the finishing hold (no ticker runs here).
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    x.with(|m, now| m.tick(now));
+    assert_eq!(read_until(&mut live, 3).await[0].event, "shot_finished");
+
+    // A browser reconnecting says what it saw last and gets what it missed,
+    // which wins over the query of the URL it reconnects to.
+    let mut again = open_stream(format!("{url}?after=0"), Some(1)).await;
+    let ids: Vec<_> = read_until(&mut again, 3)
+        .await
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, [2, 3]);
+    let mut script = open_stream(format!("{url}?after=2"), None).await;
+    assert_eq!(read_until(&mut script, 3).await.len(), 1);
+    // An id from before a restart: all kept events.
+    let mut restarted = open_stream(url.clone(), Some(999)).await;
+    let ids: Vec<_> = read_until(&mut restarted, 3)
+        .await
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, [1, 2, 3]);
+
+    // A stream that falls behind the live feed reads the missed events
+    // back. Made at once, so the stream can't read any in between.
+    x.with(|m, now| {
+        for _ in 0..200 {
+            m.start_shot(now).unwrap();
+            m.abort(now).unwrap();
+        }
+    });
+    let last = x.with(|m, _| m.last_seq());
+    assert!(last > 3 + 256, "more than the live feed holds");
+    let ids: Vec<_> = read_until(&mut live, last)
+        .await
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, (4..=last).collect::<Vec<_>>(), "none skipped");
+}
+
+#[tokio::test]
+async fn a_log_stream_that_falls_behind_reads_the_lines_back() {
+    let (base, x) = start_server().await;
+    let mut stream = open_stream(format!("{base}/api/log/stream"), None).await;
+    // At once, so the stream can't read any in between.
+    for n in 0..600 {
+        x.log()
+            .push(tracing::Level::INFO, &format!("routes test: line {n}"));
+    }
+    let lines = read_until(&mut stream, 600).await;
+    let ids: Vec<_> = lines.iter().map(|l| l.id).collect();
+    assert_eq!(ids, (1..=600).collect::<Vec<_>>(), "none skipped");
+    assert_eq!(lines[599].data["text"], "routes test: line 599");
 }
 
 #[tokio::test]
@@ -455,6 +633,50 @@ async fn control_api_rejects_what_it_cannot_do() {
         assert_eq!(body["code"], "request_invalid", "{body}");
         assert!(body["error"].is_string());
     }
+}
+
+#[tokio::test]
+async fn a_broken_settings_or_pairing_file_stops_startup_and_says_which() {
+    let (_, x) = start_server().await;
+    let dir = temp_dir("broken");
+    let settings = dir.join("settings.json");
+    std::fs::write(&settings, "{\"integrations\": [").unwrap();
+    let Err(e) = SettingsFile::open(&settings) else {
+        panic!("a broken settings file was taken");
+    };
+    let e = format!("{e:#}");
+    assert!(
+        e.contains(&format!("{}: not a settings file", settings.display())),
+        "{e}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&settings).unwrap(),
+        "{\"integrations\": [",
+        "left as it was"
+    );
+
+    let pairing = dir.join("grinder-pairing.json");
+    std::fs::write(&pairing, "not json").unwrap();
+    let startup = Startup {
+        grinder_host: Some("127.0.0.1:65009".to_owned()),
+        pairing_file: Some(pairing.clone()),
+        ..Startup::default()
+    };
+    let Err(e) = x.start_settings(startup, None) else {
+        panic!("a broken pairing file was taken");
+    };
+    let e = format!("{e:#}");
+    assert!(e.starts_with("--grinder: "), "{e}");
+    assert!(
+        e.contains(&format!(
+            "{}: not a grinder pairing file (delete it to pair again)",
+            pairing.display()
+        )),
+        "{e}"
+    );
+    assert_eq!(std::fs::read_to_string(&pairing).unwrap(), "not json");
+    assert!(x.grinder_link().wifi.is_none(), "no link started");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]

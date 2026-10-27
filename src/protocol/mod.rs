@@ -21,6 +21,8 @@ pub mod machine;
 pub mod wifi;
 pub mod wire;
 
+use std::time::Duration;
+
 pub use grinder::{BrewState, GrinderEvent, GrinderModel};
 pub use machine::{
     AbortCause, GrinderRange, Machine, MachineConfig, MachineError, MachineEvent, Phase, ShotResult,
@@ -39,9 +41,17 @@ pub const PATH_SCRIPTS_EXECUTE: &str = "/api/v2/scripts/execute";
 /// knob press.
 pub const START_BREW_SCRIPT_ID: i64 = 9;
 
-/// The grinder re-sends the start-brew request until the machine enters
-/// `ACTIVE SERVING`, at most this many times.
-pub const START_BREW_MAX_SENDS: u32 = 3;
+/// How often the E64 WS polls `GET /api/v2/mako`.
+pub const E64_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The shortest finishing hold (`--finishing-hold-s`): the E64 WS takes a
+/// shot's result only from a poll that sees `ACTIVE FINISHING`, so the hold
+/// spans at least one poll ([`E64_POLL_INTERVAL`]), with room for a late one.
+pub const MIN_FINISHING_HOLD: Duration = Duration::from_secs(3);
+
+/// The longest finishing hold: while a shot is shown as finishing, the
+/// machine starts no other, so an E65/E80's next brew job waits for it.
+pub const MAX_FINISHING_HOLD: Duration = Duration::from_secs(60);
 
 /// The grinder does not adjust from a shot of 10 s or less
 /// (`REAL_EXTRACTION_TIME_MS <= 10000`) and leaves it to the person to grind
@@ -61,6 +71,13 @@ pub const MAX_OFF_TARGET_MS: u32 = 15_000;
 /// `MA_EXTRACTION_STATUS` value that means "user abort": the brew goes to
 /// `Aborted` instead of `Finishing` and the result is skipped.
 pub const EXTRACTION_STATUS_USER_ABORT: i64 = 2;
+
+/// `MA_EXTRACTION_STATUS` while ready, while brewing and once a shot is
+/// done. Only [`EXTRACTION_STATUS_USER_ABORT`] means something to the
+/// grinder; these values are a best guess.
+pub const EXTRACTION_STATUS_IDLE: i64 = 0;
+pub const EXTRACTION_STATUS_BREWING: i64 = 1;
+pub const EXTRACTION_STATUS_FINISHED: i64 = 1;
 
 /// The grinder counts the machine as heated when
 /// `BG_SENS_TEMP > BG_SET_TEMP - 2.0`.

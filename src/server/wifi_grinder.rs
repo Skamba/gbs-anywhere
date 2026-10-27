@@ -303,16 +303,16 @@ pub enum WifiPhase {
     /// The code is shown: gbs-anywhere waits for the person to accept it on
     /// the grinder and confirm that in the app (`POST /api/grinder/accepted`
     /// is taken only now), for as long as it takes. Meanwhile it checks the
-    /// pairing only every so often (see [`UNCONFIRMED_POLL`]).
+    /// pairing only every so often (see `UNCONFIRMED_POLL`).
     Accepting,
     /// Confirmed: gbs-anywhere waits a moment before it checks the pairing
-    /// (see [`ACCEPT_SETTLE`]), and sends the grinder nothing meanwhile.
+    /// (see `ACCEPT_SETTLE`), and sends the grinder nothing meanwhile.
     Holding,
     /// Confirmed in the app: gbs-anywhere checks with the grinder whether the
     /// pairing was accepted. If not, it is back to `Accepting`.
     Checking,
     /// A pairing check went unanswered: gbs-anywhere sends the grinder
-    /// nothing for a while (see [`RESTART_QUIET`]), then checks again.
+    /// nothing for a while (see `RESTART_QUIET`), then checks again.
     Quiet,
     /// The grinder has gbs-anywhere paired but the pairing ID is missing
     /// here: the app asks for the one the grinder shows
@@ -483,7 +483,7 @@ struct Answer {
     line: String,
 }
 
-/// The task. Build it with [`WifiGrinder::new`], then [`WifiGrinder::run`] it.
+/// The task. Build it with [`WifiGrinder::new`], then `WifiGrinder::run` it.
 pub struct WifiGrinder {
     cfg: WifiConfig,
     http: reqwest::Client,

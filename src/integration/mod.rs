@@ -214,7 +214,7 @@ impl Link {
                     "grinder recipe weight".to_owned(),
                 ),
             };
-            let shot = ShotResult::from_grams(time, grams);
+            let shot = ShotResult::new(time, grams);
             match m.report_shot(now, shot) {
                 Ok(()) => {
                     self.status.note_report(shot);

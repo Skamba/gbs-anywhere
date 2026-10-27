@@ -12,7 +12,7 @@
 //! An E65/E80 GbS grinder works the other way round: [`wifi_grinder`] asks it
 //! for brew jobs and drives the same machine from them.
 //!
-//! Around them: [`browser`] (keeps web pages out), [`settings`] (what people
+//! Around them: `browser` (keeps web pages out), [`settings`] (what people
 //! change in the app, and the settings file), [`logbook`] (the server's log
 //! for the app), the shot history and [`update_check`].
 //!
@@ -42,7 +42,6 @@ use crate::protocol::{Machine, MachineConfig};
 use axum::extract::connect_info::Connected;
 use axum::serve::IncomingStream;
 pub use browser::AllowedHosts;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
 
@@ -60,7 +59,7 @@ pub use wifi_grinder::{
 pub struct Server {
     inner: Mutex<Inner>,
     events: broadcast::Sender<EventRecord>,
-    transcript: Option<tokio::sync::Mutex<tokio::fs::File>>,
+    transcript: Option<grinder_api::Transcript>,
     integrations: Integrations,
     icons_dir: OnceLock<PathBuf>,
     /// The shot window and grinder address, and the E65/E80 link.
@@ -160,15 +159,15 @@ impl Server {
     }
 
     /// Like [`Server::new`], also appending every grinder request and our
-    /// reply to `path`.
+    /// reply to `path` (`--log`), readable by its owner only. Past a few MiB
+    /// it moves to `<path>.1` and starts over.
     pub async fn with_transcript(config: MachineConfig, path: &Path) -> anyhow::Result<Arc<Self>> {
-        let file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .await?;
+        use anyhow::Context;
+        let transcript = grinder_api::Transcript::open(path, grinder_api::TRANSCRIPT_MAX_BYTES)
+            .await
+            .with_context(|| format!("--log: cannot open {}", path.display()))?;
         let mut me = Arc::into_inner(Self::new(config)).expect("fresh Arc");
-        me.transcript = Some(tokio::sync::Mutex::new(file));
+        me.transcript = Some(transcript);
         Ok(Arc::new(me))
     }
 
@@ -200,6 +199,19 @@ impl Server {
     /// Live machine events (grind result, start request, shot reported, ...).
     pub fn subscribe(&self) -> broadcast::Receiver<EventRecord> {
         self.events.subscribe()
+    }
+
+    /// Like [`Server::subscribe`], with the newest event's `seq` so far:
+    /// every event after it comes through the receiver. Taken under the
+    /// machine's lock, which events are sent under.
+    pub fn subscribe_at(&self) -> (broadcast::Receiver<EventRecord>, u64) {
+        let inner = self.lock();
+        (self.events.subscribe(), inner.published)
+    }
+
+    /// The kept events with `seq > after`, oldest first.
+    pub fn events_after(&self, after: u64) -> std::collections::VecDeque<EventRecord> {
+        self.lock().machine.events_after(after).cloned().collect()
     }
 
     pub fn grinder_link(&self) -> GrinderLink {
@@ -327,7 +339,7 @@ impl Server {
 
     async fn write_transcript(&self, line: &str) {
         if let Some(t) = &self.transcript {
-            let _ = t.lock().await.write_all(line.as_bytes()).await;
+            t.write(line).await;
         }
     }
 
@@ -487,6 +499,7 @@ pub async fn serve(
     cfg: ServeConfig,
     shutdown: impl Future<Output = ()>,
 ) -> anyhow::Result<()> {
+    use anyhow::Context;
     let mut tasks = Vec::new();
     let grinder_app = if cfg.app_on_grinder_ports {
         control_router(state.clone(), cfg.allowed_hosts.clone())
@@ -507,7 +520,9 @@ pub async fn serve(
         anyhow::bail!("no grinder-facing port could be bound");
     }
     if let Some(addr) = cfg.control {
-        let l = TcpListener::bind(addr).await?;
+        let l = TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("--control: cannot listen on {addr}"))?;
         tracing::info!("control API on http://{addr}/api/state");
         tasks.push(spawn_server(
             l,

@@ -99,6 +99,7 @@ impl LogBook {
     }
 
     /// New lines as they are added.
+    #[cfg(test)]
     pub fn subscribe(&self) -> broadcast::Receiver<LogLine> {
         self.live.subscribe()
     }
@@ -139,6 +140,25 @@ fn shorten(mut text: String) -> String {
         text.push('…');
     }
     text
+}
+
+/// `text` from a request or a peer, for a log line: control characters
+/// (line breaks, escapes) escaped, so it can't make a line of its own or
+/// colour the console, and cut to `max` characters, marking the cut.
+pub(crate) fn printable(text: &str, max: usize) -> String {
+    let mut out = String::new();
+    for (i, c) in text.chars().enumerate() {
+        if i == max {
+            out.push('…');
+            break;
+        }
+        if c.is_control() {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Removes terminal escape sequences (colours), in case a message has them.
@@ -261,6 +281,20 @@ mod tests {
         assert_eq!(strip_ansi("\u{1b}[2mgrey\u{1b}[0m plain"), "grey plain");
         assert_eq!(strip_ansi("\u{1b}[1;31mred\u{1b}[m"), "red");
         assert_eq!(strip_ansi("ä 😀"), "ä 😀");
+    }
+
+    #[test]
+    fn text_from_peers_stays_on_one_line() {
+        assert_eq!(
+            printable("GET /a\nINFO forged\r\u{1b}[31m", 64),
+            "GET /a\\nINFO forged\\r\\u{1b}[31m"
+        );
+        assert_eq!(printable("ä 😀", 64), "ä 😀");
+        assert_eq!(
+            printable(&"x".repeat(100), 10),
+            format!("{}…", "x".repeat(10))
+        );
+        assert_eq!(printable("exactly", 7), "exactly");
     }
 
     #[test]
