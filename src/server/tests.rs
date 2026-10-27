@@ -278,7 +278,7 @@ async fn the_app_comes_in_one_response() {
     assert_eq!(kind, "text/html; charset=utf-8");
     assert_eq!(res.headers()["x-content-type-options"], "nosniff");
     assert_eq!(res.headers()["referrer-policy"], "no-referrer");
-    assert_eq!(res.text().await.unwrap(), control_api::page());
+    assert_eq!(res.text().await.unwrap(), page::page());
 }
 
 #[tokio::test]

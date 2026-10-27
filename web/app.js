@@ -129,7 +129,7 @@
   // downloaded log stays English.
   //
   // The catalogs are web/strings/<lang>.json, one per language in LANGS in
-  // control_api.rs. The server fills them in here when it starts, so they
+  // server/page.rs. The server fills them in here when it starts, so they
   // come with the page.
   const STRINGS = {/* web/strings/<lang>.json */};
 
@@ -329,7 +329,7 @@
    *  for its code (`error.<code>`, or `error.<code>.<variant>` where the
    *  page knows which field it sent), which may show the server's English
    *  sentence as {error}; else the server's sentence. A test in
-   *  control_api.rs checks that every code the server sends has its
+   *  server/page.rs checks that every code the server sends has its
    *  words. */
   function errorText(err, variant) {
     const code = err && err.code;
@@ -397,7 +397,7 @@
   // Why a brew ended without a result, by its `cause` (the server's
   // AbortCause): on purpose (history kind "aborted") or a failure, the text
   // on the Start tab and the history title. A timeout's texts say how long
-  // it waited (errorTitle, shotTitle). A test in control_api.rs checks this
+  // it waited (errorTitle, shotTitle). A test in server/page.rs checks this
   // table against the server.
   const CAUSES = {
     shot_aborted_by_user: { onPurpose: true, text: "start.aborted.user", title: "history.abortedUser" },
@@ -412,7 +412,7 @@
   // What went wrong with the last shot on an E65/E80, by the link's
   // `problem_cause` (the server's ProblemCause): a brew that ended for one
   // of the causes above, or a result that did not reach the grinder. A
-  // test in control_api.rs checks this table against the server.
+  // test in server/page.rs checks this table against the server.
   const PROBLEMS = {
     grinder_shot_dropped: "problem.shotDropped",
     grinder_shot_refused: "problem.shotRefused",
@@ -424,7 +424,7 @@
   /** The E65/E80 link `w`'s problem in words. */
   const problemText = (w) => (PROBLEMS[w.problem_cause] ? t(PROBLEMS[w.problem_cause]) : sentence(w.problem));
   // Why the grinder won't grind, by `grind_blocked.cause` (the server's
-  // GrindBlocked). A test in control_api.rs checks this table against it.
+  // GrindBlocked). A test in server/page.rs checks this table against it.
   const BLOCKED = {
     shot_running: "blocked.shotRunning",
     machine_in_standby: "blocked.standby",
@@ -485,7 +485,7 @@
 
   // Integration health (the server's `Health`): the tone and label of its
   // pill, its item in System status's line, and whether it is out of
-  // order (`bad`: it reports no shot then). A test in control_api.rs
+  // order (`bad`: it reports no shot then). A test in server/page.rs
   // checks the keys against the server.
   const HEALTH = {
     starting: { tone: "start", label: "integ.health.starting", check: ["wait", "clock", "check.integConnecting"] },
@@ -1291,7 +1291,7 @@
   }
 
   // The group head's state in the grinder's facts, by the shot's phase
-  // (the server's `Phase`; a test in control_api.rs checks the keys).
+  // (the server's `Phase`; a test in server/page.rs checks the keys).
   const GROUP = {
     ready: "grinder.group.idle",
     running: "grinder.group.running",
@@ -3825,7 +3825,7 @@
   // Machine events arrive as server-sent events; /api/state is polled for the
   // rest (grinder link, integrations), less often while the stream is up.
   // The stream names each event by its kind (the server's MachineEvent); a
-  // test in control_api.rs checks this list against it.
+  // test in server/page.rs checks this list against it.
   const EVENT_KINDS = ["grinder_grind_finished", "grinder_shot_requested", "shot_started", "shot_reported", "shot_aborted", "shot_finished"];
   function connectEvents() {
     if (!window.EventSource) return;

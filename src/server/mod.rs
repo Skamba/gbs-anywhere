@@ -12,7 +12,8 @@
 //! An E65/E80 GbS grinder works the other way round: [`wifi_grinder`] asks it
 //! for brew jobs and drives the same machine from them.
 //!
-//! Around them: `browser` (keeps web pages out), [`settings`] (what people
+//! Around them: `browser` (keeps web pages out), `page` (builds the app
+//! page the control API serves), [`settings`] (what people
 //! change in the app, and the settings file), [`logbook`] (the server's log
 //! for the app), the shot history and [`update_check`].
 //!
@@ -24,6 +25,7 @@ mod control_api;
 mod grinder_api;
 pub mod history;
 pub mod logbook;
+mod page;
 mod private_file;
 pub mod settings;
 #[cfg(test)]
