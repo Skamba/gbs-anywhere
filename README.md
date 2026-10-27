@@ -396,6 +396,15 @@ the events missed meanwhile). All routes are listed in
 `GET /api/state` comes in groups (`shot`, `grinder`, `machine`,
 `integrations`, `settings`, `update`, `server`), and an error replies
 `{"error":"<sentence>","code":"<code>"}`, with a fixed `code` to match on.
+The same goes for the rest: match on the codes (`code`, `cause`, `kind`,
+`state`, `phase`, and `problem_cause` for an E65/E80 link's last problem);
+`reason`, `detail`, `problem` and `error` are English words for people.
+Lengths and ages are measured on the server, so they hold when its clock
+is not set: each event and log line says how long ago it happened
+(`age_ms`), a running shot how long it has run (`shot.phase_age_ms`), and
+`shot_reported`, `shot_aborted` and the history how long a brew ran
+(`running_ms`). `shot_reported` and the history also name the
+integration that reported a shot (`integration_id`).
 Coming from 0.2.1, whose names were different, the
 [changelog](CHANGELOG.md#changed-breaking) lists what was renamed.
 
