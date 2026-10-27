@@ -191,8 +191,9 @@ source). gbs-anywhere talks to the grinder on port 30001 over HTTPS.
    With the address already set
    (with **Change IP address** in the ⋮ menu of the grinder card under
    **Status**, or when starting gbs-anywhere), System status says the
-   grinder is not set up: tap **Set up grinder ›** there, or **Set up** on
-   the grinder card under Status.
+   grinder is not set up, or that it is pairing once the grinder shows a
+   Pairing Code: tap **Set up grinder ›** there, or **Set up** on the
+   grinder card under Status.
 3. **Set up grinder** takes you through five steps with the grinder's own
    menu names: enable Local WiFi, start pairing under **Configuration**,
    compare the **Pairing Code** in the app with the grinder's and accept
