@@ -1186,13 +1186,16 @@
 
   // The ⋮ menu of a card on the Status tab (the grinder's, an
   // integration's), one open at a time. `menuFor` is the open one's key:
-  // "grinder" or "integ:<id>".
+  // "grinder" or "integ:<id>". It is a disclosure: the button shows and
+  // hides a short list of plain buttons right after it, which Tab reaches
+  // next; Escape, a click elsewhere or the focus leaving it closes it.
   let menuFor = null;
+  const menuId = (key) => "menu-" + key.replace(/[^A-Za-z0-9_-]/g, "-");
   /** The ⋮ button that opens the menu `key`. */
   function menuButton(key, label) {
     return el("button", {
       type: "button", class: "kebab", "aria-label": label, "data-menu": key, "data-key": "kebab:" + key,
-      "aria-haspopup": "menu", "aria-expanded": String(menuFor === key),
+      "aria-expanded": String(menuFor === key), "aria-controls": menuFor === key ? menuId(key) : null,
       onclick: (e) => {
         e.stopPropagation();
         if (menuFor === key) { closeMenu(true); return; }
@@ -1202,9 +1205,9 @@
   }
   /** The open menu `key`: `actions` are [name, icon, class, run]. */
   function menuList(key, label, actions) {
-    return el("div", { class: "menu", role: "menu", "aria-label": label },
+    return el("div", { class: "menu", id: menuId(key), role: "group", "aria-label": label },
       actions.map(([name, ic, cls, run], n) => el("button", {
-        type: "button", role: "menuitem", class: cls, "data-key": key + ":" + n,
+        type: "button", class: cls, "data-key": key + ":" + n,
         onclick: () => { closeMenu(false); run(); },
       }, icon(ic, 18, 2), name)));
   }
@@ -1224,6 +1227,13 @@
   }
   document.addEventListener("click", (e) => {
     if (menuFor && !e.target.closest(".menu")) closeMenu(false);
+  });
+  // The focus moving on past the menu and its button (Tab after its last
+  // item, say) closes it.
+  document.addEventListener("focusin", (e) => {
+    if (!menuFor) return;
+    const menu = $(menuId(menuFor)), b = e.target.closest && e.target.closest(".kebab");
+    if (!(menu && menu.contains(e.target)) && !(b && b.dataset.menu === menuFor)) closeMenu(false);
   });
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
@@ -1249,6 +1259,7 @@
     gMore.hidden = false;
     gMore.setAttribute("aria-label", t("grinder.more"));
     gMore.setAttribute("aria-expanded", String(open));
+    if (open) gMore.setAttribute("aria-controls", menuId("grinder")); else gMore.removeAttribute("aria-controls");
     patch($("g-menu"), JSON.stringify([lang, open, acts.map((a) => a[0])]), () => (open ? [menuList("grinder", t("grinder.menu"), acts)] : []));
   }
 
