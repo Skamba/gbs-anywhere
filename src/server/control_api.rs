@@ -30,7 +30,7 @@
 //! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (`at`, `level`: `info`, `warn` or `error`, `text`) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
 //! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`); `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
 //! | GET | `/api/events?after=N` | events with `seq > N`, each with its `kind`: `grinder_grind_finished` (`result`: the grind's `target_weight_g`, `filter`, `raw`), `grinder_shot_requested` (an E64 WS's `script_id`, an E65/E80's `target_time_ms`), `shot_started`, `shot_reported` (`result`: `time_ms`, `weight_g`; `in_grinder_range`: whether the grinder adjusts from its time, by the window of the grinder's request, see `grinder.shot_range`, or `null` when that is not known), `shot_aborted` and `shot_finished`; `age_ms` says how long ago each happened. `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
-//! | GET | `/api/events/stream` | the same, live, as server-sent events named by `kind` |
+//! | GET | `/api/events/stream` | the same, live, as server-sent events named by `kind`, each with its `seq` as the event `id`, none skipped; `Last-Event-ID` (or else `?after=N`) sends the missed ones still kept first, all of them for an `N` from before a restart |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` (or `time_ms`) — ends the shot with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the shot as a user abort (grinder skips it) |
 //! | POST | `/api/shot/start` | starts a shot without a grinder request (an E64 WS sees a flush; an E65/E80 nothing) |
@@ -353,28 +353,78 @@ fn event_json(rec: &EventRecord, now: Instant) -> Value {
     v
 }
 
-async fn stream_events(State(x): State<Arc<Server>>) -> impl IntoResponse {
-    let rx = x.subscribe();
-    let stream = futures_util::stream::unfold(rx, |mut rx| async move {
-        loop {
-            match rx.recv().await {
-                Ok(rec) => {
-                    let data = event_json(&rec, Instant::now());
-                    let kind = data["kind"].as_str().unwrap_or("event").to_owned();
-                    let ev = Event::default()
-                        .event(kind)
-                        .id(rec.seq.to_string())
-                        .data(data.to_string());
-                    return Some((Ok::<_, Infallible>(ev), rx));
-                }
-                Err(RecvError::Lagged(_)) => continue,
-                Err(RecvError::Closed) => return None,
-            }
-        }
+/// Live events, as `/api/log/stream` sends log lines: with the
+/// `Last-Event-ID` a browser sends when it reconnects, or else `?after=N`,
+/// the events after `N` that are still kept come first; an `N` beyond the
+/// last event (the server restarted since) sends them all.
+async fn stream_events(
+    State(x): State<Arc<Server>>,
+    Params(q): Params<AfterMaybe>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // A reconnecting browser sends the same URL again, so its
+    // `Last-Event-ID` is newer than the query.
+    let resume = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse().ok())
+        .or(q.after);
+    // Subscribed first, so nothing falls between the backlog and the feed.
+    let (rx, now) = x.subscribe_at();
+    let after = match resume {
+        Some(after) if after <= now => after,
+        // From before a restart (the count started again): all kept events.
+        Some(_) => 0,
+        None => now,
+    };
+    let start = EventStream {
+        pending: x.events_after(after),
+        server: x.clone(),
+        rx,
+        last: after,
+    };
+    let stream = futures_util::stream::unfold(start, |mut s| async move {
+        let rec = s.next().await?;
+        let data = event_json(&rec, Instant::now());
+        let kind = data["kind"].as_str().unwrap_or("event").to_owned();
+        let ev = Event::default()
+            .event(kind)
+            .id(rec.seq.to_string())
+            .data(data.to_string());
+        Some((Ok::<_, Infallible>(ev), s))
     });
     // Ends when the server stops, so it can close the connection.
     let stream = futures_util::StreamExt::take_until(stream, x.stopped());
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// The events for one stream, in order and without gaps: when the live
+/// feed falls behind, the missed events are read back from the machine.
+struct EventStream {
+    server: Arc<Server>,
+    rx: tokio::sync::broadcast::Receiver<EventRecord>,
+    pending: std::collections::VecDeque<EventRecord>,
+    /// The last `seq` sent (or skipped as already known).
+    last: u64,
+}
+
+impl EventStream {
+    async fn next(&mut self) -> Option<EventRecord> {
+        loop {
+            if let Some(rec) = self.pending.pop_front() {
+                if rec.seq > self.last {
+                    self.last = rec.seq;
+                    return Some(rec);
+                }
+                continue;
+            }
+            match self.rx.recv().await {
+                Ok(rec) => self.pending.push_back(rec),
+                Err(RecvError::Lagged(_)) => self.pending = self.server.events_after(self.last),
+                Err(RecvError::Closed) => return None,
+            }
+        }
+    }
 }
 
 async fn put_settings(State(x): State<Arc<Server>>, Body(body): Body<Value>) -> Response {

@@ -96,6 +96,56 @@ async fn call(method: reqwest::Method, url: String, body: Option<Value>) -> (u16
     (res.status().as_u16(), res.json().await.unwrap())
 }
 
+/// One server-sent event.
+#[derive(Debug)]
+struct Sse {
+    event: String,
+    id: u64,
+    data: Value,
+}
+
+/// Opens a live stream at `url`, with `last_event_id` if given.
+async fn open_stream(url: String, last_event_id: Option<u64>) -> reqwest::Response {
+    let mut req = reqwest::Client::new().get(url);
+    if let Some(id) = last_event_id {
+        req = req.header("last-event-id", id.to_string());
+    }
+    let res = req.send().await.unwrap();
+    assert_eq!(res.headers()["content-type"], "text/event-stream");
+    res
+}
+
+/// Reads events from `stream` until one has the id `last`.
+async fn read_until(stream: &mut reqwest::Response, last: u64) -> Vec<Sse> {
+    let mut text = String::new();
+    let mut events = Vec::new();
+    while events.last().is_none_or(|e: &Sse| e.id != last) {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), stream.chunk())
+            .await
+            .unwrap_or_else(|_| panic!("event {last} in time; got {events:?}"))
+            .unwrap()
+            .expect("the stream stays open");
+        text.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some((block, rest)) = text.split_once("\n\n") {
+            let (mut event, mut id, mut data) = (None, None, None);
+            for line in block.lines() {
+                match line.split_once(": ") {
+                    Some(("event", v)) => event = Some(v.to_owned()),
+                    Some(("id", v)) => id = v.parse().ok(),
+                    Some(("data", v)) => data = serde_json::from_str(v).ok(),
+                    // Keep-alive comments.
+                    _ => {}
+                }
+            }
+            if let (Some(event), Some(id), Some(data)) = (event, id, data) {
+                events.push(Sse { event, id, data });
+            }
+            text = rest.to_owned();
+        }
+    }
+    events
+}
+
 /// Sends `request` exactly as written and returns the status of the reply,
 /// for requests no HTTP client would send.
 async fn raw_status(base: &str, request: &str) -> u16 {
@@ -378,6 +428,80 @@ async fn an_abort_says_why_over_the_api() {
         (&aborted["cause"], &aborted["reason"]),
         (&json!("shot_aborted_by_user"), &json!("aborted by user"))
     );
+}
+
+#[tokio::test]
+async fn the_event_stream_names_events_by_kind_and_resumes() {
+    let (base, x) = start_server().await;
+    let url = format!("{base}/api/events/stream");
+    let mut live = open_stream(url.clone(), None).await;
+    let post = reqwest::Method::POST;
+    call(post.clone(), format!("{base}/api/shot/start"), None).await;
+    call(post, format!("{base}/api/shot/abort"), None).await;
+    let events = read_until(&mut live, 2).await;
+    let got: Vec<_> = events.iter().map(|e| (e.event.as_str(), e.id)).collect();
+    assert_eq!(got, [("shot_started", 1), ("shot_aborted", 2)]);
+    for e in &events {
+        assert_eq!(e.data["kind"], e.event.as_str());
+        assert_eq!(e.data["seq"], e.id);
+        assert!(e.data["age_ms"].is_u64());
+    }
+    // After the finishing hold (no ticker runs here).
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    x.with(|m, now| m.tick(now));
+    assert_eq!(read_until(&mut live, 3).await[0].event, "shot_finished");
+
+    // A browser reconnecting says what it saw last and gets what it missed,
+    // which wins over the query of the URL it reconnects to.
+    let mut again = open_stream(format!("{url}?after=0"), Some(1)).await;
+    let ids: Vec<_> = read_until(&mut again, 3)
+        .await
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, [2, 3]);
+    let mut script = open_stream(format!("{url}?after=2"), None).await;
+    assert_eq!(read_until(&mut script, 3).await.len(), 1);
+    // An id from before a restart: all kept events.
+    let mut restarted = open_stream(url.clone(), Some(999)).await;
+    let ids: Vec<_> = read_until(&mut restarted, 3)
+        .await
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, [1, 2, 3]);
+
+    // A stream that falls behind the live feed reads the missed events
+    // back. Made at once, so the stream can't read any in between.
+    x.with(|m, now| {
+        for _ in 0..200 {
+            m.start_shot(now).unwrap();
+            m.abort(now).unwrap();
+        }
+    });
+    let last = x.with(|m, _| m.last_seq());
+    assert!(last > 3 + 256, "more than the live feed holds");
+    let ids: Vec<_> = read_until(&mut live, last)
+        .await
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, (4..=last).collect::<Vec<_>>(), "none skipped");
+}
+
+#[tokio::test]
+async fn a_log_stream_that_falls_behind_reads_the_lines_back() {
+    let (base, x) = start_server().await;
+    let mut stream = open_stream(format!("{base}/api/log/stream"), None).await;
+    // At once, so the stream can't read any in between.
+    for n in 0..600 {
+        x.log()
+            .push(tracing::Level::INFO, &format!("routes test: line {n}"));
+    }
+    let lines = read_until(&mut stream, 600).await;
+    let ids: Vec<_> = lines.iter().map(|l| l.id).collect();
+    assert_eq!(ids, (1..=600).collect::<Vec<_>>(), "none skipped");
+    assert_eq!(lines[599].data["text"], "routes test: line 599");
 }
 
 #[tokio::test]

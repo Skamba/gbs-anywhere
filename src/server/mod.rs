@@ -201,6 +201,19 @@ impl Server {
         self.events.subscribe()
     }
 
+    /// Like [`Server::subscribe`], with the newest event's `seq` so far:
+    /// every event after it comes through the receiver. Taken under the
+    /// machine's lock, which events are sent under.
+    pub fn subscribe_at(&self) -> (broadcast::Receiver<EventRecord>, u64) {
+        let inner = self.lock();
+        (self.events.subscribe(), inner.published)
+    }
+
+    /// The kept events with `seq > after`, oldest first.
+    pub fn events_after(&self, after: u64) -> std::collections::VecDeque<EventRecord> {
+        self.lock().machine.events_after(after).cloned().collect()
+    }
+
     pub fn grinder_link(&self) -> GrinderLink {
         self.lock().grinder.clone()
     }
