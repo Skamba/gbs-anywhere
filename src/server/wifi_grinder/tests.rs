@@ -413,7 +413,7 @@ fn brewing(server: &Server) -> bool {
 }
 
 fn report(server: &Server, secs: f64, grams: f64) {
-    let shot = ShotResult::from_grams(Duration::from_secs_f64(secs), grams);
+    let shot = ShotResult::new(Duration::from_secs_f64(secs), grams);
     server.with(|m, now| m.report_shot(now, shot)).unwrap();
 }
 
@@ -854,7 +854,7 @@ async fn a_job_the_grinder_no_longer_has_ends_the_brew() {
 
     wait_for("giving up", || wifi(&server).problem.is_some()).await;
     assert!(!brewing(&server));
-    let late = ShotResult::from_grams(Duration::from_secs(30), 40.0);
+    let late = ShotResult::new(Duration::from_secs(30), 40.0);
     assert_eq!(
         server.with(|m, now| m.report_shot(now, late)),
         Err(MachineError::NotRunning),

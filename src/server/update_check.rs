@@ -63,7 +63,7 @@ pub(super) struct UpdateState {
 
 impl Server {
     /// Starts the task that looks for newer releases while the check is on
-    /// (see [`Server::set_update_check`]).
+    /// (see `Server::set_update_check`).
     pub fn start_update_check(self: &Arc<Self>, cfg: UpdateConfig) {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let http = match reqwest::Client::builder()

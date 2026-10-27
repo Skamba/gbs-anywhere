@@ -43,19 +43,6 @@ impl MachineStatus {
     pub fn from_code(code: i64) -> Option<Self> {
         Self::ALL.into_iter().find(|s| s.code() == code)
     }
-
-    /// The grinder's own name for the state.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Off => "OFF",
-            Self::On => "ON",
-            Self::Eco => "ECO",
-            Self::ActiveServing => "ACTIVE SERVING",
-            Self::ActiveFinishing => "ACTIVE FINISHING",
-            Self::Testing => "TESTING",
-            Self::Fault => "FAULT",
-        }
-    }
 }
 
 impl From<MachineStatus> for i64 {

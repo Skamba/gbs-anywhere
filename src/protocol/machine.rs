@@ -26,13 +26,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{
+    EXTRACTION_STATUS_BREWING, EXTRACTION_STATUS_FINISHED, EXTRACTION_STATUS_IDLE,
     EXTRACTION_STATUS_USER_ABORT, GrindResult, MAX_EXTRACTION_TIME_MS, MAX_OFF_TARGET_MS,
     MIN_EXTRACTION_TIME_MS, MachineIdentity, MachineStatus, MakoState,
 };
 
-/// Tunables. The extraction-status values for a normal shot are a best guess;
-/// only `2` (user abort) has a known meaning to the grinder.
-#[derive(Debug, Clone, Serialize)]
+/// Tunables, shown as `machine.config` in `GET /api/state`.
+#[derive(Debug, Clone)]
 pub struct MachineConfig {
     pub identity: MachineIdentity,
     /// How long `ACTIVE FINISHING` is shown before going back to `ON`. The
@@ -42,26 +42,38 @@ pub struct MachineConfig {
     ///
     /// [`MIN_FINISHING_HOLD`]: super::MIN_FINISHING_HOLD
     /// [`MAX_FINISHING_HOLD`]: super::MAX_FINISHING_HOLD
-    #[serde(rename = "finishing_hold_s", serialize_with = "as_secs_f64")]
     pub finishing_hold: Duration,
     /// The shot window: a shot with no reported result is aborted after this
     /// long. `None` for no limit, sent as 0 as in the settings.
-    #[serde(rename = "shot_window_s", serialize_with = "as_secs")]
     pub shot_window: Option<Duration>,
-    /// Enter `ACTIVE SERVING` as soon as the grinder asks to start. The grinder
-    /// gives up after 3 unanswered requests, so leave this on.
-    pub serve_on_start_request: bool,
-    pub extraction_status_idle: i64,
-    pub extraction_status_brewing: i64,
-    pub extraction_status_finished: i64,
 }
 
-fn as_secs_f64<S: serde::Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_f64(d.as_secs_f64())
-}
-
-fn as_secs<S: serde::Serializer>(d: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_u64(d.map_or(0, |d| d.as_secs()))
+impl Serialize for MachineConfig {
+    /// With the fixed values next to the tunables, as the API has always
+    /// shown them: the machine serves a start request at once, and the
+    /// extraction status it sends.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Shown<'a> {
+            identity: &'a MachineIdentity,
+            finishing_hold_s: f64,
+            shot_window_s: u64,
+            serve_on_start_request: bool,
+            extraction_status_idle: i64,
+            extraction_status_brewing: i64,
+            extraction_status_finished: i64,
+        }
+        Shown {
+            identity: &self.identity,
+            finishing_hold_s: self.finishing_hold.as_secs_f64(),
+            shot_window_s: self.shot_window.map_or(0, |d| d.as_secs()),
+            serve_on_start_request: true,
+            extraction_status_idle: EXTRACTION_STATUS_IDLE,
+            extraction_status_brewing: EXTRACTION_STATUS_BREWING,
+            extraction_status_finished: EXTRACTION_STATUS_FINISHED,
+        }
+        .serialize(s)
+    }
 }
 
 impl Default for MachineConfig {
@@ -70,10 +82,6 @@ impl Default for MachineConfig {
             identity: MachineIdentity::default(),
             finishing_hold: Duration::from_secs(6),
             shot_window: Some(Duration::from_secs(180)),
-            serve_on_start_request: true,
-            extraction_status_idle: 0,
-            extraction_status_brewing: 1,
-            extraction_status_finished: 1,
         }
     }
 }
@@ -100,16 +108,12 @@ impl ShotResult {
             .then(|| Duration::from_secs_f64(s))
     }
 
+    /// From what a person reads off a timer and a scale.
     pub fn new(time: Duration, weight_g: f64) -> Self {
         Self {
             time_ms: u32::try_from(time.as_millis()).unwrap_or(u32::MAX),
             weight_g,
         }
-    }
-
-    /// From what a person reads off a timer and a scale.
-    pub fn from_grams(time: Duration, beverage_g: f64) -> Self {
-        Self::new(time, beverage_g)
     }
 }
 
@@ -434,8 +438,10 @@ impl Machine {
         self.push(now, MachineEvent::GrinderGrindFinished { result });
     }
 
-    /// `POST /api/v2/scripts/execute` from the grinder. Repeats while already
-    /// brewing are the grinder's retries and are ignored.
+    /// `POST /api/v2/scripts/execute` from the grinder: the brew starts at
+    /// once, since the grinder re-sends the request only a few times before
+    /// it gives up on a machine that does not enter `ACTIVE SERVING`.
+    /// Repeats while already brewing are those retries and are ignored.
     pub fn on_start_request(&mut self, now: Instant, script_id: Option<i64>) {
         self.tick(now);
         if matches!(self.phase, Phase::Running { .. }) {
@@ -449,9 +455,7 @@ impl Machine {
                 target_time_ms: None,
             },
         );
-        if self.config.serve_on_start_request {
-            self.begin(now, true);
-        }
+        self.begin(now, true);
     }
 
     /// A brew job from an E65/E80 grinder: like a grind result followed by a
@@ -536,12 +540,7 @@ impl Machine {
     /// Ends the brew as a user abort (`MA_EXTRACTION_STATUS = 2`): the grinder
     /// skips the result.
     pub fn abort(&mut self, now: Instant) -> Result<(), MachineError> {
-        self.tick(now);
-        let Phase::Running { since, .. } = self.phase else {
-            return Err(MachineError::NotRunning);
-        };
-        self.abort_shot(now, since, AbortCause::ShotAbortedByUser);
-        Ok(())
+        self.give_up(now, AbortCause::ShotAbortedByUser)
     }
 
     /// Ends the brew for `cause` (say, the grinder stopped waiting for it),
@@ -580,7 +579,7 @@ impl Machine {
         let mut s = self.ready.clone();
         match self.phase {
             Phase::Ready => {
-                s.extraction_status = self.config.extraction_status_idle;
+                s.extraction_status = EXTRACTION_STATUS_IDLE;
                 if let Some(shot) = self.last_shot {
                     s.real_extraction_time_ms = shot.time_ms;
                     s.flow_meter_volume_ml = shot.weight_g;
@@ -588,7 +587,7 @@ impl Machine {
             }
             Phase::Running { since, .. } => {
                 s.status = MachineStatus::ActiveServing;
-                s.extraction_status = self.config.extraction_status_brewing;
+                s.extraction_status = EXTRACTION_STATUS_BREWING;
                 s.real_extraction_time_ms =
                     u32::try_from(now.saturating_duration_since(since).as_millis())
                         .unwrap_or(u32::MAX);
@@ -601,7 +600,7 @@ impl Machine {
                 s.extraction_status = if aborted {
                     EXTRACTION_STATUS_USER_ABORT
                 } else {
-                    self.config.extraction_status_finished
+                    EXTRACTION_STATUS_FINISHED
                 };
                 s.real_extraction_time_ms = result.time_ms;
                 s.flow_meter_volume_ml = result.weight_g;
@@ -801,7 +800,7 @@ mod tests {
 
         let t2 = t1 + Duration::from_secs(28);
         g.observe(&m.mako(t2));
-        m.report_shot(t2, ShotResult::from_grams(Duration::from_secs(30), 36.0))
+        m.report_shot(t2, ShotResult::new(Duration::from_secs(30), 36.0))
             .unwrap();
         assert_eq!(poll_until_ready(&mut m, &mut g, t2), Some(30_000));
         assert_eq!(
@@ -869,7 +868,7 @@ mod tests {
         let mut m = Machine::new(MachineConfig::default());
         m.on_start_request(t0, Some(9));
         assert_eq!(
-            m.report_shot(t0, ShotResult::from_grams(time, 0.0)),
+            m.report_shot(t0, ShotResult::new(time, 0.0)),
             Err(MachineError::NoWeight),
             "no recipe weight to fall back on"
         );
@@ -882,12 +881,10 @@ mod tests {
         m.on_grind_result(t0, recipe);
         for none in [0.0, -1.0, f64::NAN] {
             let mut m = m.clone();
-            m.report_shot(t0, ShotResult::from_grams(time, none))
-                .unwrap();
+            m.report_shot(t0, ShotResult::new(time, none)).unwrap();
             assert_eq!(m.last_shot().unwrap().weight_g, 36.5, "{none}");
         }
-        m.report_shot(t0, ShotResult::from_grams(time, 38.0))
-            .unwrap();
+        m.report_shot(t0, ShotResult::new(time, 38.0)).unwrap();
         assert_eq!(m.last_shot().unwrap().weight_g, 38.0, "a weight is kept");
     }
 
@@ -1034,6 +1031,36 @@ mod tests {
         m.on_start_request(t0, Some(9));
         let much_later = t0 + Duration::from_secs(4 * 3600);
         assert!(matches!(m.phase(much_later), Phase::Running { .. }));
+    }
+
+    #[test]
+    fn the_config_shows_as_it_always_did() {
+        let config = MachineConfig {
+            finishing_hold: Duration::from_millis(6500),
+            ..MachineConfig::default()
+        };
+        let mut shown = serde_json::to_value(&config).unwrap();
+        assert_eq!(shown["identity"]["MA_SN"], "0000000000");
+        shown.as_object_mut().unwrap().remove("identity");
+        assert_eq!(
+            shown,
+            serde_json::json!({
+                "finishing_hold_s": 6.5,
+                "shot_window_s": 180,
+                "serve_on_start_request": true,
+                "extraction_status_idle": 0,
+                "extraction_status_brewing": 1,
+                "extraction_status_finished": 1,
+            })
+        );
+        let unlimited = MachineConfig {
+            shot_window: None,
+            ..config
+        };
+        assert_eq!(
+            serde_json::to_value(&unlimited).unwrap()["shot_window_s"],
+            0
+        );
     }
 
     #[test]

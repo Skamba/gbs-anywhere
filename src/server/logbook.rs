@@ -99,6 +99,7 @@ impl LogBook {
     }
 
     /// New lines as they are added.
+    #[cfg(test)]
     pub fn subscribe(&self) -> broadcast::Receiver<LogLine> {
         self.live.subscribe()
     }

@@ -393,7 +393,7 @@ fn handle_line(x: &Server, line: &str) -> String {
                 .next()
                 .and_then(|g| g.replace(',', ".").parse::<f64>().ok())
                 .unwrap_or(0.0);
-            let shot = ShotResult::from_grams(time, grams);
+            let shot = ShotResult::new(time, grams);
             result_msg(x.with(|m, now| m.report_shot(now, shot)))
         }
     }
