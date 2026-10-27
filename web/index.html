@@ -64,7 +64,7 @@
     <section class="card clip t-ok" id="sys-card" data-i18n-attr="aria-label:sys.title" aria-label="System status">
       <button type="button" class="card-head" id="sys-toggle" aria-expanded="false" aria-controls="sys-body">
         <span class="sys-icon" id="sys-icon"></span>
-        <span class="minw"><span class="kicker" style="display:block" data-i18n="sys.title">System status</span><span class="sys-label" id="sys-label" style="display:block">Connecting…</span></span>
+        <span class="minw"><span class="kicker block" data-i18n="sys.title">System status</span><span class="sys-label block" id="sys-label">Connecting…</span></span>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="sys-body" id="sys-body" hidden>
@@ -79,7 +79,7 @@
     </section>
 
     <section class="card clip" id="step-1" data-i18n-attr="aria-label:start.step1.kicker" aria-label="Step 1">
-      <button type="button" class="card-head" data-step="1" aria-expanded="false" aria-controls="step-1-body">
+      <button type="button" class="card-head step-head" data-step="1" aria-expanded="false" aria-controls="step-1-body">
         <span class="num" data-num></span>
         <span class="head-col"><span class="kicker" data-i18n="start.step1.kicker">Step 1</span><span class="step-title" data-i18n="start.step1.title">Grind with the Grind-by-Sync recipe</span></span>
         <span class="badge" data-badge></span>
@@ -93,7 +93,7 @@
     </section>
 
     <section class="card clip" id="step-2" data-i18n-attr="aria-label:start.step2.kicker" aria-label="Step 2">
-      <button type="button" class="card-head" data-step="2" aria-expanded="false" aria-controls="step-2-body">
+      <button type="button" class="card-head step-head" data-step="2" aria-expanded="false" aria-controls="step-2-body">
         <span class="num" data-num></span>
         <span class="head-col"><span class="kicker" data-i18n="start.step2.kicker">Step 2</span><span class="step-title" data-i18n="start.step2.title">Pull the shot on the espresso machine</span></span>
         <span class="badge" data-badge></span>
@@ -156,7 +156,7 @@
     </section>
 
     <section class="card clip" id="step-3" data-i18n-attr="aria-label:start.step3.kicker" aria-label="Step 3">
-      <button type="button" class="card-head" data-step="3" aria-expanded="false" aria-controls="step-3-body">
+      <button type="button" class="card-head step-head" data-step="3" aria-expanded="false" aria-controls="step-3-body">
         <span class="num" data-num></span>
         <span class="head-col"><span class="kicker" data-i18n="start.step3.kicker">Step 3</span><span class="step-title" data-i18n="start.step3.title">Grinder checks and adjusts the grind</span></span>
         <span class="badge" data-badge></span>
@@ -192,7 +192,7 @@
       <!-- The grinder's address. Below the field: where it comes from. -->
       <form class="stack" id="g-host-form" autocomplete="off" hidden>
         <label class="field-label" for="f-host" id="g-host-name" data-i18n="grinder.host.label">Grinder IP address</label>
-        <span class="field"><input id="f-host" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="192.168.1.30" enterkeyhint="done" style="font-size:16px;font-weight:500"></span>
+        <span class="field host-field"><input id="f-host" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="192.168.1.30" enterkeyhint="done"></span>
         <p class="foot" data-i18n="grinder.host.help">The address of an E65/E80 GbS (Local WiFi). Leave it empty when you use an E64 WS.</p>
         <div class="set-from" id="g-host-from" hidden><span id="g-host-from-text" tabindex="-1"></span><button type="button" class="link-btn" id="g-host-reset" aria-describedby="g-host-name" data-i18n="settings.useStart" hidden>Use start setting</button></div>
         <p class="hint warn" id="g-host-error" role="alert" hidden></p>
@@ -293,7 +293,7 @@
     </section>
 
     <section class="card pad stack-12" aria-labelledby="v-title">
-      <div class="row-12" style="justify-content:space-between">
+      <div class="row-12 spread">
         <p class="card-title" id="v-title">gbs-anywhere</p>
         <span class="badge" id="v-badge" hidden></span>
         <span class="foot" id="v-off" data-i18n="version.checkOff" hidden>Update check off</span>
@@ -312,7 +312,7 @@
     <!-- Log: the server's recent log lines, live; closed until needed -->
     <section class="card clip" id="log-card" data-i18n-attr="aria-label:log.title" aria-label="Log">
       <button type="button" class="card-head" id="log-toggle" aria-expanded="false" aria-controls="log-body">
-        <span class="minw"><span class="card-title" style="display:block" data-i18n="log.title">Log</span><span class="sub" style="display:block" data-i18n="log.sub">What gbs-anywhere did, to copy into a bug report.</span></span>
+        <span class="minw"><span class="card-title block" data-i18n="log.title">Log</span><span class="sub block" data-i18n="log.sub">What gbs-anywhere did, to copy into a bug report.</span></span>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
       </button>
       <div class="log-body" id="log-body" hidden>
@@ -334,11 +334,11 @@
   </main>
 
   <!-- History: the last shots from GET /api/history -->
-  <main class="panel" id="tab-history" style="gap:14px" hidden>
+  <main class="panel loose" id="tab-history" hidden>
     <div role="group" data-i18n-attr="aria-label:history.filter" aria-label="Filter by status" class="chips" id="h-chips"></div>
     <div class="stack-14" id="h-groups"></div>
     <p class="center-note" id="h-empty" hidden></p>
-    <p class="foot" id="h-foot" style="margin-top:4px" hidden></p>
+    <p class="foot h-foot" id="h-foot" hidden></p>
   </main>
 
   <!-- Setup: which grinder, then connecting an E64 WS or pairing an E65/E80

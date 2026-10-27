@@ -85,7 +85,7 @@
     alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.5"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
-    arrow: '<path d="M9 5l7 7-7 7"/>',
+    arrow: '<path d="M9 6l6 6-6 6"/>',
     cloud: '<path d="M7 18a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 9.5a3.5 3.5 0 0 1-.5 7H7z"/>',
     back: '<path d="M15 6l-6 6 6 6"/>',
     cross: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -1635,7 +1635,7 @@
       el("button", { type: "button", onclick: () => showForm(k) },
         iconFor(k.id),
         el("span", { class: "minw" }, el("span", { class: "kind-title", text: k.title }), stEl("span", { class: "kind-sum" }, kindKey(k.id, "summary"), k.summary)),
-        el("span", { class: "chev", style: "display:grid" }, icon("arrow", 18, 2.2))))));
+        el("span", { class: "chev" }, icon("arrow", 18, 2.2))))));
   }
   function showForm(k) {
     addingKind = k;
@@ -2748,7 +2748,7 @@
     const num = st === "done" ? icon("check", 16, 2.6) : head.mark || (st === "retry" ? "!" : String(head.no));
     const bodyId = "wz-body-" + n;
     return el("section", { class: "card wz-card t-" + tone + (st === "later" ? " later" : st !== "done" ? " current" : "") },
-      el("button", { type: "button", class: "wz-head", id: "wz-head-" + n, "data-toggle": String(n), "aria-expanded": String(open),
+      el("button", { type: "button", class: "card-head step-head wz-head", id: "wz-head-" + n, "data-toggle": String(n), "aria-expanded": String(open),
         "aria-controls": open ? bodyId : null, disabled: st === "later" || !body },
         el("span", { class: "num" }, num),
         el("span", { class: "head-col" },
