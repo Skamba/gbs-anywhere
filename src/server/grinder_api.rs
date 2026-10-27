@@ -337,6 +337,7 @@ fn unix_time() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::temp_dir;
     use axum::body::Bytes;
 
     fn body(chunks: Vec<std::io::Result<Bytes>>) -> Body {
@@ -345,15 +346,6 @@ mod tests {
 
     fn bytes(n: usize) -> std::io::Result<Bytes> {
         Ok(Bytes::from(vec![b'x'; n]))
-    }
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "gbs-anywhere-transcript-{name}-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     #[test]

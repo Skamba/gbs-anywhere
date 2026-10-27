@@ -12,6 +12,8 @@ pub mod http;
 pub mod integration;
 pub mod protocol;
 pub mod server;
+#[cfg(test)]
+mod test_support;
 
 use std::sync::LazyLock;
 

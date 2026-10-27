@@ -752,6 +752,9 @@ impl Server {
 mod tests {
     use super::*;
     use crate::protocol::MachineConfig;
+    use crate::test_support::temp_dir;
+    #[cfg(unix)]
+    use crate::test_support::{mode, set_mode};
 
     #[test]
     fn values_edited_into_what_the_app_refuses_are_ignored() {
@@ -774,15 +777,6 @@ mod tests {
             ..AppSettings::default()
         };
         assert_eq!(checked(removed.clone()), removed);
-    }
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "gbs-anywhere-settings-{name}-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     fn change(body: Value) -> Result<SettingsChange, String> {
@@ -935,18 +929,6 @@ mod tests {
         );
         assert!(file.data().settings.is_empty());
         let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[cfg(unix)]
-    fn mode(path: &Path) -> u32 {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
-    }
-
-    #[cfg(unix)]
-    fn set_mode(path: &Path, mode: u32) {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
     }
 
     #[cfg(unix)]

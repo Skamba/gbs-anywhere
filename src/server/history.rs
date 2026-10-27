@@ -499,6 +499,7 @@ async fn record(server: Arc<Server>, mut events: broadcast::Receiver<EventRecord
 mod tests {
     use super::*;
     use crate::protocol::GrinderRange;
+    use crate::test_support::temp_path;
     use serde_json::{Value, json};
     use std::sync::LazyLock;
     use std::time::UNIX_EPOCH;
@@ -544,11 +545,6 @@ mod tests {
             result,
             in_grinder_range: Some(GrinderRange::E64.contains(result.time_ms)),
         }
-    }
-
-    /// A folder of its own under the system's temp directory, not created.
-    fn temp_dir() -> PathBuf {
-        std::env::temp_dir().join(format!("gbs-anywhere-history-{}", uuid::Uuid::new_v4()))
     }
 
     fn grind(weight: f64) -> GrindResult {
@@ -768,7 +764,7 @@ mod tests {
 
     #[test]
     fn keeps_the_newest_in_the_file() {
-        let dir = temp_dir();
+        let dir = temp_path("history");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("history.json");
         let h = History::default();
@@ -816,7 +812,7 @@ mod tests {
 
     #[test]
     fn a_shot_this_version_cannot_read_is_left_out_not_the_file() {
-        let dir = temp_dir();
+        let dir = temp_path("history");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("history.json");
         let known = serde_json::to_value(ended(30, success(28))).unwrap();
@@ -838,7 +834,7 @@ mod tests {
 
     #[test]
     fn older_shots_get_their_cause_from_the_reason() {
-        let dir = temp_dir();
+        let dir = temp_path("history");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("history.json");
         // The reasons as saved before `cause` was kept: these words stay.
@@ -904,7 +900,7 @@ mod tests {
 
     #[test]
     fn shots_from_earlier_builds_still_load() {
-        let dir = temp_dir();
+        let dir = temp_path("history");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("history.json");
         // Shots as saved before `cause` and `in_grinder_range` were kept,
@@ -978,13 +974,14 @@ mod tests {
     fn a_history_that_cannot_be_written_is_not_called_kept() {
         // The folder does not exist, so the file cannot be written.
         let h = History::default();
-        h.use_file(&temp_dir().join("history.json")).unwrap();
+        h.use_file(&temp_path("history").join("history.json"))
+            .unwrap();
         assert!(!h.persistent());
     }
 
     #[test]
     fn a_save_that_fails_later_is_not_called_kept() {
-        let dir = temp_dir();
+        let dir = temp_path("history");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("history.json");
         let h = History::default();
