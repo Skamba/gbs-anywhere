@@ -479,7 +479,7 @@ mod tests {
     use super::*;
     use crate::integration::{BoxFuture, Field, Health, Input};
     use crate::protocol::MachineConfig;
-    use std::path::PathBuf;
+    use crate::test_support::temp_dir;
 
     struct Idle;
     impl Integration for Idle {
@@ -627,13 +627,6 @@ mod tests {
             .collect()
     }
 
-    fn temp_file(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("gbs-anywhere-test-{name}-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("settings.json")
-    }
-
     fn open(path: &std::path::Path) -> Arc<SettingsFile> {
         SettingsFile::open(path).unwrap()
     }
@@ -667,7 +660,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_settings_file_keeps_app_entries() {
-        let path = temp_file("keep");
+        let path = temp_dir("keep").join("settings.json");
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
         m.start_cli(&x, &SCALE, &host("cli")).unwrap();
@@ -708,7 +701,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_save_changes_nothing() {
-        let path = temp_file("fail");
+        let path = temp_dir("fail").join("settings.json");
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
         m.start_cli(&x, &SCALE, &host("cli")).unwrap();
@@ -739,7 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn edit_keeps_the_saved_password() {
-        let path = temp_file("edit");
+        let path = temp_dir("edit").join("settings.json");
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
         m.load(&x, open(&path), &[&CLOUD]).unwrap();
@@ -783,7 +776,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_command_line_one_moves_into_the_app() {
-        let path = temp_file("adopt");
+        let path = temp_dir("adopt").join("settings.json");
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
         let cli = login("me@example.com", "secret");

@@ -11,6 +11,7 @@ use crate::protocol::{
     AbortCause, BrewState, GrinderEvent, GrinderModel, MachineStatus, MakoState, PATH_BREWRATIO,
     PATH_MACHINE, PATH_MAKO, PATH_SCRIPTS_EXECUTE, START_BREW_SCRIPT_ID,
 };
+use crate::test_support::temp_dir;
 
 /// Serves both routers on one port, like the binary with the app on the
 /// grinder port.
@@ -33,16 +34,6 @@ async fn start_server() -> (String, Arc<Server>) {
     let addr = listener.local_addr().unwrap();
     spawn_server(listener, app, addr, &state);
     (format!("http://{addr}"), state)
-}
-
-/// A directory of its own under the system's temp directory.
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "gbs-anywhere-routes-{name}-{}",
-        uuid::Uuid::new_v4()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
 }
 
 /// A client that polls and posts like the grinder and remembers which shot

@@ -27,8 +27,9 @@ file is for agents changing the code.
   E65/E80 link, update check) and is the only writer of the settings file;
   `history.rs` records the shots from the machine's events; `logbook.rs`
   keeps the last log lines for the app (a `tracing` layer next to the
-  console output); `update_check.rs` looks for a newer release; `utc.rs`
-  formats times. `tests.rs` and `wifi_grinder/tests.rs` hold the end-to-end
+  console output); `update_check.rs` looks for a newer release;
+  `private_file.rs` writes the files only their owner may read (settings,
+  history, pairing, transcript); `utc.rs` formats times. `tests.rs` and `wifi_grinder/tests.rs` hold the end-to-end
   tests.
 - `src/integration/`: optional integrations that report shots by themselves,
   one folder each (see [Integrations](#integrations)). `mod.rs` has the
@@ -120,7 +121,8 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
   reason when adding a dependency.
 - Tests sit next to the code in `#[cfg(test)] mod tests` and go through real
   functions rather than mocks. Temporary files go under
-  `std::env::temp_dir()`. `src/server/tests.rs` runs the real routers over
+  `std::env::temp_dir()`, through `temp_dir(name)` or `temp_path(name)` in
+  `src/test_support.rs`. `src/server/tests.rs` runs the real routers over
   HTTP with `GrinderModel` playing the grinder; extend it when what the
   grinder sees changes.
 

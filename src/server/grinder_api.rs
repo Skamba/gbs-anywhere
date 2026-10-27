@@ -21,7 +21,7 @@ use crate::server::browser::{
     REFUSED_GRINDER, UNKNOWN_GRINDER, UNPARSABLE_GRINDER, from_browser, short, tell_once,
 };
 use crate::server::logbook::printable;
-use crate::server::settings::make_private;
+use crate::server::private_file::make_private;
 use crate::server::{Conn, Server};
 
 /// The grinder's writes are a few dozen bytes; anything much bigger is not
@@ -337,6 +337,7 @@ fn unix_time() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::temp_dir;
     use axum::body::Bytes;
 
     fn body(chunks: Vec<std::io::Result<Bytes>>) -> Body {
@@ -345,15 +346,6 @@ mod tests {
 
     fn bytes(n: usize) -> std::io::Result<Bytes> {
         Ok(Bytes::from(vec![b'x'; n]))
-    }
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "gbs-anywhere-transcript-{name}-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     #[test]
