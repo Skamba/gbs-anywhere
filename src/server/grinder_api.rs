@@ -1,6 +1,8 @@
 //! The face the E64 WS sees: a Xenia's `/api/v2/*` on port 80. (An E65/E80
 //! GbS is polled by [`super::wifi_grinder`] instead.)
 
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,10 +15,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt;
 
 use crate::server::browser::{
     REFUSED_GRINDER, UNKNOWN_GRINDER, UNPARSABLE_GRINDER, from_browser, short, tell_once,
 };
+use crate::server::logbook::printable;
+use crate::server::settings::make_private;
 use crate::server::{Conn, Server};
 
 /// The grinder's writes are a few dozen bytes; anything much bigger is not
@@ -76,7 +81,7 @@ async fn handle(
             }
             _ => tracing::debug!("{peer} {method} {uri}: refused, {why}"),
         }
-        let line = format!("{} {peer} {method} {uri} -> refused: {why}\n", unix_time());
+        let line = transcript_line(peer, &method, &uri, b"", &format!("refused: {why}"));
         x.write_transcript(&line).await;
         code.into_response()
     };
@@ -175,11 +180,7 @@ async fn handle(
     } else {
         tracing::debug!("{peer} {method} {uri} -> {text}");
     }
-    let mut line = format!("{} {peer} {method} {uri}", unix_time());
-    if !body.is_empty() {
-        line.push_str(&format!(" body={}", String::from_utf8_lossy(&body)));
-    }
-    line.push_str(&format!(" -> {text}\n"));
+    let line = transcript_line(peer, &method, &uri, &body, &text);
     x.write_transcript(&line).await;
 
     (StatusCode::OK, [("content-type", "application/json")], text).into_response()
@@ -209,6 +210,123 @@ async fn read_body(body: Body) -> Result<Vec<u8>, BodyError> {
     Ok(bytes)
 }
 
+/// How big the `--log` file grows before it starts over: the grinder's polls
+/// alone write about 10 MB a day.
+pub(crate) const TRANSCRIPT_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// How much of a request's URI and body a transcript line keeps, in
+/// characters: the grinder's are far shorter.
+const TRANSCRIPT_URI_CHARS: usize = 512;
+const TRANSCRIPT_BODY_CHARS: usize = 1024;
+
+/// The `--log` file: every E64 WS request and our reply, a line each. Only
+/// its owner may read it, and it is kept to a size: past that it moves to
+/// `<file>.1`, replacing the one there, and starts over.
+pub(crate) struct Transcript {
+    path: PathBuf,
+    max_bytes: u64,
+    open: tokio::sync::Mutex<OpenTranscript>,
+}
+
+struct OpenTranscript {
+    file: tokio::fs::File,
+    len: u64,
+    /// The log said that starting over failed.
+    warned: bool,
+}
+
+impl Transcript {
+    /// Opens `path` to append to it, or creates it, readable by its owner
+    /// only; it starts over past `max_bytes`.
+    pub(crate) async fn open(path: &Path, max_bytes: u64) -> std::io::Result<Self> {
+        // A file from an older version may be readable by others.
+        make_private(path);
+        let file = open_private(path).await?;
+        let len = file.metadata().await?.len();
+        Ok(Self {
+            path: path.to_owned(),
+            max_bytes,
+            open: tokio::sync::Mutex::new(OpenTranscript {
+                file,
+                len,
+                warned: false,
+            }),
+        })
+    }
+
+    /// Appends `line`. A failed write is only a lost line.
+    pub(crate) async fn write(&self, line: &str) {
+        let mut open = self.open.lock().await;
+        let size = u64::try_from(line.len()).unwrap_or(u64::MAX);
+        if open.len > 0 && open.len.saturating_add(size) > self.max_bytes {
+            match self.start_over(&mut open).await {
+                Ok(()) => open.warned = false,
+                Err(e) if !std::mem::replace(&mut open.warned, true) => {
+                    tracing::warn!("--log: cannot start {} over: {e}", self.path.display());
+                }
+                Err(_) => {}
+            }
+        }
+        let written = async {
+            open.file.write_all(line.as_bytes()).await?;
+            open.file.flush().await
+        };
+        match written.await {
+            Ok(()) => open.len = open.len.saturating_add(size),
+            Err(e) => tracing::debug!("--log: cannot write {}: {e}", self.path.display()),
+        }
+    }
+
+    /// Moves the file to `<file>.1` and opens a new one; if it can't be
+    /// moved, empties it.
+    async fn start_over(&self, open: &mut OpenTranscript) -> std::io::Result<()> {
+        let mut old = self.path.as_os_str().to_owned();
+        old.push(".1");
+        match tokio::fs::rename(&self.path, PathBuf::from(old)).await {
+            Ok(()) => open.file = open_private(&self.path).await?,
+            Err(_) => open.file.set_len(0).await?,
+        }
+        open.len = 0;
+        Ok(())
+    }
+}
+
+/// Opens `path` for appending, created readable by its owner only.
+async fn open_private(path: &Path) -> std::io::Result<tokio::fs::File> {
+    let mut opts = tokio::fs::OpenOptions::new();
+    opts.create(true).append(true);
+    #[cfg(unix)]
+    opts.mode(0o600);
+    opts.open(path).await
+}
+
+/// A line of the `--log` file: when, who, the request and what came of it
+/// (`outcome`). What the sender chose (the URI, the body) is cut short and
+/// kept on the line, so it can't make lines of its own.
+fn transcript_line(
+    peer: SocketAddr,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    outcome: &str,
+) -> String {
+    let mut line = format!(
+        "{} {peer} {} {}",
+        unix_time(),
+        short(method.as_str()),
+        printable(&uri.to_string(), TRANSCRIPT_URI_CHARS)
+    );
+    if !body.is_empty() {
+        line.push_str(" body=");
+        let body = String::from_utf8_lossy(body);
+        line.push_str(&printable(&body, TRANSCRIPT_BODY_CHARS));
+    }
+    line.push_str(" -> ");
+    line.push_str(&printable(outcome, TRANSCRIPT_BODY_CHARS));
+    line.push('\n');
+    line
+}
+
 fn unix_time() -> String {
     let d = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -227,6 +345,85 @@ mod tests {
 
     fn bytes(n: usize) -> std::io::Result<Bytes> {
         Ok(Bytes::from(vec![b'x'; n]))
+    }
+
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "gbs-anywhere-transcript-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_transcript_line_stays_one_short_line() {
+        let peer: SocketAddr = "192.168.1.30:51000".parse().unwrap();
+        let long = format!("/api/v2/mako?{}", "q".repeat(60_000));
+        let uri: Uri = long.parse().unwrap();
+        let body = b"{\"ID\":9}\n1700000000.000 192.168.1.30:1 POST /api/v2/scripts/execute -> {}";
+        let line = transcript_line(peer, &Method::POST, &uri, body, "{}");
+        assert_eq!(line.matches('\n').count(), 1, "{line}");
+        assert!(line.ends_with(" -> {}\n"), "{line}");
+        assert!(line.contains(r#"body={"ID":9}\n1700000000.000"#), "{line}");
+        assert!(line.len() < 2048, "{} bytes", line.len());
+        let refused = transcript_line(peer, &Method::GET, &uri, b"", "refused: a\r\nb");
+        assert!(refused.ends_with(" -> refused: a\\r\\nb\n"), "{refused}");
+        assert!(!refused.contains("body="));
+    }
+
+    #[tokio::test]
+    async fn the_transcript_starts_over_past_its_size() {
+        let dir = temp_dir("rotate");
+        let path = dir.join("grinder.log");
+        let old = dir.join("grinder.log.1");
+        let t = Transcript::open(&path, 100).await.unwrap();
+        let line = |n: usize| format!("{n:039}\n");
+        for n in 0..2 {
+            t.write(&line(n)).await;
+        }
+        assert!(!old.exists());
+        t.write(&line(2)).await;
+        let read = |p: &Path| std::fs::read_to_string(p).unwrap();
+        assert_eq!(read(&old), line(0) + &line(1));
+        assert_eq!(read(&path), line(2));
+        for n in 3..6 {
+            t.write(&line(n)).await;
+        }
+        assert_eq!(read(&old), line(2) + &line(3), "one old file, the last");
+        assert_eq!(read(&path), line(4) + &line(5));
+        assert!(!dir.join("grinder.log.2").exists());
+        drop(t);
+
+        // Opened again, it goes on from its size.
+        let t = Transcript::open(&path, 100).await.unwrap();
+        t.write(&line(6)).await;
+        assert_eq!(read(&old), line(4) + &line(5));
+        assert_eq!(read(&path), line(6));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn only_its_owner_may_read_the_transcript() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let dir = temp_dir("private");
+        let new = dir.join("new.log");
+        let t = Transcript::open(&new, 100).await.unwrap();
+        assert_eq!(mode(&new), 0o600);
+        // Started over, too.
+        for _ in 0..3 {
+            t.write(&format!("{:059}\n", 0)).await;
+        }
+        assert_eq!(mode(&new), 0o600);
+        // One an older version left readable by others.
+        let old = dir.join("old.log");
+        std::fs::write(&old, "x\n").unwrap();
+        std::fs::set_permissions(&old, std::fs::Permissions::from_mode(0o644)).unwrap();
+        Transcript::open(&old, 100).await.unwrap();
+        assert_eq!(mode(&old), 0o600);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

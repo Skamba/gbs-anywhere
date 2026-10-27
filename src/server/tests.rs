@@ -99,7 +99,7 @@ async fn call(method: reqwest::Method, url: String, body: Option<Value>) -> (u16
 /// Sends `request` exactly as written and returns the status of the reply,
 /// for requests no HTTP client would send.
 async fn raw_status(base: &str, request: &str) -> u16 {
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut conn = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
         .await
         .unwrap();

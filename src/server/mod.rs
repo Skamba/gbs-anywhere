@@ -42,7 +42,6 @@ use crate::protocol::{Machine, MachineConfig};
 use axum::extract::connect_info::Connected;
 use axum::serve::IncomingStream;
 pub use browser::AllowedHosts;
-use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc};
 
@@ -60,7 +59,7 @@ pub use wifi_grinder::{
 pub struct Server {
     inner: Mutex<Inner>,
     events: broadcast::Sender<EventRecord>,
-    transcript: Option<tokio::sync::Mutex<tokio::fs::File>>,
+    transcript: Option<grinder_api::Transcript>,
     integrations: Integrations,
     icons_dir: OnceLock<PathBuf>,
     /// The shot window and grinder address, and the E65/E80 link.
@@ -160,15 +159,15 @@ impl Server {
     }
 
     /// Like [`Server::new`], also appending every grinder request and our
-    /// reply to `path`.
+    /// reply to `path` (`--log`), readable by its owner only. Past a few MiB
+    /// it moves to `<path>.1` and starts over.
     pub async fn with_transcript(config: MachineConfig, path: &Path) -> anyhow::Result<Arc<Self>> {
-        let file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .await?;
+        use anyhow::Context;
+        let transcript = grinder_api::Transcript::open(path, grinder_api::TRANSCRIPT_MAX_BYTES)
+            .await
+            .with_context(|| format!("--log: cannot open {}", path.display()))?;
         let mut me = Arc::into_inner(Self::new(config)).expect("fresh Arc");
-        me.transcript = Some(tokio::sync::Mutex::new(file));
+        me.transcript = Some(transcript);
         Ok(Arc::new(me))
     }
 
@@ -327,7 +326,7 @@ impl Server {
 
     async fn write_transcript(&self, line: &str) {
         if let Some(t) = &self.transcript {
-            let _ = t.lock().await.write_all(line.as_bytes()).await;
+            t.write(line).await;
         }
     }
 

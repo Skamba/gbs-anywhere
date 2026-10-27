@@ -362,7 +362,7 @@ package) or after `--` (cargo):
 | `--shot-window-s <s>` | 180 | give up on a shot with no numbers after this long (30 to 3600, as in the app; 0 waits forever); **Time to pull the shot** set in the app wins; `--brew-timeout-s`, its name until 0.2.1, still works |
 | `--config <file>` | off (Docker: `/data/gbs-anywhere.json`, package: `/var/lib/gbs-anywhere/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings, integrations moved from the command line); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
-| `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
+| `-l, --log <file>` | off | append every E64 WS request and the reply to a file, readable by its owner only; past 4 MiB it moves to `<file>.1` (replacing the one there) and starts over |
 | `-p, --ports <list>` | 80 | ports to serve on, comma-separated; the E64 WS polls port 80 |
 | `-b, --bind <addr>` | `0.0.0.0` | address to serve those ports on |
 | `--control <addr>` | `127.0.0.1:8787` (Docker and package: `off`) | a second address for the app and its API, besides the ports above; `off` turns it off |
