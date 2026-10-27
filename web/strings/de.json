@@ -551,6 +551,7 @@
   "history.address": "Beendet: Mühlenadresse geändert",
   "history.endMissed": "Beendet: nächster Bezug gestartet",
   "history.target": "Ziel {targets}",
+  "history.by": "via {title}",
   "history.ignored": "Ignoriert",
   "history.failed": "Die Historie konnte nicht geladen werden: {error} Neuer Versuch…",
   "history.loading": "Lädt…",

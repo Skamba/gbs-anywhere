@@ -200,6 +200,9 @@ pub enum MachineEvent {
         /// How long the brew ran until the result came, on the machine's
         /// clock (not the shot's own `time_ms`).
         running_ms: u64,
+        /// The integration that reported it (its `id`); `None` when it was
+        /// typed in the app or sent through the API.
+        integration_id: Option<String>,
     },
     /// The shot ended without a result; the grinder skips it. Made with
     /// [`MachineEvent::shot_aborted`].
@@ -519,6 +522,17 @@ impl Machine {
     /// weight of 0 (none given) becomes the recipe weight; with no recipe
     /// weight either, the result is refused.
     pub fn report_shot(&mut self, now: Instant, result: ShotResult) -> Result<(), MachineError> {
+        self.report_shot_by(now, result, None)
+    }
+
+    /// [`Machine::report_shot`] for the integration `integration_id`, which
+    /// its event names.
+    pub fn report_shot_by(
+        &mut self,
+        now: Instant,
+        result: ShotResult,
+        integration_id: Option<&str>,
+    ) -> Result<(), MachineError> {
         self.tick(now);
         let Phase::Running { since, .. } = self.phase else {
             return Err(MachineError::NotRunning);
@@ -545,6 +559,7 @@ impl Machine {
                 result,
                 in_grinder_range: self.range.map(|r| r.contains(result.time_ms)),
                 running_ms: millis(now.saturating_duration_since(since)),
+                integration_id: integration_id.map(str::to_owned),
             },
         );
         Ok(())

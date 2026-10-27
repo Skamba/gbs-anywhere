@@ -215,7 +215,7 @@ impl Link {
                 ),
             };
             let shot = ShotResult::new(time, grams);
-            match m.report_shot(now, shot) {
+            match m.report_shot_by(now, shot, Some(self.status.id())) {
                 Ok(()) => {
                     self.status.note_report(shot);
                     ReportOutcome::Reported { grams, source }
@@ -667,6 +667,18 @@ mod tests {
         let snap = l.status.snapshot();
         assert_eq!(snap.reports, 1);
         assert_eq!(snap.last_report.unwrap().time_ms, 25_100);
+        // The shot's event names the integration.
+        let reported = l.server.with(|m, _| {
+            m.events_after(0)
+                .find_map(|e| match &e.event {
+                    MachineEvent::ShotReported { integration_id, .. } => {
+                        Some(integration_id.clone())
+                    }
+                    _ => None,
+                })
+                .flatten()
+        });
+        assert_eq!(reported.as_deref(), Some("test"));
         // Answered: the grinder is no longer waiting.
         assert_eq!(l.report(brew, t, None), ReportOutcome::NotWaiting);
         assert!(!l.waits_for(brew));

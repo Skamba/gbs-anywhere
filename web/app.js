@@ -361,9 +361,6 @@
     // (sysPref), and the stop it opened for by itself (sysStop, see stopOf).
     sysOpen: false, sysPref: false, sysStop: null,
     pill: null,                  // the pill's label and short label, for a resize
-    // Shot events this page reported by hand, and the event numbers the one
-    // just sent falls between until its event is in.
-    mine: new Set(), mineRange: null,
     // The running brew (brewOf; undefined until the Start tab first
     // rendered), whether step 2 shows the fields for it, and whether no
     // integration reported it in time.
@@ -1039,7 +1036,7 @@
       shot = res ? t("unit.shot", { time: secs(res.time_ms / 1000), weight: grams(res.weight_g) }) : "";
       $("s2-shot").textContent = shot;
       const at = endTime(f.outcome);
-      const by = reportedBy(f.outcome, res);
+      const by = reportedBy(f);
       $("s2-source").textContent = [by, at ? hhmmss(new Date(at)) : null].filter(Boolean).join(" · ");
     }
     $("s2-error").hidden = f.sc !== "error";
@@ -1075,13 +1072,18 @@
     });
   }
 
-  /** "Reported by La Marzocco cloud" or "Entered by hand". */
-  function reportedBy(ev, res) {
-    if (!res) return "";
-    if (ev && ui.mine.has(ev.seq)) return t("start.step2.byHand");
-    const i = ((S && S.integrations) || []).find((x) => x.last_report && x.last_report.time_ms === res.time_ms
-      && Math.abs(x.last_report.weight_g - res.weight_g) < 0.05);
-    return i ? t("start.step2.reportedBy", { title: i.title }) : t("start.step2.byHand");
+  /** The title of the integration `id`, or the id of one that is gone. */
+  function integTitle(id) {
+    const i = ((S && S.integrations) || []).find((x) => x.id === id);
+    return i ? i.title : id;
+  }
+  /** "Reported by La Marzocco cloud" or "Entered by hand" for the shot of
+   *  flow() `f`, as its event says (`integration_id`); "" until the event
+   *  of this brew is in. */
+  function reportedBy(f) {
+    const ev = f.outcome;
+    if (!ev || ev.kind !== "shot_reported" || (f.started && ev.seq < f.started.seq)) return "";
+    return ev.integration_id ? t("start.step2.reportedBy", { title: integTitle(ev.integration_id) }) : t("start.step2.byHand");
   }
 
   /** Why the shot of flow() `f` failed. */
@@ -1187,33 +1189,16 @@
   let busy = false;
   $("f-time").addEventListener("input", () => setHint());
   $("f-time").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("f-weight").focus(); } });
-  /** Marks the shot sent from this page once its event is in: the newest
-   *  shot in the range (after a gap, an integration's may come before it). */
-  function markMine() {
-    const r = ui.mineRange;
-    if (!r) return;
-    for (let i = events.length - 1; i >= 0; i--) {
-      const e = events[i];
-      if (e.kind !== "shot_reported" || e.seq <= r.after || e.seq > r.upTo) continue;
-      ui.mine.add(e.seq); ui.mineRange = null;
-      return;
-    }
-  }
   $("shot-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (busy) return;
     const secsTyped = num($("f-time").value), w = num($("f-weight").value);
     if (!isFinite(secsTyped) || secsTyped <= 0) { setHint(t("start.form.enterTime"), true); $("f-time").focus(); return; }
     busy = true; $("send").disabled = true;
-    const after = lastSeq;
     try {
       // Without a weight the server uses the recipe's; it never sends 0 g.
       const shot = w > 0 ? { time_s: secsTyped, weight_g: w } : { time_s: secsTyped };
-      const st = await api("/api/shot/result", { method: "POST", body: JSON.stringify(shot) });
-      // Only a shot the server took was typed here ("Entered by hand"): its
-      // event falls between the last one seen before and the reply.
-      ui.mineRange = { after, upTo: st.server.last_event_seq };
-      markMine();
+      await api("/api/shot/result", { method: "POST", body: JSON.stringify(shot) });
       if (document.activeElement) document.activeElement.blur();
       busy = false;
       setHint();
@@ -2182,6 +2167,8 @@
     const tgt = [s.target_time_ms != null ? t("unit.seconds", { time: secs(s.target_time_ms / 1000) }) : null,
       s.target_weight_g != null ? t("unit.grams", { weight: gramsShort(s.target_weight_g) }) : null].filter(Boolean);
     if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
+    // Who reported it, when an integration did; typed in is the default.
+    if (s.integration_id) parts.push(t("history.by", { title: integTitle(s.integration_id) }));
     return parts.join(" · ");
   }
   /** A success the grinder did not adjust from, as the server recorded it.
@@ -2236,7 +2223,8 @@
     // The days are named from today ("Today", "Yesterday"), which moves on
     // at midnight.
     const today = new Date().toDateString();
-    patch(groups, JSON.stringify([lang, locale, HKINDS.map(shown), histGen, today]), () => days.map((g) => el("section", { class: "day" },
+    const titles = ((S && S.integrations) || []).map((i) => [i.id, i.title]);
+    patch(groups, JSON.stringify([lang, locale, HKINDS.map(shown), histGen, today, titles]), () => days.map((g) => el("section", { class: "day" },
       el("h2", { text: g.label }),
       el("ul", null, g.items.map(({ s, d }) => {
         const sub = shotSub(s);
@@ -3782,7 +3770,7 @@
     S = st; stateAt = performance.now();
     if (restarted) {
       events = []; lastSeq = 0; seenAt.clear();
-      ui.mine.clear(); ui.mineRange = null; ui.dismissed = 0; ui.planKey = null;
+      ui.dismissed = 0; ui.planKey = null;
       kinds = null;
       restartLog();
     }
@@ -3804,12 +3792,10 @@
             if (e.kind === "shot_reported" || e.kind === "shot_aborted") shotDone = true;
             lastSeq = e.seq;
           }
-          markMine();
           if (events.length > 500) {
             events.splice(0, events.length - 500);
             const min = events[0].seq;
             for (const k of seenAt.keys()) if (k < min) seenAt.delete(k);
-            for (const k of ui.mine) if (k < min) ui.mine.delete(k);
           }
           lastSeq = Math.max(lastSeq, st.server.last_event_seq);
           caughtUp = true;

@@ -525,6 +525,7 @@
   "history.address": "Ended: grinder address changed",
   "history.endMissed": "Ended: next shot started",
   "history.target": "Target {targets}",
+  "history.by": "via {title}",
   "history.ignored": "Ignored",
   "history.failed": "Could not load the history: {error} Trying again…",
   "history.loading": "Loading…",

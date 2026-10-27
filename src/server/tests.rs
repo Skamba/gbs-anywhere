@@ -246,6 +246,8 @@ async fn grinder_accepts_a_shot_entered_in_the_app() {
         events[3]["result"],
         json!({ "time_ms": 30_000, "weight_g": 36.0 })
     );
+    // Typed in the app: no integration reported it.
+    assert_eq!(events[3]["integration_id"], Value::Null);
 }
 
 #[tokio::test]
@@ -1091,6 +1093,7 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
     );
     assert!(shot["id"].as_str().is_some_and(|id| !id.is_empty()));
     assert!(shot["started_at"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(shot["integration_id"], Value::Null, "typed in");
     assert!(shot["ended_at"].as_str().unwrap() >= shot["started_at"].as_str().unwrap());
     assert!(shot["running_ms"].as_u64().is_some_and(|ms| ms < 10_000));
     let saved: Value =

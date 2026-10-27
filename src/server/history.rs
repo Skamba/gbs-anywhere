@@ -80,6 +80,10 @@ pub struct Shot {
     /// its `shot_reported` event. None when the shot's window is not known
     /// (an E65/E80 brew job without a target time); older files have none.
     pub in_grinder_range: Option<bool>,
+    /// Only for a success: the integration that reported it, as on its
+    /// `shot_reported` event. None when it was typed in the app or sent
+    /// through the API, and in older files.
+    pub integration_id: Option<String>,
     /// What the grinder aims for, when it said.
     pub target_time_ms: Option<u32>,
     pub target_weight_g: Option<f64>,
@@ -106,6 +110,8 @@ struct StoredShot {
     time_s: Option<f64>,
     weight_g: Option<f64>,
     in_grinder_range: Option<bool>,
+    #[serde(default)]
+    integration_id: Option<String>,
     target_time_ms: Option<u32>,
     target_time_s: Option<f64>,
     target_weight_g: Option<f64>,
@@ -135,6 +141,7 @@ impl From<StoredShot> for Shot {
             time_ms: s.time_ms.or_else(|| ms(s.time_s)),
             weight_g: s.weight_g,
             in_grinder_range: s.in_grinder_range,
+            integration_id: s.integration_id,
             target_time_ms: s.target_time_ms.or_else(|| ms(s.target_time_s)),
             target_weight_g: s.target_weight_g,
             reason: s.reason,
@@ -352,12 +359,14 @@ struct Open {
 }
 
 /// How a shot ended.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum End {
-    /// With a shot result, and whether the grinder adjusts from its time.
+    /// With a shot result, whether the grinder adjusts from its time, and
+    /// the integration that reported it.
     Shot {
         result: ShotResult,
         in_grinder_range: Option<bool>,
+        integration_id: Option<String>,
     },
     /// Without one, for this cause.
     Aborted(AbortCause),
@@ -411,12 +420,14 @@ impl Recorder {
             MachineEvent::ShotReported {
                 result,
                 in_grinder_range,
+                integration_id,
                 ..
             } => {
                 let open = self.open.take()?;
                 let end = End::Shot {
                     result: *result,
                     in_grinder_range: *in_grinder_range,
+                    integration_id: integration_id.clone(),
                 };
                 Some(shot(&open, at, wall, end))
             }
@@ -438,12 +449,19 @@ fn shot(open: &Open, ended: Instant, wall: SystemTime, end: End) -> Shot {
     // `ended_at` are then exactly this far apart, so a 3:00 timeout does not
     // show as 3:01.
     let took = Duration::from_secs(running.as_secs());
-    let (outcome, result, in_grinder_range, cause) = match end {
+    let (outcome, result, in_grinder_range, integration_id, cause) = match end {
         End::Shot {
             result,
             in_grinder_range,
-        } => (ShotOutcome::Succeeded, Some(result), in_grinder_range, None),
-        End::Aborted(cause) => (ShotOutcome::of(cause), None, None, Some(cause)),
+            integration_id,
+        } => (
+            ShotOutcome::Succeeded,
+            Some(result),
+            in_grinder_range,
+            integration_id,
+            None,
+        ),
+        End::Aborted(cause) => (ShotOutcome::of(cause), None, None, None, Some(cause)),
     };
     Shot {
         id: uuid::Uuid::new_v4().simple().to_string(),
@@ -454,8 +472,8 @@ fn shot(open: &Open, ended: Instant, wall: SystemTime, end: End) -> Shot {
         time_ms: result.map(|r| r.time_ms),
         weight_g: result.map(|r| r.weight_g),
         in_grinder_range,
+        integration_id,
         target_time_ms: open.target.time_ms,
-
         target_weight_g: open.target.weight_g,
         reason: cause.map(|c| c.text().to_owned()),
         cause,
@@ -559,6 +577,7 @@ mod tests {
         let result = ShotResult::new(Duration::from_secs(secs), 36.0);
         End::Shot {
             result,
+            integration_id: None,
             in_grinder_range: Some(GrinderRange::E64.contains(result.time_ms)),
         }
     }
@@ -587,6 +606,7 @@ mod tests {
             in_grinder_range: Some(GrinderRange::E64.contains(result.time_ms)),
             // Not read: the history counts from the request itself.
             running_ms: 0,
+            integration_id: None,
         }
     }
 
@@ -665,6 +685,35 @@ mod tests {
         let shot = r.feed(&timeout, at(380)).unwrap();
         assert_eq!(shot.outcome, ShotOutcome::Failed);
         assert_eq!(shot.target_weight_g, None);
+    }
+
+    #[test]
+    fn records_which_integration_reported_the_shot() {
+        let mut r = Recorder::default();
+        r.feed(&started(true), at(0));
+        let by_hand = r.feed(&reported(28_000, 36.0), at(40)).unwrap();
+        assert_eq!(by_hand.integration_id, None);
+
+        r.feed(&started(true), at(100));
+        let MachineEvent::ShotReported {
+            result,
+            in_grinder_range,
+            running_ms,
+            ..
+        } = reported(27_000, 36.0)
+        else {
+            unreachable!()
+        };
+        let by_scale = MachineEvent::ShotReported {
+            result,
+            in_grinder_range,
+            running_ms,
+            integration_id: Some("half_decent".into()),
+        };
+        let shot = r.feed(&by_scale, at(140)).unwrap();
+        assert_eq!(shot.integration_id.as_deref(), Some("half_decent"));
+        let saved = serde_json::to_value(&shot).unwrap();
+        assert_eq!(saved["integration_id"], "half_decent");
     }
 
     #[test]
@@ -937,7 +986,8 @@ mod tests {
         let dir = temp_dir();
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("history.json");
-        // Shots as saved before `cause` and `in_grinder_range` were kept,
+        // Shots as saved before `cause`, `in_grinder_range`, `running_ms` and
+        // `integration_id` were kept,
         // with the names of then (`at`, `kind`, times in seconds) and the
         // kinds of then (`success`, `error`). Whether the grinder took the
         // success is not known, and stays so.
@@ -978,6 +1028,7 @@ mod tests {
         // How long each ran, from its two times.
         let running: Vec<_> = shots.iter().map(|s| s.running_ms).collect();
         assert_eq!(running, [Some(30_000), Some(180_000), Some(20_000)]);
+        assert_eq!(shots[0].integration_id, None, "not known for an older shot");
         // Written back with the names of now.
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let saved_outcomes: Vec<_> = saved["shots"]
