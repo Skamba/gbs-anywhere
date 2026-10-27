@@ -121,7 +121,8 @@ cargo run -- -p 8089 --control off --no-stdin --config target/dev.json --update-
   reason when adding a dependency.
 - Tests sit next to the code in `#[cfg(test)] mod tests` and go through real
   functions rather than mocks. Temporary files go under
-  `std::env::temp_dir()`. `src/server/tests.rs` runs the real routers over
+  `std::env::temp_dir()`, through `temp_dir(name)` or `temp_path(name)` in
+  `src/test_support.rs`. `src/server/tests.rs` runs the real routers over
   HTTP with `GrinderModel` playing the grinder; extend it when what the
   grinder sees changes.
 
