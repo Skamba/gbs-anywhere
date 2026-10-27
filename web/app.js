@@ -389,18 +389,66 @@
   const isAbort = (cause) => !!causeInfo(cause).onPurpose;
   /** An E65/E80 setup: its link, or an address it is starting with. */
   const wifiSetup = () => !!(wifiOf() || (S && S.settings && S.settings.grinder_host));
-  /** The E65/E80 link is (re)starting and has not reached the grinder yet. */
-  function linkStarting() {
-    if (linkOn()) return false;
+  /** Where the E65/E80 link `w` is while it pairs (accepting, holding,
+   *  checking, quiet, asking), or null when it does not pair. */
+  const pairingPhase = (w) => (w && w.state === "pairing" ? w.phase || null : null);
+  // Connecting for this long counts as not reaching the grinder.
+  const CONNECT_LONG_MS = 15000;
+
+  // The grinder link, worked out in one place: System status and its
+  // pill, the banner, the grinder card and the setup all read it, so they
+  // say the same. `state` is one of
+  //   offline     gbs-anywhere does not answer
+  //   loading     its state is not in yet
+  //   pairing     an E65/E80 is being paired; `phase` says where
+  //   connecting  an E65/E80 link is starting and has not reached the
+  //               grinder yet (an address without its link yet, or a link
+  //               connecting for less than CONNECT_LONG_MS)
+  //   notSetUp    an E65/E80 answers but turns pairing down
+  //   missing     no grinder: an E64 WS that does not poll, an E65/E80
+  //               that does not answer (`unreached`, also after connecting
+  //               for long) or answers with errors
+  //   problem     connected, but the grinder turned down the last request
+  //   ready       connected
+  // `missing` (for missing and notSetUp) says why there is no grinder (see
+  // grinderMissing).
+  function linkStatus() {
+    if (!online) return { state: "offline" };
+    if (!S) return { state: "loading" };
     const wifi = wifiOf();
-    return wifi ? wifi.state === "connecting" : !!(S && S.settings && S.settings.grinder_host);
+    const on = linkOn();
+    const L = { state: "ready", wifi, on, phase: pairingPhase(wifi), unreached: false, missing: null };
+    if (wifi && wifi.state === "pairing") L.state = "pairing";
+    else if (on) L.state = wifi && wifi.problem ? "problem" : "ready";
+    else if (wifi ? wifi.state === "connecting" && linkStateAge(wifi) <= CONNECT_LONG_MS : !!(S.settings && S.settings.grinder_host)) L.state = "connecting";
+    else if (setupNeeded() && wifi && wifi.not_set_up) L.state = "notSetUp";
+    else L.state = "missing";
+    if (L.state === "missing" || L.state === "notSetUp") L.missing = grinderMissing(wifi);
+    if (L.state === "missing" && wifi) L.unreached = wifi.state === "failing" ? !!wifi.unreachable : wifi.state === "connecting";
+    return L;
   }
+  /** The link as of the last render (see linkStatus). */
+  let link = { state: "loading" };
+
+  // Integration health (the server's `Health`): the tone and label of its
+  // pill, its item in System status's line, and whether it is out of
+  // order (`bad`: it reports no shot then). A test in control_api.rs
+  // checks the keys against the server.
+  const HEALTH = {
+    starting: { tone: "start", label: "integ.health.starting", check: ["wait", "clock", "check.integConnecting"] },
+    connected: { tone: "ok", label: "integ.health.connected", check: ["ok", "check", "check.integReady"] },
+    watching: { tone: "run", label: "integ.health.watching", check: ["ok", "check", "check.integReady"] },
+    failing: { tone: "error", label: "integ.health.failing", check: ["bad", "alert", "check.integError"], bad: true },
+    stopped: { tone: "error", label: "integ.health.stopped", check: ["bad", "alert", "check.integStopped"], bad: true },
+  };
+  /** The integration `i` is out of order: failing or stopped. */
+  const badHealth = (i) => !!(HEALTH[i.health] && HEALTH[i.health].bad);
 
   // Integrations that report shots by themselves. When every one has failed,
   // the shot can still be typed in by hand.
   function reporters() {
     const list = (S && S.integrations) || [];
-    const live = list.filter((i) => i.health !== "failing" && i.health !== "stopped");
+    const live = list.filter((i) => !badHealth(i));
     return { list, live, manual: live.length === 0 };
   }
   /** Seconds into a brew after which a shot no integration reported counts
@@ -476,15 +524,15 @@
     return { sc, reason, cause, outcome, started: lastOf(["shot_started"]), job: lastOf(["grinder_grind_finished"]) };
   }
 
-  // Per state: the tone and badge (catalog key under badge.) of each step.
+  // Per state: the tone and badge (its catalog key, or "" for none) of each step.
   const PLANS = {
-    ready: [["start", "start"], ["none", ""], ["none", ""]],
-    knob: [["run", "pressKnob"], ["wait", "waiting"], ["none", ""]],
-    running: [["done", "done"], ["run", "running"], ["wait", "waiting"]],
-    checking: [["done", "done"], ["done", "done"], ["run", "running"]],
-    done: [["done", "done"], ["done", "done"], ["done", "done"]],
-    error: [["done", "done"], ["error", "error"], ["skip", "skipped"]],
-    aborted: [["done", "done"], ["abort", "aborted"], ["skip", "skipped"]],
+    ready: [["start", "badge.start"], ["none", ""], ["none", ""]],
+    knob: [["run", "badge.pressKnob"], ["wait", "badge.waiting"], ["none", ""]],
+    running: [["done", "badge.done"], ["run", "badge.running"], ["wait", "badge.waiting"]],
+    checking: [["done", "badge.done"], ["done", "badge.done"], ["run", "badge.running"]],
+    done: [["done", "badge.done"], ["done", "badge.done"], ["done", "badge.done"]],
+    error: [["done", "badge.done"], ["error", "badge.error"], ["skip", "badge.skipped"]],
+    aborted: [["done", "badge.done"], ["abort", "badge.aborted"], ["skip", "badge.skipped"]],
   };
 
   // --- Tabs --------------------------------------------------------------------
@@ -569,56 +617,84 @@
     return { text: t("sys.missing.wifi"), detail: error };
   }
 
-  // System states in which no shot can start: System status opens by
-  // itself, step 1 says it is blocked and the steps stay closed.
-  const STOPS = ["offline", "noGrinder", "blocked", "setup", "pairing"];
+  // What System status says, by its key: the pill's label (and a shorter
+  // one for where that does not fit), System status's title (`big`, else
+  // the label), whether no shot can start (`stop`: System status opens by
+  // itself and the steps stay closed), what step 1 shows meanwhile
+  // (`step1`: "wait" while the setup goes on or the link starts, else
+  // Blocked during a stop), and whether the title is the grinder's state
+  // (`grinder`: the banner and the line below leave it out).
+  const SYS = {
+    offline: { label: "sys.label.offline", stop: true },
+    connecting: { label: "sys.label.connecting" },
+    running: { label: "sys.label.running" },
+    knob: { label: "sys.label.knob", short: "sys.label.knobShort" },
+    pairing: { label: "sys.label.pairing", stop: true, step1: "wait", grinder: true },
+    linking: { label: "sys.label.linking", step1: "wait", grinder: true },
+    noGrinder: { label: "sys.label.noGrinder", short: "sys.label.noGrinderShort", stop: true, grinder: true },
+    setup: { label: "sys.label.setup", short: "sys.label.setupShort", stop: true, step1: "wait", grinder: true },
+    blocked: { label: "sys.label.blocked", stop: true },
+    error: { label: "sys.label.error" },
+    problem: { label: "sys.label.problem", grinder: true },
+    integError: { label: "sys.label.integError", short: "sys.label.integErrorShort" },
+    ready: { label: "sys.label.ready", big: "sys.label.readyLong" },
+  };
   /** The stop System status `s` shows, or null. Not during a shot, so the
    *  step in use stays open, and not for a moment offline (as when the
    *  phone wakes up), so nothing jumps. */
   function stopOf(s, f) {
-    if (!STOPS.includes(s.key) || ["running", "checking", "knob"].includes(f.sc)) return null;
+    if (!s.def.stop || ["running", "checking", "knob"].includes(f.sc)) return null;
     if (s.key === "offline" && Date.now() - offlineSince < 5000) return null;
     return s.key;
   }
 
+  // What the grinder card's pill (tone and text) and System status's line
+  // (tone, icon and text) say in each state of the link (see linkStatus).
+  const LINK_VIEW = {
+    pairing: { pill: ["start", "grinder.state.pairing"], check: ["wait", "clock", "check.grinderPairing"] },
+    connecting: { pill: ["start", "grinder.state.connecting"], check: ["wait", "clock", "check.grinderConnecting"] },
+    notSetUp: { pill: ["start", "grinder.state.notSetUp"], check: ["bad", "alert", "check.grinderOff"] },
+    missing: { pill: ["error", "grinder.state.notConnected"], check: ["bad", "alert", "check.grinderOff"] },
+    problem: { pill: ["warn", "grinder.state.problem"], check: ["bad", "alert", "sys.label.problem"] },
+    ready: { pill: ["ok", "grinder.state.ready"], check: ["ok", "check", "check.grinderReady"] },
+  };
+
+  /** What System status says for the shot of flow() `f` and the link. */
   function sysInfo(f) {
-    const wifi = wifiOf();
-    // `big` is the System status line; the header pill shows `label`, or
-    // `short` where that does not fit.
-    const s = (tone, icon, label, text, detail) => ({
-      key: label, tone, icon, text, detail: detail || "", label: t("sys.label." + label),
-      short: hasText("sys.label." + label + "Short") ? t("sys.label." + label + "Short") : "",
-      big: label === "ready" ? t("sys.label.readyLong") : t("sys.label." + label),
-    });
-    if (!online) return s("error", "alert", "offline", t("sys.text.offline"));
-    if (!S) return s("none", "clock", "connecting", "");
+    const L = link;
+    const s = (tone, icon, key, text, detail) => {
+      const def = SYS[key];
+      // `big` is the System status line; the header pill shows `label`, or
+      // `short` where that does not fit.
+      return { key, def, tone, icon, text, detail: detail || "", label: t(def.label), short: def.short ? t(def.short) : "", big: t(def.big || def.label) };
+    };
+    if (L.state === "offline") return s("error", "alert", "offline", t("sys.text.offline"));
+    if (L.state === "loading") return s("none", "clock", "connecting", "");
     const blocked = grindBlocked();
     if (f.sc === "running") return s("run", "clock", "running", t("sys.text.running"));
     if (f.sc === "checking") return s("run", "clock", "running", t("sys.text.checking"));
     if (f.sc === "knob") return s("run", "clock", "knob", t("sys.text.knob"));
     // Not paired yet: the setup (System status leads there) says what to do.
-    const phase = wifi && wifi.state === "pairing" ? wifi.phase : null;
-    if (phase === "asking") return s("start", "alert", "pairing", t("sys.text.needsId"));
-    if (phase === "quiet") return s("start", "clock", "pairing", t("sys.text.quiet", { n: quietMinutes(wifi) }));
-    if (phase === "accepting") return s("start", "alert", "setup", t("sys.text.accept"));
-    if (phase) return s("start", "clock", "pairing", t("sys.text.pairing"));
-    if (linkStarting()) {
+    if (L.state === "pairing") {
+      if (L.phase === "asking") return s("start", "alert", "pairing", t("sys.text.needsId"));
+      if (L.phase === "quiet") return s("start", "clock", "pairing", t("sys.text.quiet", { n: quietMinutes(L.wifi) }));
+      if (L.phase === "accepting") return s("start", "alert", "pairing", t("sys.text.accept"));
+      return s("start", "clock", "pairing", t("sys.text.pairing"));
+    }
+    if (L.state === "connecting") {
       const host = S.settings && S.settings.grinder_host;
       return s("start", "clock", "linking", host ? t("sys.text.linking", { host }) : t("sys.text.linkingNoHost"));
     }
-    if (!linkOn()) {
-      // It answers but turns pairing down: not set up, rather than not
-      // connected; its answer stays at hand with the log. Any other error
-      // shows as one.
-      if (setupNeeded() && wifi && wifi.not_set_up) return s("start", "alert", "setup", t("sys.text.setup"), lastCause(wifi.detail));
-      const missing = grinderMissing(wifi);
-      return s("error", "alert", "noGrinder", missing.text, missing.detail);
-    }
+    // It answers but turns pairing down: not set up, rather than not
+    // connected; its answer stays at hand with the log. Any other error
+    // shows as one.
+    if (L.state === "notSetUp") return s("start", "alert", "setup", t("sys.text.setup"), lastCause(L.wifi.detail));
+    if (L.state === "missing") return s("error", "alert", "noGrinder", L.missing.text, L.missing.detail);
     if (blocked) return s("warn", "alert", "blocked", t("sys.text.blocked", { message: blocked.grinder_message }));
     if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f));
     // Shots can still be made, but something needs a look: not green.
-    if (wifi && wifi.problem) return s("warn", "alert", "problem", t("sys.text.problem"), sentence(wifi.problem));
-    const failing = (S.integrations || []).find((i) => i.health === "failing" || i.health === "stopped");
+    if (L.state === "problem") return s("warn", "alert", "problem", t("sys.text.problem"), sentence(L.wifi.problem));
+    const failing = (S.integrations || []).find(badHealth);
     if (failing) {
       const r = s("warn", "alert", "integError", t("sys.text.integError", { title: failing.title }), failing.last_error);
       r.integ = failing;
@@ -637,22 +713,16 @@
   function renderChecks(s) {
     const box = $("sys-checks");
     const items = [];
-    const wifi = wifiOf();
-    if (S && online) {
-      let grinder = null;
-      if (["noGrinder", "setup", "pairing", "linking", "problem"].includes(s.key)) { /* said above */ }
-      else if (wifi && wifi.state === "pairing") grinder = ["wait", "clock", t("check.grinderPairing")];
-      else if (linkOn()) grinder = ["ok", "check", tv("check.grinderReady")];
-      else if (linkStarting()) grinder = ["wait", "clock", t("check.grinderConnecting")];
-      else grinder = ["bad", "alert", t("check.grinderOff")];
+    const view = LINK_VIEW[link.state];
+    if (view) {
+      // Left out where System status's title says it already.
+      const grinder = s.def.grinder ? null : [view.check[0], view.check[1], tv(view.check[2])];
       if (grinder) items.push(grinder);
       const list = S.integrations || [];
       for (const i of list) {
-        if (i === s.integ) continue;
-        const title = { title: i.title };
-        if (i.health === "connected" || i.health === "watching") items.push(["ok", "check", t("check.integReady", title)]);
-        else if (i.health === "starting") items.push(["wait", "clock", t("check.integConnecting", title)]);
-        else items.push(["bad", "alert", i.health === "stopped" ? t("check.integStopped", title) : t("check.integError", title)]);
+        const h = HEALTH[i.health];
+        if (i === s.integ || !h) continue;
+        items.push([h.check[0], h.check[1], t(h.check[2], { title: i.title })]);
       }
       if (list.length === 0) items.push(["muted", null, t("check.noIntegration")]);
       // The grinder alone on a line says nothing System status doesn't.
@@ -734,20 +804,20 @@
    *  does not say itself, such as a grinder that went away mid-shot. */
   function renderBanner(f, s) {
     const b = $("banner");
-    const wifi = wifiOf();
+    const L = link, wifi = L.wifi;
     const show = (cls, text) => { b.hidden = false; setText(b, text, "banner " + cls); };
     if (!S || !online) { b.hidden = true; return; }
     const blocked = grindBlocked();
     if (blocked && s.key !== "blocked") show("warn", t("sys.text.blocked", { message: blocked.grinder_message }));
-    else if (wifi && wifi.state === "pairing") b.hidden = true; // System status and the setup say it
-    else if (linkStarting()) b.hidden = true; // the system status says it
-    else if (!linkOn()) { if (s.key === "noGrinder" || s.key === "setup") b.hidden = true; else show("bad", grinderMissing(wifi).text); }
-    else if (wifi && wifi.problem && s.key !== "problem" && !(f.sc === "error" && f.reason === wifi.problem)) show("warn", t("sys.problem", { problem: sentence(wifi.problem) }));
+    // Pairing or connecting: System status and the setup say it.
+    else if (L.state === "pairing" || L.state === "connecting" || s.def.grinder) b.hidden = true;
+    else if (L.missing) show("bad", L.missing.text);
+    else if (L.state === "problem" && !(f.sc === "error" && f.reason === wifi.problem)) show("warn", t("sys.problem", { problem: sentence(wifi.problem) }));
     else b.hidden = true;
   }
 
   function setStep(n, tone, badgeKey, open) {
-    const label = badgeKey ? t("badge." + badgeKey) : "";
+    const label = badgeKey ? t(badgeKey) : "";
     const card = $("step-" + n);
     const head = card.querySelector(".card-head");
     const numEl = card.querySelector("[data-num]");
@@ -771,8 +841,10 @@
   /** "the La Marzocco cloud and the Half Decent Scale", from integrations. */
   const theTitles = (live) => joinList(live.map((i) => t("start.integrationName", { title: i.title })));
 
-  function renderStart() {
+  /** Renders the Start tab; `L` is this render's linkStatus(), when it has one. */
+  function renderStart(L) {
     if (!S) return;
+    link = L || linkStatus();
     const f = flow();
     const r = reporters();
     const tg = targets();
@@ -794,9 +866,9 @@
     }
     let plan = PLANS[f.sc];
     // Also after a shot, whose result stays in steps 2 and 3.
-    if (stop && (sys.key === "setup" || sys.key === "pairing")) plan = [["wait", "waiting"], ...plan.slice(1)];
-    else if (stop && ["ready", "done", "error", "aborted"].includes(f.sc)) plan = [[sys.tone === "warn" ? "warn" : "error", "blocked"], ...plan.slice(1)];
-    else if (f.sc === "ready" && sys.key === "linking") plan = [["wait", "waiting"], ["none", ""], ["none", ""]];
+    if (stop && sys.def.step1 === "wait") plan = [["wait", "badge.waiting"], ...plan.slice(1)];
+    else if (stop && ["ready", "done", "error", "aborted"].includes(f.sc)) plan = [[sys.tone === "warn" ? "warn" : "error", "badge.blocked"], ...plan.slice(1)];
+    else if (f.sc === "ready" && sys.def.step1 === "wait") plan = [["wait", "badge.waiting"], ["none", ""], ["none", ""]];
 
     // Which step is open: the running or failed one opens by itself when the
     // shot moves on, step 3 with the result once done; otherwise step 1, or
@@ -1082,8 +1154,6 @@
   }
 
   // --- Status tab ------------------------------------------------------------------
-  // Integration health: tone of its pill (the label is integ.health.<health>).
-  const HEALTH = { starting: "start", connected: "ok", watching: "run", failing: "error", stopped: "error" };
   const kindOf = (id) => (kinds || []).find((k) => k.id === id);
   const hasPassword = (k) => !!(k && k.fields.some((f) => f.input === "password"));
 
@@ -1139,22 +1209,21 @@
     return m ? m[1] : peer;
   }
 
+  // The group head's state in the grinder's facts, by the shot's phase
+  // (the server's `Phase`; a test in control_api.rs checks the keys).
+  const GROUP = { ready: "grinder.group.idle", running: "grinder.group.running", finishing: "grinder.group.finishing" };
+
   function renderGrinder() {
-    const wifi = wifiOf();
-    const on = linkOn();
+    const wifi = link.wifi;
+    const on = link.on;
     const e65 = wifiSetup();
     $("g-model").textContent = tv("grinder.model");
-    let tone = "error", state = "notConnected";
-    if (wifi && wifi.phase === "asking") { tone = "start"; state = "needsId"; }
-    else if (wifi && wifi.state === "pairing") { tone = "start"; state = "pairing"; }
-    else if (on) { tone = "ok"; state = "ready"; }
-    else if (linkStarting()) { tone = "start"; state = "connecting"; }
-    else if (setupNeeded() && wifi && wifi.not_set_up) { tone = "start"; state = "notSetUp"; }
+    const [tone, state] = link.phase === "asking" ? ["start", "grinder.state.needsId"] : (LINK_VIEW[link.state] || LINK_VIEW.missing).pill;
     setTone($("g-pill"), tone);
     // Set up while an E65/E80 is not paired, or no grinder is known yet;
     // clearing a pairing is in the menu.
     $("g-setup").hidden = !setupOffered() || !$("g-host-form").hidden;
-    $("g-pill-text").textContent = t("grinder.state." + state);
+    $("g-pill-text").textContent = t(state);
     renderGrinderMenu();
     const age = S.grinder.last_poll_age_ms;
     const typed = S.settings && S.settings.grinder_host;
@@ -1169,12 +1238,11 @@
     if (shown) facts.push(["grinder.fact.serverIp", own.ip]);
     $("g-ip-docker").hidden = !(shown && own.docker);
     if (e65) facts.push(["grinder.fact.pairingId", wifi && wifi.pairing_id != null ? String(wifi.pairing_id) : t("grinder.fact.notPaired")]);
-    if (wifi && wifi.pairing_code != null && wifi.state === "pairing") facts.push(["grinder.fact.pairingCode", String(wifi.pairing_code)]);
+    if (link.state === "pairing" && wifi.pairing_code != null) facts.push(["grinder.fact.pairingCode", String(wifi.pairing_code)]);
     facts.push(["grinder.fact.lastContact", age == null ? t("grinder.fact.never") : ago(age)]);
     // Idle only with a grinder to brew for; a shot under way still shows.
-    const phase = S.shot.phase;
-    const inShot = phase === "running" || phase === "finishing";
-    facts.push(["grinder.fact.group", inShot ? t("grinder.group." + phase) : on ? t("grinder.group.idle") : "–"]);
+    const inShot = S.shot.phase === "running" || S.shot.phase === "finishing";
+    facts.push(["grinder.fact.group", inShot ? t(GROUP[S.shot.phase]) : on ? t(GROUP.ready) : "–"]);
     // Rebuilt when the names change; the values (the last contact moves on
     // with every poll) are written in place.
     const box = $("g-facts");
@@ -1303,8 +1371,9 @@
   }
 
   function integItem(i) {
-    const tone = HEALTH[i.health] || "none";
-    const label = HEALTH[i.health] ? t("integ.health." + i.health) : i.health;
+    const h = HEALTH[i.health];
+    const tone = h ? h.tone : "none";
+    const label = h ? t(h.label) : i.health;
     const key = "integ:" + i.id;
     const more = menuButton(key, t("integ.more", { title: i.title }));
     const actions = integActions(i);
@@ -1316,7 +1385,7 @@
       el("div", { class: "head-end" },
         el("span", { class: "pill-sm t-" + tone }, el("span", { class: "dot" }), label),
         actions.length ? more : null));
-    const bad = i.health === "failing" || i.health === "stopped";
+    const bad = badHealth(i);
     const foot = [];
     if (i.reports > 0) foot.push(t("integ.reports", { n: i.reports }));
     if (i.source === "command_line") foot.push(t("integ.fromStart"));
@@ -1948,8 +2017,10 @@
     $("v-whatsnew").hidden = !(on && u.available);
   }
 
-  function renderStatus() {
+  /** Renders the Status tab; `L` is this render's linkStatus(), when it has one. */
+  function renderStatus(L) {
     if (!S || tab !== "status") return;
+    link = L || linkStatus();
     renderGrinder();
     renderIntegrations();
     renderSettings();
@@ -2470,7 +2541,7 @@
   function closeSetup() { goTab(setupFrom); }
 
   const SETUP_TONE = { done: "done", active: "start", wait: "run", retry: "warn", later: "none" };
-  const SETUP_BADGE = { done: "done", active: "now", wait: "wait", retry: "retry", later: "later" };
+  const SETUP_BADGE = { done: "setup.badge.done", active: "setup.badge.now", wait: "setup.badge.wait", retry: "setup.badge.retry", later: "setup.badge.later" };
   /** A card's head as most steps have it: "Step n", its title, open by
    *  itself while it is the one to act on or wait for. */
   const stepHead = (no, title, st) => ({
@@ -2538,15 +2609,16 @@
 
   // The choice of grinder: a card of the view's own, first while it asks,
   // then on top (when the person chose here, not when the app could tell).
+  const SETUP_KIND = { e64: "setup.kind.e64", wifi: "setup.kind.wifi" };
   const KIND_CARD = {
     head: (st) => ({ kicker: t("setup.kind.kicker"), title: t("setup.kind.title"), mark: icon("grinder", 16, 2), no: null, auto: st === "active" }),
-    sub: (st) => (st === "done" ? t("setup.kind." + setupKind()) : ""),
+    sub: (st) => (st === "done" ? t(SETUP_KIND[setupKind()]) : ""),
     body(st) {
       if (st === "done") {
         // Once an E65/E80 address is saved, that is the grinder: removing
         // the address (grinder card, ⋮) is the way back.
         const change = setupKind() === "e64" || !wifiSetup();
-        return [el("p", { class: "body-text", text: t("setup.kind.chosen", { grinder: t("setup.kind." + setupKind()) }) }),
+        return [el("p", { class: "body-text", text: t("setup.kind.chosen", { grinder: t(SETUP_KIND[setupKind()]) }) }),
           change ? el("button", { type: "button", class: "wz-btn plain wide", "data-act": "kindChange" }, icon("back", 16, 2.5), t("setup.kind.change")) : null];
       }
       return [el("p", { class: "body-text", text: t("setup.kind.text") }),
@@ -2555,8 +2627,10 @@
     },
   };
 
-  function renderSetup() {
+  /** Renders the setup; `L` is this render's linkStatus(), when it has one. */
+  function renderSetup(L) {
     if (tab !== "setup" || !S) return;
+    link = L || linkStatus();
     // An address saved meanwhile makes it an E65/E80, and the card on top
     // says so.
     if (wz.kind === "e64" && wifiSetup()) wz.kind = "wifi";
@@ -2571,11 +2645,11 @@
     if (at.part === "done") forgetSetup(); else keepSetup();
     // The app's own pill is not shown here, so this one says when
     // gbs-anywhere does not answer.
-    const [pillKey, pillTone, pulse] = !online ? [null, "error", false] : F ? F.pill(at) : ["choose", "none", false];
+    const [pillKey, pillTone, pulse] = !online ? [null, "error", false] : F ? F.pill(at) : ["setup.pill.choose", "none", false];
     const pill = $("setup-pill");
     setTone(pill, pillTone);
     pill.classList.toggle("pulse", pulse);
-    const pillText = pillKey ? t("setup.pill." + pillKey) : t("sys.label.offline");
+    const pillText = pillKey ? t(pillKey) : t("sys.label.offline");
     setText($("setup-pill-text"), pillText);
     const cards = F ? [...(wz.kind ? ["kind"] : []), ...F.cards()] : ["kind"];
     const states = cards.map((n) => (n === "kind" ? (F ? "done" : "active") : F.card(n, at)));
@@ -2630,7 +2704,7 @@
         el("span", { class: "head-col" },
           el("span", { class: "kicker", text: head.kicker }),
           el("span", { class: "step-title", text: head.title })),
-        el("span", { class: "badge", text: t("setup.badge." + SETUP_BADGE[st]) }),
+        el("span", { class: "badge", text: t(SETUP_BADGE[st]) }),
         chevron(),
         sub ? el("span", { class: "meta" + (open ? " ghost" : ""), "aria-hidden": open ? "true" : null, text: sub }) : null),
       open ? el("div", { class: "wz-body", id: bodyId }, body) : null);
@@ -2783,8 +2857,8 @@
       return "";
     },
     pill(at) {
-      if (at.step === "x3") return at.part === "done" ? ["connected", "done", false] : ["polling", "run", true];
-      return ["prepare", "start", false];
+      if (at.step === "x3") return at.part === "done" ? ["setup.pill.connected", "done", false] : ["setup.pill.polling", "run", true];
+      return ["setup.pill.prepare", "start", false];
     },
     progress: (at) => (at.part === "done" ? t("setup.pill.connected") : ""),
     sig: () => [wz.e64.x1, wz.e64.x2, ownAddress()],
@@ -2852,8 +2926,6 @@
   // After Restart setup, a link still paired (not failing) after a few of
   // its 2-s polls has the grinder taking the pairing.
   const STILL_PAIRED_MS = 15000;
-  // Connecting for this long counts as not reaching the grinder.
-  const CONNECT_LONG_MS = 15000;
   // The phases of the restart wait (step 4).
   const WAIT_PHASES = ["holding", "checking", "quiet"];
 
@@ -2874,7 +2946,7 @@
     const old = wz.mode === "repair" && !wz.pair.cleared;
     if (old && !wz.pair.clearTapped) return { step: "clear" };
     if (!old && wifiPaired()) return { step: 5, part: "done" };
-    const phase = w && w.state === "pairing" ? w.phase : null;
+    const phase = pairingPhase(w);
     if (phase === "asking") return { step: 5, part: "id" };
     // The restart wait, once the person confirmed here, or when the view
     // opened in it. The quiet always: a check went unanswered, also when
@@ -2913,34 +2985,30 @@
     return "active";
   }
 
-  /** The header pill: its text (setup.pill.<key>), tone and whether it pulses. */
+  /** The header pill: its text (a setup.pill key), tone and whether it pulses. */
   function pairPill(at) {
-    if (at.part === "done") return wz.pair.statusOn === "no" ? ["lost", "warn", false] : ["done", "done", false];
-    if (at.step === 1) return ["address", "none", false];
-    if (at.step === "clear") return ["clear", wz.pair.clearTapped ? "run" : "start", wz.pair.clearTapped];
-    if (at.step === 2) return ["prepare", "start", false];
-    if (at.step === 3) return ["code", at.code ? "start" : "run", !at.code];
-    if (at.step === 4) return [pairConfirmed() ? "restart" : "prepare", "run", true];
-    if (at.part === "lost") return ["lost", "warn", false];
-    return ["id", "start", false];
+    if (at.part === "done") return wz.pair.statusOn === "no" ? ["setup.pill.lost", "warn", false] : ["setup.pill.done", "done", false];
+    if (at.step === 1) return ["setup.pill.address", "none", false];
+    if (at.step === "clear") return ["setup.pill.clear", wz.pair.clearTapped ? "run" : "start", wz.pair.clearTapped];
+    if (at.step === 2) return ["setup.pill.prepare", "start", false];
+    if (at.step === 3) return ["setup.pill.code", at.code ? "start" : "run", !at.code];
+    if (at.step === 4) return [pairConfirmed() ? "setup.pill.restart" : "setup.pill.prepare", "run", true];
+    if (at.part === "lost") return ["setup.pill.lost", "warn", false];
+    return ["setup.pill.id", "start", false];
   }
 
   /** Accepted was tapped here for this attempt, or the link holds the
    *  check after one (after a reload). */
   function pairConfirmed() {
-    const w = wifiOf();
-    return wz.pair.confirmed || wz.pair.tapped || !!(w && w.state === "pairing" && (w.phase === "holding" || w.phase === "checking"));
+    const phase = pairingPhase(wifiOf());
+    return wz.pair.confirmed || wz.pair.tapped || phase === "holding" || phase === "checking";
   }
 
   /** gbs-anywhere doesn't reach the grinder at the address: it does not
-   *  answer, or the link has been connecting for long. Not while the old
-   *  pairing is cleared on the grinder (that can take Local WiFi off). */
-  function pairUnreached() {
-    const w = wifiOf();
-    if (!w || (wz.mode === "repair" && !wz.pair.cleared)) return false;
-    if (w.state === "failing") return !!w.unreachable;
-    return w.state === "connecting" && linkStateAge(w) > CONNECT_LONG_MS;
-  }
+   *  answer, or the link has been connecting for long (see linkStatus).
+   *  Not while the old pairing is cleared on the grinder (that can take
+   *  Local WiFi off). */
+  const pairUnreached = () => link.unreached && !(wz.mode === "repair" && !wz.pair.cleared);
 
   /** The link reached the grinder: it answers, paired or not. */
   function pairReached() {
@@ -3051,7 +3119,7 @@
       const registered = wz.pair.confirmed;
       // Nothing is sent to the grinder for a while: the usual time no longer
       // holds, so it is not shown.
-      const quiet = !!w && w.state === "pairing" && w.phase === "quiet";
+      const quiet = pairingPhase(w) === "quiet";
       // Opened in the wait (or reloaded), the timer counts from where this
       // phase began, not from the tap: the usual total doesn't fit then.
       const midWait = WAIT_PHASES.includes((wz.pair.entry || {}).phase);
@@ -3162,7 +3230,7 @@
    *  old pairing, and a new step starts with its cards as they open. */
   function pairSync() {
     const w = wifiOf();
-    const phase = w && w.state === "pairing" ? w.phase : null;
+    const phase = pairingPhase(w);
     // A hold follows a confirmation, also one tapped on another device or
     // before its reply came: the wait shows at once, and the check after it
     // stays part of it.
@@ -3547,17 +3615,19 @@
 
   // --- Live updates --------------------------------------------------------------------
   function renderAll() {
+    // The link once for every view, so they all say the same.
+    link = linkStatus();
     if (!S) { renderHeader({ sc: "ready" }); return; }
     // Name and version at the bottom of every tab but Status, whose
     // gbs-anywhere card shows them.
     $("app-footer").hidden = tab === "status";
     $("app-footer").textContent = ["gbs-anywhere", versionText(S.server.version)].filter(Boolean).join(" ");
     $("app-footer").title = String(S.server.version || "");
-    renderStart();
-    renderStatus();
+    renderStart(link);
+    renderStatus(link);
     renderHistory();
     renderLog();
-    renderSetup();
+    renderSetup(link);
   }
 
   // Another version of gbs-anywhere answers (it was updated): the page that

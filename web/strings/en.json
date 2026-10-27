@@ -365,6 +365,7 @@
   "grinder.state.ready": "Ready",
   "grinder.state.connecting": "Connecting",
   "grinder.state.notSetUp": "Not set up",
+  "grinder.state.problem": "Problem",
   "grinder.fact.ip": "IP address",
   "grinder.fact.serverIp": "gbs-anywhere’s address",
   "grinder.fact.pairingId": "Pairing ID",
