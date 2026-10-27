@@ -68,6 +68,11 @@ pub struct Shot {
     /// the shot does not change how far apart the two are.
     pub ended_at: String,
     pub outcome: ShotOutcome,
+    /// How long it ran, from the grinder's request to its end, counted on
+    /// the machine's clock (as `running_ms` on its `shot_reported` or
+    /// `shot_aborted` event). Files from before it was kept give
+    /// `ended_at` less `started_at`, in whole seconds.
+    pub running_ms: Option<u64>,
     /// Only for a success.
     pub time_ms: Option<u32>,
     pub weight_g: Option<f64>,
@@ -95,6 +100,8 @@ struct StoredShot {
     ended_at: String,
     #[serde(alias = "kind")]
     outcome: ShotOutcome,
+    #[serde(default)]
+    running_ms: Option<u64>,
     time_ms: Option<u32>,
     time_s: Option<f64>,
     weight_g: Option<f64>,
@@ -113,11 +120,18 @@ impl From<StoredShot> for Shot {
             secs.filter(|s| s.is_finite() && *s >= 0.0)
                 .map(|s| (s * 1000.0).round().min(f64::from(u32::MAX)) as u32)
         };
+        // Saved before it was kept: the shot's two times are its length.
+        let running_ms = s.running_ms.or_else(|| {
+            let span = super::utc::seconds(&s.ended_at)?
+                .checked_sub(super::utc::seconds(&s.started_at)?)?;
+            Some(span * 1000)
+        });
         Self {
             id: s.id,
             started_at: s.started_at,
             ended_at: s.ended_at,
             outcome: s.outcome,
+            running_ms,
             time_ms: s.time_ms.or_else(|| ms(s.time_s)),
             weight_g: s.weight_g,
             in_grinder_range: s.in_grinder_range,
@@ -397,6 +411,7 @@ impl Recorder {
             MachineEvent::ShotReported {
                 result,
                 in_grinder_range,
+                ..
             } => {
                 let open = self.open.take()?;
                 let end = End::Shot {
@@ -418,10 +433,11 @@ impl Recorder {
 /// `wall` on the wall clock; one that ended for a cause also gets its words
 /// as `reason`.
 fn shot(open: &Open, ended: Instant, wall: SystemTime, end: End) -> Shot {
+    let running = ended.saturating_duration_since(open.since);
     // Whole seconds, as the history keeps its times: `started_at` and
     // `ended_at` are then exactly this far apart, so a 3:00 timeout does not
     // show as 3:01.
-    let took = Duration::from_secs(ended.saturating_duration_since(open.since).as_secs());
+    let took = Duration::from_secs(running.as_secs());
     let (outcome, result, in_grinder_range, cause) = match end {
         End::Shot {
             result,
@@ -434,6 +450,7 @@ fn shot(open: &Open, ended: Instant, wall: SystemTime, end: End) -> Shot {
         started_at: super::utc::with_seconds(wall.checked_sub(took).unwrap_or(wall)),
         ended_at: super::utc::with_seconds(wall),
         outcome,
+        running_ms: Some(u64::try_from(running.as_millis()).unwrap_or(u64::MAX)),
         time_ms: result.map(|r| r.time_ms),
         weight_g: result.map(|r| r.weight_g),
         in_grinder_range,
@@ -568,7 +585,15 @@ mod tests {
         MachineEvent::ShotReported {
             result,
             in_grinder_range: Some(GrinderRange::E64.contains(result.time_ms)),
+            // Not read: the history counts from the request itself.
+            running_ms: 0,
         }
+    }
+
+    /// The event for a brew that ended for `cause`; how long it ran is not
+    /// read, the history counts that from the request itself.
+    fn aborted(cause: AbortCause) -> MachineEvent {
+        MachineEvent::shot_aborted(cause, Duration::ZERO)
     }
 
     #[test]
@@ -589,6 +614,7 @@ mod tests {
 
         let shot = r.feed(&reported(28_500, 40.9), at(40)).unwrap();
         assert_eq!(shot.outcome, ShotOutcome::Succeeded);
+        assert_eq!(shot.running_ms, Some(40_000));
         assert_eq!(
             (
                 shot.time_ms,
@@ -623,8 +649,9 @@ mod tests {
             at(110),
         );
         r.feed(&started(true), at(110));
-        let abort = MachineEvent::shot_aborted(AbortCause::ShotAbortedByUser);
+        let abort = aborted(AbortCause::ShotAbortedByUser);
         let shot = r.feed(&abort, at(120)).unwrap();
+        assert_eq!(shot.running_ms, Some(10_000), "from the request");
         assert_eq!(shot.outcome, ShotOutcome::Aborted);
         assert_eq!((shot.time_ms, shot.target_time_ms), (None, None));
         assert_eq!(shot.target_weight_g, Some(36.0));
@@ -634,7 +661,7 @@ mod tests {
 
         // A knob press without a new grind: the target is not known.
         assert_eq!(r.feed(&started(true), at(200)), None);
-        let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
+        let timeout = aborted(AbortCause::ShotTimedOut);
         let shot = r.feed(&timeout, at(380)).unwrap();
         assert_eq!(shot.outcome, ShotOutcome::Failed);
         assert_eq!(shot.target_weight_g, None);
@@ -675,7 +702,7 @@ mod tests {
 
         // Set during a timeout, from 1970: the right day, 3 minutes long.
         r.observe(&started(true), at(100), unset);
-        let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
+        let timeout = aborted(AbortCause::ShotTimedOut);
         let shot = r.feed(&timeout, at(280)).unwrap();
         assert_eq!(
             (shot.started_at.as_str(), shot.ended_at.as_str()),
@@ -721,12 +748,14 @@ mod tests {
             at(0),
             end_wall - Duration::from_millis(180_250),
         );
-        let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
+        let timeout = aborted(AbortCause::ShotTimedOut);
         let shot = r.observe(&timeout, end, end_wall).unwrap();
         assert_eq!(
             (shot.started_at.as_str(), shot.ended_at.as_str()),
             ("2026-10-11T12:00:01Z", "2026-10-11T12:03:01Z")
         );
+        // How long it ran stays to the millisecond.
+        assert_eq!(shot.running_ms, Some(180_250));
     }
 
     #[test]
@@ -742,7 +771,7 @@ mod tests {
         ] {
             let mut r = Recorder::default();
             r.feed(&started(true), at(0));
-            let shot = r.feed(&MachineEvent::shot_aborted(cause), at(1));
+            let shot = r.feed(&aborted(cause), at(1));
             let shot = shot.unwrap();
             assert_eq!((shot.outcome, shot.cause), (kind, Some(cause)));
             assert_eq!(shot.reason.as_deref(), Some(cause.text()));
@@ -755,6 +784,7 @@ mod tests {
         r.feed(&started(true), at(0));
         let missed = r.feed(&started(true), at(100)).unwrap();
         assert_eq!(missed.outcome, ShotOutcome::Failed);
+        assert_eq!(missed.running_ms, Some(100_000), "until the next one");
         assert_eq!(missed.cause, Some(AbortCause::ShotEndMissed));
         assert_eq!(
             missed.reason.as_deref(),
@@ -945,6 +975,9 @@ mod tests {
         );
         assert_eq!(shots[0].started_at, "2026-10-11T12:00:00Z");
         assert_eq!(shots[1].cause, Some(AbortCause::ShotTimedOut));
+        // How long each ran, from its two times.
+        let running: Vec<_> = shots.iter().map(|s| s.running_ms).collect();
+        assert_eq!(running, [Some(30_000), Some(180_000), Some(20_000)]);
         // Written back with the names of now.
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let saved_outcomes: Vec<_> = saved["shots"]
@@ -971,6 +1004,7 @@ mod tests {
         for old in ["at", "kind", "time_s", "target_time_s"] {
             assert!(first.get(old).is_none(), "{old}");
         }
+        assert_eq!(first["running_ms"], 30_000);
         let _ = std::fs::remove_dir_all(dir);
     }
 

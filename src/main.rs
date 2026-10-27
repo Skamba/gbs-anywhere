@@ -331,6 +331,7 @@ fn describe(rec: &EventRecord) -> String {
         MachineEvent::ShotReported {
             result,
             in_grinder_range,
+            ..
         } => format!(
             "[{}] showing shot to grinder: {:.1} s, {:.1} g{}",
             rec.seq,

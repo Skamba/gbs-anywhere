@@ -540,13 +540,6 @@
     if (f.started && seenAt.has(f.started.seq)) return seenAt.get(f.started.seq);
     return f.sc === "running" ? Date.now() - elapsedMs() : null;
   }
-  /** How long the last brew ran until its outcome, from the ages of both
-   *  events, or null when one is missing. */
-  function brewMs(f) {
-    if (!f.started || !f.outcome || f.outcome.seq < f.started.seq) return null;
-    const start = brewStart(f), end = endTime(f.outcome);
-    return start != null && end != null ? end - start : null;
-  }
   const fresh = (ev) => { const t = endTime(ev); return t != null && Date.now() - t < FRESH_MS; };
   /** E64: a grind waits for the knob press only for a while. */
   const knobFresh = (ev) => seenAt.has(ev.seq) && Date.now() - seenAt.get(ev.seq) < Math.max(KNOB_MS, windowS() * 1000);
@@ -1094,9 +1087,9 @@
   /** Why the shot of flow() `f` failed. */
   function errorTitle(f) {
     if (f.cause === "shot_timed_out") {
-      // How long it waited, from the server's events: not the setting now,
-      // which may have changed since.
-      const ms = brewMs(f);
+      // How long it waited, as the server measured it: not the setting
+      // now, which may have changed since.
+      const ms = f.outcome && f.outcome.kind === "shot_aborted" ? f.outcome.running_ms : null;
       return ms > 0 ? t("start.error.timeout", { window: clock(ms) }) : t("start.error.timeoutNoLimit");
     }
     const text = causeInfo(f.cause).text;
@@ -1150,9 +1143,11 @@
     return sum;
   }
 
+  /** How long the running shot has run: the server's phase_age_ms, and
+   *  the time since that state came. */
   function elapsedMs() {
     if (!S || S.shot.phase !== "running") return 0;
-    return (S.machine.mako.REAL_EXTRACTION_TIME_MS || 0) + (performance.now() - stateAt);
+    return (S.shot.phase_age_ms || 0) + (performance.now() - stateAt);
   }
   function renderClock() {
     if (!S || S.shot.phase !== "running" || tab !== "start") return;
@@ -2174,10 +2169,8 @@
       return s.weight_g != null ? t("unit.shot", { time, weight: grams(s.weight_g) }) : t("unit.seconds", { time });
     }
     const cause = causeOf(s);
-    if (cause === "shot_timed_out") {
-      const ms = Date.parse(s.ended_at) - Date.parse(s.started_at);
-      return t("history.timeout", { time: isFinite(ms) ? clock(ms) : windowLabel() });
-    }
+    // How long it waited, as the server measured it.
+    if (cause === "shot_timed_out") return s.running_ms != null ? t("history.timeout", { time: clock(s.running_ms) }) : t("start.error.timeoutNoLimit");
     const title = causeInfo(cause).title;
     if (title) return t(title);
     // A cause this app does not know: as the server says it.
@@ -2240,9 +2233,9 @@
     }
     const days = [...byDay.values()];
     // The days are named from today ("Today", "Yesterday"), which moves on
-    // at midnight; a timeout without its times says the shot window.
+    // at midnight.
     const today = new Date().toDateString();
-    patch(groups, JSON.stringify([lang, locale, HKINDS.map(shown), histGen, today, windowS()]), () => days.map((g) => el("section", { class: "day" },
+    patch(groups, JSON.stringify([lang, locale, HKINDS.map(shown), histGen, today]), () => days.map((g) => el("section", { class: "day" },
       el("h2", { text: g.label }),
       el("ul", null, g.items.map(({ s, d }) => {
         const sub = shotSub(s);
