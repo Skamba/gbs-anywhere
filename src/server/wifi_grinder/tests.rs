@@ -670,6 +670,10 @@ async fn a_taken_job_the_grinder_forgot_is_reported_as_not_reached() {
         wifi(&server).problem.as_deref() == Some("the shot did not reach the grinder in time")
     })
     .await;
+    assert_eq!(
+        wifi(&server).problem_cause,
+        Some(ProblemCause::Result(ResultProblem::GrinderResultExpired))
+    );
     let f = fake.lock().unwrap();
     assert_eq!(
         f.calls_to(wifi::PATH_BREW_DONE).len(),
@@ -720,7 +724,16 @@ async fn the_app_sees_a_grinder_that_does_not_answer_until_it_does() {
             .is_some_and(|w| w.state == WifiState::Failing)
     })
     .await;
-    assert!(wifi(&server).unreachable);
+    let w = wifi(&server);
+    assert!(w.unreachable);
+    // Why, without the steps before it: the address is in `detail`.
+    let failure = w.failure.expect("why it fails");
+    assert!(
+        w.detail.starts_with("cannot reach the grinder at"),
+        "{}",
+        w.detail
+    );
+    assert!(w.detail.ends_with(&failure) && !failure.contains("cannot reach"));
 
     // Switched on: it answers on the next try and pairs.
     let fake: Shared = Arc::default();
@@ -733,6 +746,7 @@ async fn the_app_sees_a_grinder_that_does_not_answer_until_it_does() {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     wait_for("paired", || paired(&server)).await;
     assert!(!wifi(&server).unreachable);
+    assert_eq!(wifi(&server).failure, None, "only while failing");
 }
 
 #[tokio::test]
@@ -853,6 +867,11 @@ async fn a_job_the_grinder_no_longer_has_ends_the_brew() {
 
     wait_for("giving up", || wifi(&server).problem.is_some()).await;
     assert!(!brewing(&server));
+    // The same cause as the brew's, so the app says it once.
+    let cause = AbortCause::GrinderShotDropped;
+    assert_eq!(wifi(&server).problem_cause, Some(ProblemCause::Shot(cause)));
+    let json = serde_json::to_value(wifi(&server)).unwrap();
+    assert_eq!(json["problem_cause"], "grinder_shot_dropped");
     let late = ShotResult::new(Duration::from_secs(30), 40.0);
     assert_eq!(
         server.with(|m, now| m.report_shot(now, late)),

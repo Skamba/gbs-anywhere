@@ -299,16 +299,44 @@
   }
   const reducedMotion = () => !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
+  /** A request to the API. One that fails throws an Error with the
+   *  server's `code`, its English sentence (`server`) and the HTTP
+   *  `status`; errorText() words it. Two codes are the page's own:
+   *  `request_failed` when no answer came (the server restarts, the WiFi
+   *  dropped), `request_status` for an answer without the API's error
+   *  body. */
   async function api(path, opts) {
     const init = Object.assign({ cache: "no-store" }, opts || {});
     if (init.body) init.headers = { "content-type": "application/json" };
-    const r = await fetch(path, init);
+    let r;
+    try { r = await fetch(path, init); }
+    catch (_) { throw apiError("request_failed", "", 0); }
     let body = null;
     try { body = await r.json(); } catch (_) {}
     if (!r.ok) {
-      throw new Error(body && body.error ? sentence(body.error) : t("common.requestFailed", { status: String(r.status) }));
+      const ok = !!body && typeof body === "object";
+      const code = ok && typeof body.code === "string" ? body.code : "request_status";
+      throw apiError(code, ok && typeof body.error === "string" ? body.error : "", r.status);
     }
     return body == null ? {} : body;
+  }
+  function apiError(code, server, status) {
+    const e = new Error(server ? sentence(server) : code);
+    e.code = code; e.server = server; e.status = status;
+    return e;
+  }
+  /** What went wrong with a request, in the person's language: the words
+   *  for its code (`error.<code>`, or `error.<code>.<variant>` where the
+   *  page knows which field it sent), which may show the server's English
+   *  sentence as {error}; else the server's sentence. A test in
+   *  control_api.rs checks that every code the server sends has its
+   *  words. */
+  function errorText(err, variant) {
+    const code = err && err.code;
+    const keys = !code ? [] : variant ? ["error." + code + "." + variant, "error." + code] : ["error." + code];
+    const key = keys.find(hasText);
+    if (key) return t(key, { error: err.server ? sentence(err.server) : "", status: String(err.status || "") });
+    return (err && err.message) || t("error.request_failed");
   }
 
   // --- App state ---------------------------------------------------------------
@@ -333,9 +361,6 @@
     // (sysPref), and the stop it opened for by itself (sysStop, see stopOf).
     sysOpen: false, sysPref: false, sysStop: null,
     pill: null,                  // the pill's label and short label, for a resize
-    // Shot events this page reported by hand, and the event numbers the one
-    // just sent falls between until its event is in.
-    mine: new Set(), mineRange: null,
     // The running brew (brewOf; undefined until the Start tab first
     // rendered), whether step 2 shows the fields for it, and whether no
     // integration reported it in time.
@@ -384,6 +409,33 @@
     grinder_unpaired: { onPurpose: false, text: "start.error.unknownApp", title: "start.error.unknownApp" },
     shot_end_missed: { onPurpose: false, title: "history.endMissed" },
   };
+  // What went wrong with the last shot on an E65/E80, by the link's
+  // `problem_cause` (the server's ProblemCause): a brew that ended for one
+  // of the causes above, or a result that did not reach the grinder. A
+  // test in control_api.rs checks this table against the server.
+  const PROBLEMS = {
+    grinder_shot_dropped: "problem.shotDropped",
+    grinder_shot_refused: "problem.shotRefused",
+    grinder_unpaired: "problem.unpaired",
+    grinder_result_expired: "problem.resultExpired",
+    grinder_result_refused: "problem.resultRefused",
+    grinder_result_delayed: "problem.resultDelayed",
+  };
+  /** The E65/E80 link `w`'s problem in words. */
+  const problemText = (w) => (PROBLEMS[w.problem_cause] ? t(PROBLEMS[w.problem_cause]) : sentence(w.problem));
+  // Why the grinder won't grind, by `grind_blocked.cause` (the server's
+  // GrindBlocked). A test in control_api.rs checks this table against it.
+  const BLOCKED = {
+    shot_running: "blocked.shotRunning",
+    machine_in_standby: "blocked.standby",
+    machine_in_eco: "blocked.eco",
+    machine_testing: "blocked.testing",
+    machine_faulty: "blocked.faulty",
+    machine_warming_up: "blocked.warmingUp",
+    machine_tank_empty: "blocked.tankEmpty",
+  };
+  /** System status's line for the grind_blocked `b`. */
+  const blockedText = (b) => t("sys.text.blocked", { message: BLOCKED[b.cause] ? t(BLOCKED[b.cause]) : b.grinder_message });
   /** The cause of a shot_aborted event or a history entry, or null. */
   const causeOf = (x) => (x && x.cause) || null;
   const causeInfo = (cause) => CAUSES[cause] || {};
@@ -420,7 +472,7 @@
     const on = linkOn();
     const L = { state: "ready", wifi, on, phase: pairingPhase(wifi), unreached: false, missing: null };
     if (wifi && wifi.state === "pairing") L.state = "pairing";
-    else if (on) L.state = wifi && wifi.problem ? "problem" : "ready";
+    else if (on) L.state = wifi && wifi.problem_cause ? "problem" : "ready";
     else if (wifi ? wifi.state === "connecting" && linkStateAge(wifi) <= CONNECT_LONG_MS : !!(S.settings && S.settings.grinder_host)) L.state = "connecting";
     else if (setupNeeded() && wifi && wifi.not_set_up) L.state = "notSetUp";
     else L.state = "missing";
@@ -484,13 +536,6 @@
   function brewStart(f) {
     if (f.started && seenAt.has(f.started.seq)) return seenAt.get(f.started.seq);
     return f.sc === "running" ? Date.now() - elapsedMs() : null;
-  }
-  /** How long the last brew ran until its outcome, from the ages of both
-   *  events, or null when one is missing. */
-  function brewMs(f) {
-    if (!f.started || !f.outcome || f.outcome.seq < f.started.seq) return null;
-    const start = brewStart(f), end = endTime(f.outcome);
-    return start != null && end != null ? end - start : null;
   }
   const fresh = (ev) => { const t = endTime(ev); return t != null && Date.now() - t < FRESH_MS; };
   /** E64: a grind waits for the knob press only for a while. */
@@ -603,16 +648,12 @@
     return b && !(S.shot.phase !== "ready" && b.cause === "shot_running") ? b : null;
   }
 
-  /** The last part of a server error ("cannot reach the grinder at …:
-   *  operation timed out" gives "operation timed out"): the cause, without
-   *  the addresses before it. */
-  const lastCause = (text) => String(text || "").split(": ").pop().trim();
-
   /** Why there is no grinder, in plain words (`text`), and the server's
-   *  error behind it (`detail`), which stays English like the log. */
+   *  error behind it (`detail`: its `failure`, without the addresses
+   *  before it), which stays English like the log. */
   function grinderMissing(wifi) {
     if (!wifi) return { text: t("sys.missing.e64"), detail: "" };
-    const error = wifi.state === "failing" && wifi.detail ? lastCause(wifi.detail) : "";
+    const error = (wifi.state === "failing" && wifi.failure) || "";
     // It answers, but not as it should: not a matter of switching it on.
     if (error && wifi.unreachable === false) return { text: t("sys.missing.linkError"), detail: error };
     return { text: t("sys.missing.wifi"), detail: error };
@@ -689,12 +730,12 @@
     // It answers but turns pairing down: not set up, rather than not
     // connected; its answer stays at hand with the log. Any other error
     // shows as one.
-    if (L.state === "notSetUp") return s("start", "alert", "setup", t("sys.text.setup"), lastCause(L.wifi.detail));
+    if (L.state === "notSetUp") return s("start", "alert", "setup", t("sys.text.setup"), L.wifi.failure || "");
     if (L.state === "missing") return s("error", "alert", "noGrinder", L.missing.text, L.missing.detail);
-    if (blocked) return s("warn", "alert", "blocked", t("sys.text.blocked", { message: blocked.grinder_message }));
+    if (blocked) return s("warn", "alert", "blocked", blockedText(blocked));
     if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f));
     // Shots can still be made, but something needs a look: not green.
-    if (L.state === "problem") return s("warn", "alert", "problem", t("sys.text.problem"), sentence(L.wifi.problem));
+    if (L.state === "problem") return s("warn", "alert", "problem", t("sys.text.problem"), problemText(L.wifi));
     const failing = (S.integrations || []).find(badHealth);
     if (failing) {
       const r = s("warn", "alert", "integError", t("sys.text.integError", { title: failing.title }), failing.last_error);
@@ -809,11 +850,12 @@
     const show = (cls, text) => { b.hidden = false; setText(b, text, "banner " + cls); };
     if (!S || !online) { b.hidden = true; return; }
     const blocked = grindBlocked();
-    if (blocked && s.key !== "blocked") show("warn", t("sys.text.blocked", { message: blocked.grinder_message }));
+    if (blocked && s.key !== "blocked") show("warn", blockedText(blocked));
     // Pairing or connecting: System status and the setup say it.
     else if (L.state === "pairing" || L.state === "connecting" || s.def.grinder) b.hidden = true;
     else if (L.missing) show("bad", L.missing.text);
-    else if (L.state === "problem" && !(f.sc === "error" && f.reason === wifi.problem)) show("warn", t("sys.problem", { problem: sentence(wifi.problem) }));
+    // A brew that ended for the problem's cause says it already.
+    else if (L.state === "problem" && !(f.sc === "error" && f.cause === wifi.problem_cause)) show("warn", t("sys.problem", { problem: problemText(wifi) }));
     else b.hidden = true;
   }
 
@@ -994,7 +1036,7 @@
       shot = res ? t("unit.shot", { time: secs(res.time_ms / 1000), weight: grams(res.weight_g) }) : "";
       $("s2-shot").textContent = shot;
       const at = endTime(f.outcome);
-      const by = reportedBy(f.outcome, res);
+      const by = reportedBy(f);
       $("s2-source").textContent = [by, at ? hhmmss(new Date(at)) : null].filter(Boolean).join(" · ");
     }
     $("s2-error").hidden = f.sc !== "error";
@@ -1030,21 +1072,26 @@
     });
   }
 
-  /** "Reported by La Marzocco cloud" or "Entered by hand". */
-  function reportedBy(ev, res) {
-    if (!res) return "";
-    if (ev && ui.mine.has(ev.seq)) return t("start.step2.byHand");
-    const i = ((S && S.integrations) || []).find((x) => x.last_report && x.last_report.time_ms === res.time_ms
-      && Math.abs(x.last_report.weight_g - res.weight_g) < 0.05);
-    return i ? t("start.step2.reportedBy", { title: i.title }) : t("start.step2.byHand");
+  /** The title of the integration `id`, or the id of one that is gone. */
+  function integTitle(id) {
+    const i = ((S && S.integrations) || []).find((x) => x.id === id);
+    return i ? i.title : id;
+  }
+  /** "Reported by La Marzocco cloud" or "Entered by hand" for the shot of
+   *  flow() `f`, as its event says (`integration_id`); "" until the event
+   *  of this brew is in. */
+  function reportedBy(f) {
+    const ev = f.outcome;
+    if (!ev || ev.kind !== "shot_reported" || (f.started && ev.seq < f.started.seq)) return "";
+    return ev.integration_id ? t("start.step2.reportedBy", { title: integTitle(ev.integration_id) }) : t("start.step2.byHand");
   }
 
   /** Why the shot of flow() `f` failed. */
   function errorTitle(f) {
     if (f.cause === "shot_timed_out") {
-      // How long it waited, from the server's events: not the setting now,
-      // which may have changed since.
-      const ms = brewMs(f);
+      // How long it waited, as the server measured it: not the setting
+      // now, which may have changed since.
+      const ms = f.outcome && f.outcome.kind === "shot_aborted" ? f.outcome.running_ms : null;
       return ms > 0 ? t("start.error.timeout", { window: clock(ms) }) : t("start.error.timeoutNoLimit");
     }
     const text = causeInfo(f.cause).text;
@@ -1098,9 +1145,11 @@
     return sum;
   }
 
+  /** How long the running shot has run: the server's phase_age_ms, and
+   *  the time since that state came. */
   function elapsedMs() {
     if (!S || S.shot.phase !== "running") return 0;
-    return (S.machine.mako.REAL_EXTRACTION_TIME_MS || 0) + (performance.now() - stateAt);
+    return (S.shot.phase_age_ms || 0) + (performance.now() - stateAt);
   }
   function renderClock() {
     if (!S || S.shot.phase !== "running" || tab !== "start") return;
@@ -1140,40 +1189,23 @@
   let busy = false;
   $("f-time").addEventListener("input", () => setHint());
   $("f-time").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("f-weight").focus(); } });
-  /** Marks the shot sent from this page once its event is in: the newest
-   *  shot in the range (after a gap, an integration's may come before it). */
-  function markMine() {
-    const r = ui.mineRange;
-    if (!r) return;
-    for (let i = events.length - 1; i >= 0; i--) {
-      const e = events[i];
-      if (e.kind !== "shot_reported" || e.seq <= r.after || e.seq > r.upTo) continue;
-      ui.mine.add(e.seq); ui.mineRange = null;
-      return;
-    }
-  }
   $("shot-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (busy) return;
     const secsTyped = num($("f-time").value), w = num($("f-weight").value);
     if (!isFinite(secsTyped) || secsTyped <= 0) { setHint(t("start.form.enterTime"), true); $("f-time").focus(); return; }
     busy = true; $("send").disabled = true;
-    const after = lastSeq;
     try {
       // Without a weight the server uses the recipe's; it never sends 0 g.
       const shot = w > 0 ? { time_s: secsTyped, weight_g: w } : { time_s: secsTyped };
-      const st = await api("/api/shot/result", { method: "POST", body: JSON.stringify(shot) });
-      // Only a shot the server took was typed here ("Entered by hand"): its
-      // event falls between the last one seen before and the reply.
-      ui.mineRange = { after, upTo: st.server.last_event_seq };
-      markMine();
+      await api("/api/shot/result", { method: "POST", body: JSON.stringify(shot) });
       if (document.activeElement) document.activeElement.blur();
       busy = false;
       setHint();
       await tick();
     } catch (err) {
       busy = false;
-      setHint(t("start.form.notSent", { error: err.message }), true);
+      setHint(t("start.form.notSent", { error: errorText(err) }), true);
     }
   });
   for (const b of document.querySelectorAll("[data-abort]")) {
@@ -1190,7 +1222,7 @@
               await api("/api/shot/abort", { method: "POST" });
               closeSheet();
               tick();
-            } catch (err) { sheetError(t("start.abort.failed", { error: err.message })); btn.disabled = false; }
+            } catch (err) { sheetError(t("start.abort.failed", { error: errorText(err) })); btn.disabled = false; }
           } },
         ],
         returnTo: b,
@@ -1463,7 +1495,8 @@
     for (const [name, x] of Object.entries(i.detail_vars || {})) {
       if (x == null || typeof x === "object") continue;   // only numbers and text are filled in
       vars[name.replace(/_(ms|s|g)$/, "")] = typeof x !== "number" ? String(x)
-        : name === "age_ms" ? ageOf(x) : name === "time_ms" ? secs(x / 1000) : name === "weight_g" ? grams(x)
+        // An age is as of the state, so it goes on until the next one.
+        : name === "age_ms" ? ageOf(x + (performance.now() - stateAt)) : name === "time_ms" ? secs(x / 1000) : name === "weight_g" ? grams(x)
         : fmt.upToOne.format(x);
     }
     const text = serverText("integ.detail." + i.detail_key, i.detail, vars);
@@ -1511,7 +1544,7 @@
             closeSheet();
             await tick();
             startEdit(((S && S.integrations) || []).find((x) => x.id === i.id) || Object.assign({}, i, view));
-          } catch (err) { sheetError(err.message); btn.disabled = false; }
+          } catch (err) { sheetError(errorText(err)); btn.disabled = false; }
         } },
       ],
     });
@@ -1544,7 +1577,7 @@
             closeSheet();
             invalidateIntegrations();
             await tick();
-          } catch (err) { sheetError(t("integ.delete.failed", { error: err.message })); btn.disabled = false; }
+          } catch (err) { sheetError(t("integ.delete.failed", { error: errorText(err) })); btn.disabled = false; }
         } },
       ],
       focus: input,
@@ -1593,7 +1626,7 @@
     let saved;
     try { saved = await api("/api/integrations/" + encodeURIComponent(i.id) + "/settings"); }
     catch (err) {
-      return openSheet({ title: t("integ.edit.cant", { title: i.title }), body: [el("p", { class: "body-text", text: err.message })], actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }] });
+      return openSheet({ title: t("integ.edit.cant", { title: i.title }), body: [el("p", { class: "body-text", text: errorText(err) })], actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }] });
     }
     const values = saved.settings || {};
     const secrets = new Set(saved.secrets_set || []);
@@ -1611,7 +1644,7 @@
         await api("/api/integrations/" + encodeURIComponent(i.id), { method: "PUT", body: JSON.stringify({ settings: formValues(fields) }) });
         stopEdit();
         await tick();
-      } catch (err) { setText(error, err.message); error.hidden = false; save.disabled = false; }
+      } catch (err) { setText(error, errorText(err)); error.hidden = false; save.disabled = false; }
     });
     editing = i.id; editForm = form;
     invalidateIntegrations();
@@ -1665,7 +1698,7 @@
       openAdd(false);
       await tick();
     } catch (err) {
-      setText($("add-error"), err.message); $("add-error").hidden = false;
+      setText($("add-error"), errorText(err)); $("add-error").hidden = false;
     } finally { $("add-submit").disabled = false; }
   });
 
@@ -1819,7 +1852,7 @@
         saved = true;
       }
     } catch (x) {
-      if (seq === win.seq) windowNote(t("common.notSaved", { error: x.message }), true);
+      if (seq === win.seq) windowNote(t("common.notSaved", { error: errorText(x) }), true);
     } finally {
       // A newer value waits for its own save.
       if (win.pending === value) win.pending = null;
@@ -1993,7 +2026,7 @@
       tick();
       return true;
     } catch (x) {
-      setText($("set-update-error"), t("common.notSaved", { error: x.message })); $("set-update-error").hidden = false;
+      setText($("set-update-error"), t("common.notSaved", { error: errorText(x) })); $("set-update-error").hidden = false;
       return false;
     } finally {
       updateSaving = false;
@@ -2020,7 +2053,7 @@
     renderStatus();
     if (!open && refocus) focusKebab("grinder");
   }
-  function hostError(x) { setText($("g-host-error"), t("common.notSaved", { error: x.message })); $("g-host-error").hidden = false; }
+  function hostError(x) { setText($("g-host-error"), t("common.notSaved", { error: errorText(x, "host") })); $("g-host-error").hidden = false; }
   $("g-host-cancel").addEventListener("click", () => hostEditor(false, true));
   /** Saves the grinder's address on the server (the grinder card's form and
    *  setup step 1; null for the start address); the server says what it
@@ -2099,7 +2132,7 @@
       histState = "ok";
     } catch (e) {
       // Tried again shortly (see refresh).
-      histState = "failed"; histError = e.message;
+      histState = "failed"; histError = errorText(e);
     }
     histLoading = false;
     renderHistory();
@@ -2122,10 +2155,8 @@
       return s.weight_g != null ? t("unit.shot", { time, weight: grams(s.weight_g) }) : t("unit.seconds", { time });
     }
     const cause = causeOf(s);
-    if (cause === "shot_timed_out") {
-      const ms = Date.parse(s.ended_at) - Date.parse(s.started_at);
-      return t("history.timeout", { time: isFinite(ms) ? clock(ms) : windowLabel() });
-    }
+    // How long it waited, as the server measured it.
+    if (cause === "shot_timed_out") return s.running_ms != null ? t("history.timeout", { time: clock(s.running_ms) }) : t("start.error.timeoutNoLimit");
     const title = causeInfo(cause).title;
     if (title) return t(title);
     // A cause this app does not know: as the server says it.
@@ -2136,6 +2167,8 @@
     const tgt = [s.target_time_ms != null ? t("unit.seconds", { time: secs(s.target_time_ms / 1000) }) : null,
       s.target_weight_g != null ? t("unit.grams", { weight: gramsShort(s.target_weight_g) }) : null].filter(Boolean);
     if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
+    // Who reported it, when an integration did; typed in is the default.
+    if (s.integration_id) parts.push(t("history.by", { title: integTitle(s.integration_id) }));
     return parts.join(" · ");
   }
   /** A success the grinder did not adjust from, as the server recorded it.
@@ -2188,9 +2221,10 @@
     }
     const days = [...byDay.values()];
     // The days are named from today ("Today", "Yesterday"), which moves on
-    // at midnight; a timeout without its times says the shot window.
+    // at midnight.
     const today = new Date().toDateString();
-    patch(groups, JSON.stringify([lang, locale, HKINDS.map(shown), histGen, today, windowS()]), () => days.map((g) => el("section", { class: "day" },
+    const titles = ((S && S.integrations) || []).map((i) => [i.id, i.title]);
+    patch(groups, JSON.stringify([lang, locale, HKINDS.map(shown), histGen, today, titles]), () => days.map((g) => el("section", { class: "day" },
       el("h2", { text: g.label }),
       el("ul", null, g.items.map(({ s, d }) => {
         const sub = shotSub(s);
@@ -2238,6 +2272,9 @@
     for (const l of lines) {
       if (!l || typeof l.seq !== "number" || l.seq <= log.last) continue;
       log.last = l.seq;
+      // When, on this device's clock, from how long ago the server says it
+      // was: its own clock (`at`) may not be set.
+      l.seenAt = Date.now() - (l.age_ms || 0);
       log.lines.push(l);
       frag.append(lineEl(l));
     }
@@ -2452,7 +2489,7 @@
 
   $("log-copy").addEventListener("click", async () => {
     const since = Date.now() - 60 * 60000;
-    let lines = log.lines.filter((l) => Date.parse(l.at) >= since && (!log.warnOnly || l.level !== "info"));
+    let lines = log.lines.filter((l) => l.seenAt >= since && (!log.warnOnly || l.level !== "info"));
     if (lines.length > 500) lines = lines.slice(-500);
     if (!lines.length) {
       logDone("note", log.warnOnly ? t("log.nothingWarnings") : t("log.nothingLines"));
@@ -3554,8 +3591,8 @@
       await tick();
     } catch (x) {
       wz.pair.acceptBusy = false;
-      wz.pair.acceptError = x.message;
-      setupSay(x.message);
+      wz.pair.acceptError = errorText(x);
+      setupSay(wz.pair.acceptError);
     } finally { renderSetup(); }
   }
 
@@ -3576,7 +3613,7 @@
       wz.pair.editHost = false; wz.pair.hostValue = null;
       await tick();
     } catch (x) {
-      wz.pair.hostError = x.message; wz.focus = "wz-host"; setupSay(x.message);
+      wz.pair.hostError = errorText(x, "host"); wz.focus = "wz-host"; setupSay(wz.pair.hostError);
     } finally { wz.pair.hostBusy = false; renderAll(); }
   }
 
@@ -3593,7 +3630,7 @@
       wz.pair.idValue = "";
       await tick();
     } catch (x) {
-      wz.pair.idError = x.message; wz.focus = "wz-id"; setupSay(x.message);
+      wz.pair.idError = errorText(x); wz.focus = "wz-id"; setupSay(wz.pair.idError);
     } finally { wz.pair.idBusy = false; renderSetup(); }
   }
 
@@ -3733,7 +3770,7 @@
     S = st; stateAt = performance.now();
     if (restarted) {
       events = []; lastSeq = 0; seenAt.clear();
-      ui.mine.clear(); ui.mineRange = null; ui.dismissed = 0; ui.planKey = null;
+      ui.dismissed = 0; ui.planKey = null;
       kinds = null;
       restartLog();
     }
@@ -3755,12 +3792,10 @@
             if (e.kind === "shot_reported" || e.kind === "shot_aborted") shotDone = true;
             lastSeq = e.seq;
           }
-          markMine();
           if (events.length > 500) {
             events.splice(0, events.length - 500);
             const min = events[0].seq;
             for (const k of seenAt.keys()) if (k < min) seenAt.delete(k);
-            for (const k of ui.mine) if (k < min) ui.mine.delete(k);
           }
           lastSeq = Math.max(lastSeq, st.server.last_event_seq);
           caughtUp = true;

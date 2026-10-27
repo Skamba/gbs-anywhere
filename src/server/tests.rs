@@ -237,6 +237,8 @@ async fn grinder_accepts_a_shot_entered_in_the_app() {
         events[3]["result"],
         json!({ "time_ms": 30_000, "weight_g": 36.0 })
     );
+    // Typed in the app: no integration reported it.
+    assert_eq!(events[3]["integration_id"], Value::Null);
 }
 
 #[tokio::test]
@@ -420,8 +422,22 @@ async fn an_abort_says_why_over_the_api() {
     let base = start().await;
     let post = reqwest::Method::POST;
     call(post.clone(), format!("{base}/api/shot/start"), None).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // How long it has run, for the app's timer.
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["shot"]["phase"], "running");
+    let running = state["shot"]["phase_age_ms"]
+        .as_u64()
+        .expect("phase_age_ms");
+    assert!((300..10_000).contains(&running), "running for {running} ms");
     let (code, _) = call(post, format!("{base}/api/shot/abort"), None).await;
     assert_eq!(code, 200);
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(
+        state["shot"]["phase_age_ms"],
+        Value::Null,
+        "only while running"
+    );
     let (_, events) = call(
         reqwest::Method::GET,
         format!("{base}/api/events?after=0"),
@@ -438,6 +454,8 @@ async fn an_abort_says_why_over_the_api() {
         (&aborted["cause"], &aborted["reason"]),
         (&json!("shot_aborted_by_user"), &json!("aborted by user"))
     );
+    let ran = aborted["running_ms"].as_u64().expect("running_ms");
+    assert!(ran >= running && ran < 10_000, "ran {ran} ms");
 }
 
 #[tokio::test]
@@ -863,10 +881,13 @@ async fn a_new_grinder_address_ends_the_shot_it_waited_for() {
     let ended = || {
         x.with(|m, _| {
             m.events_after(0).any(|e| {
-                e.event
-                    == crate::protocol::MachineEvent::shot_aborted(
-                        AbortCause::GrinderAddressChanged,
-                    )
+                matches!(
+                    e.event,
+                    crate::protocol::MachineEvent::ShotAborted {
+                        cause: AbortCause::GrinderAddressChanged,
+                        ..
+                    }
+                )
             })
         })
     };
@@ -920,6 +941,7 @@ async fn the_log_is_kept_for_the_app() {
     let first = x.log().push(tracing::Level::WARN, "routes test: first");
     x.log().push(tracing::Level::INFO, "routes test: second");
     x.log().push(tracing::Level::ERROR, "routes test: third");
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let (code, body) = call(
         reqwest::Method::GET,
@@ -938,6 +960,9 @@ async fn the_log_is_kept_for_the_app() {
     assert_eq!(ours[0]["seq"], first.seq);
     assert_eq!(ours[0]["text"], "routes test: first");
     assert!(ours[0]["at"].as_str().unwrap().ends_with('Z'));
+    // How long ago, for an app whose clock is not the server's.
+    let age = ours[0]["age_ms"].as_u64().expect("age_ms");
+    assert!((200..10_000).contains(&age), "logged {age} ms ago");
     assert_eq!(body["last_seq"], first.seq + 2);
     // Lower case, like the API's other codes.
     let levels: Vec<_> = ours.iter().map(|l| l["level"].as_str().unwrap()).collect();
@@ -957,6 +982,7 @@ async fn the_log_is_kept_for_the_app() {
     assert!(text.contains(&format!("id: {}", first.seq)), "{text}");
     assert!(text.contains(r#""text":"routes test: first""#), "{text}");
     assert!(text.contains(r#""level":"warn""#), "{text}");
+    assert!(text.contains(r#""age_ms":"#), "{text}");
 
     // A browser reconnecting says what it saw last, and gets what it missed;
     // that wins over the query of the URL it reconnects to.
@@ -1058,7 +1084,9 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
     );
     assert!(shot["id"].as_str().is_some_and(|id| !id.is_empty()));
     assert!(shot["started_at"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(shot["integration_id"], Value::Null, "typed in");
     assert!(shot["ended_at"].as_str().unwrap() >= shot["started_at"].as_str().unwrap());
+    assert!(shot["running_ms"].as_u64().is_some_and(|ms| ms < 10_000));
     let saved: Value =
         serde_json::from_slice(&std::fs::read(dir.join("history.json")).unwrap()).unwrap();
     assert_eq!(saved["shots"].as_array().unwrap().len(), 3);

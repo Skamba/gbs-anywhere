@@ -68,6 +68,11 @@ pub struct Shot {
     /// the shot does not change how far apart the two are.
     pub ended_at: String,
     pub outcome: ShotOutcome,
+    /// How long it ran, from the grinder's request to its end, counted on
+    /// the machine's clock (as `running_ms` on its `shot_reported` or
+    /// `shot_aborted` event). Files from before it was kept give
+    /// `ended_at` less `started_at`, in whole seconds.
+    pub running_ms: Option<u64>,
     /// Only for a success.
     pub time_ms: Option<u32>,
     pub weight_g: Option<f64>,
@@ -75,6 +80,10 @@ pub struct Shot {
     /// its `shot_reported` event. None when the shot's window is not known
     /// (an E65/E80 brew job without a target time); older files have none.
     pub in_grinder_range: Option<bool>,
+    /// Only for a success: the integration that reported it, as on its
+    /// `shot_reported` event. None when it was typed in the app or sent
+    /// through the API, and in older files.
+    pub integration_id: Option<String>,
     /// What the grinder aims for, when it said.
     pub target_time_ms: Option<u32>,
     pub target_weight_g: Option<f64>,
@@ -95,10 +104,14 @@ struct StoredShot {
     ended_at: String,
     #[serde(alias = "kind")]
     outcome: ShotOutcome,
+    #[serde(default)]
+    running_ms: Option<u64>,
     time_ms: Option<u32>,
     time_s: Option<f64>,
     weight_g: Option<f64>,
     in_grinder_range: Option<bool>,
+    #[serde(default)]
+    integration_id: Option<String>,
     target_time_ms: Option<u32>,
     target_time_s: Option<f64>,
     target_weight_g: Option<f64>,
@@ -113,14 +126,22 @@ impl From<StoredShot> for Shot {
             secs.filter(|s| s.is_finite() && *s >= 0.0)
                 .map(|s| (s * 1000.0).round().min(f64::from(u32::MAX)) as u32)
         };
+        // Saved before it was kept: the shot's two times are its length.
+        let running_ms = s.running_ms.or_else(|| {
+            let span = super::utc::seconds(&s.ended_at)?
+                .checked_sub(super::utc::seconds(&s.started_at)?)?;
+            Some(span * 1000)
+        });
         Self {
             id: s.id,
             started_at: s.started_at,
             ended_at: s.ended_at,
             outcome: s.outcome,
+            running_ms,
             time_ms: s.time_ms.or_else(|| ms(s.time_s)),
             weight_g: s.weight_g,
             in_grinder_range: s.in_grinder_range,
+            integration_id: s.integration_id,
             target_time_ms: s.target_time_ms.or_else(|| ms(s.target_time_s)),
             target_weight_g: s.target_weight_g,
             reason: s.reason,
@@ -338,12 +359,14 @@ struct Open {
 }
 
 /// How a shot ended.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum End {
-    /// With a shot result, and whether the grinder adjusts from its time.
+    /// With a shot result, whether the grinder adjusts from its time, and
+    /// the integration that reported it.
     Shot {
         result: ShotResult,
         in_grinder_range: Option<bool>,
+        integration_id: Option<String>,
     },
     /// Without one, for this cause.
     Aborted(AbortCause),
@@ -397,11 +420,14 @@ impl Recorder {
             MachineEvent::ShotReported {
                 result,
                 in_grinder_range,
+                integration_id,
+                ..
             } => {
                 let open = self.open.take()?;
                 let end = End::Shot {
                     result: *result,
                     in_grinder_range: *in_grinder_range,
+                    integration_id: integration_id.clone(),
                 };
                 Some(shot(&open, at, wall, end))
             }
@@ -418,27 +444,36 @@ impl Recorder {
 /// `wall` on the wall clock; one that ended for a cause also gets its words
 /// as `reason`.
 fn shot(open: &Open, ended: Instant, wall: SystemTime, end: End) -> Shot {
+    let running = ended.saturating_duration_since(open.since);
     // Whole seconds, as the history keeps its times: `started_at` and
     // `ended_at` are then exactly this far apart, so a 3:00 timeout does not
     // show as 3:01.
-    let took = Duration::from_secs(ended.saturating_duration_since(open.since).as_secs());
-    let (outcome, result, in_grinder_range, cause) = match end {
+    let took = Duration::from_secs(running.as_secs());
+    let (outcome, result, in_grinder_range, integration_id, cause) = match end {
         End::Shot {
             result,
             in_grinder_range,
-        } => (ShotOutcome::Succeeded, Some(result), in_grinder_range, None),
-        End::Aborted(cause) => (ShotOutcome::of(cause), None, None, Some(cause)),
+            integration_id,
+        } => (
+            ShotOutcome::Succeeded,
+            Some(result),
+            in_grinder_range,
+            integration_id,
+            None,
+        ),
+        End::Aborted(cause) => (ShotOutcome::of(cause), None, None, None, Some(cause)),
     };
     Shot {
         id: uuid::Uuid::new_v4().simple().to_string(),
         started_at: super::utc::with_seconds(wall.checked_sub(took).unwrap_or(wall)),
         ended_at: super::utc::with_seconds(wall),
         outcome,
+        running_ms: Some(u64::try_from(running.as_millis()).unwrap_or(u64::MAX)),
         time_ms: result.map(|r| r.time_ms),
         weight_g: result.map(|r| r.weight_g),
         in_grinder_range,
+        integration_id,
         target_time_ms: open.target.time_ms,
-
         target_weight_g: open.target.weight_g,
         reason: cause.map(|c| c.text().to_owned()),
         cause,
@@ -543,6 +578,7 @@ mod tests {
         let result = ShotResult::new(Duration::from_secs(secs), 36.0);
         End::Shot {
             result,
+            integration_id: None,
             in_grinder_range: Some(GrinderRange::E64.contains(result.time_ms)),
         }
     }
@@ -564,7 +600,16 @@ mod tests {
         MachineEvent::ShotReported {
             result,
             in_grinder_range: Some(GrinderRange::E64.contains(result.time_ms)),
+            // Not read: the history counts from the request itself.
+            running_ms: 0,
+            integration_id: None,
         }
+    }
+
+    /// The event for a brew that ended for `cause`; how long it ran is not
+    /// read, the history counts that from the request itself.
+    fn aborted(cause: AbortCause) -> MachineEvent {
+        MachineEvent::shot_aborted(cause, Duration::ZERO)
     }
 
     #[test]
@@ -585,6 +630,7 @@ mod tests {
 
         let shot = r.feed(&reported(28_500, 40.9), at(40)).unwrap();
         assert_eq!(shot.outcome, ShotOutcome::Succeeded);
+        assert_eq!(shot.running_ms, Some(40_000));
         assert_eq!(
             (
                 shot.time_ms,
@@ -619,8 +665,9 @@ mod tests {
             at(110),
         );
         r.feed(&started(true), at(110));
-        let abort = MachineEvent::shot_aborted(AbortCause::ShotAbortedByUser);
+        let abort = aborted(AbortCause::ShotAbortedByUser);
         let shot = r.feed(&abort, at(120)).unwrap();
+        assert_eq!(shot.running_ms, Some(10_000), "from the request");
         assert_eq!(shot.outcome, ShotOutcome::Aborted);
         assert_eq!((shot.time_ms, shot.target_time_ms), (None, None));
         assert_eq!(shot.target_weight_g, Some(36.0));
@@ -630,10 +677,39 @@ mod tests {
 
         // A knob press without a new grind: the target is not known.
         assert_eq!(r.feed(&started(true), at(200)), None);
-        let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
+        let timeout = aborted(AbortCause::ShotTimedOut);
         let shot = r.feed(&timeout, at(380)).unwrap();
         assert_eq!(shot.outcome, ShotOutcome::Failed);
         assert_eq!(shot.target_weight_g, None);
+    }
+
+    #[test]
+    fn records_which_integration_reported_the_shot() {
+        let mut r = Recorder::default();
+        r.feed(&started(true), at(0));
+        let by_hand = r.feed(&reported(28_000, 36.0), at(40)).unwrap();
+        assert_eq!(by_hand.integration_id, None);
+
+        r.feed(&started(true), at(100));
+        let MachineEvent::ShotReported {
+            result,
+            in_grinder_range,
+            running_ms,
+            ..
+        } = reported(27_000, 36.0)
+        else {
+            unreachable!()
+        };
+        let by_scale = MachineEvent::ShotReported {
+            result,
+            in_grinder_range,
+            running_ms,
+            integration_id: Some("half_decent".into()),
+        };
+        let shot = r.feed(&by_scale, at(140)).unwrap();
+        assert_eq!(shot.integration_id.as_deref(), Some("half_decent"));
+        let saved = serde_json::to_value(&shot).unwrap();
+        assert_eq!(saved["integration_id"], "half_decent");
     }
 
     #[test]
@@ -671,7 +747,7 @@ mod tests {
 
         // Set during a timeout, from 1970: the right day, 3 minutes long.
         r.observe(&started(true), at(100), unset);
-        let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
+        let timeout = aborted(AbortCause::ShotTimedOut);
         let shot = r.feed(&timeout, at(280)).unwrap();
         assert_eq!(
             (shot.started_at.as_str(), shot.ended_at.as_str()),
@@ -717,12 +793,14 @@ mod tests {
             at(0),
             end_wall - Duration::from_millis(180_250),
         );
-        let timeout = MachineEvent::shot_aborted(AbortCause::ShotTimedOut);
+        let timeout = aborted(AbortCause::ShotTimedOut);
         let shot = r.observe(&timeout, end, end_wall).unwrap();
         assert_eq!(
             (shot.started_at.as_str(), shot.ended_at.as_str()),
             ("2026-10-11T12:00:01Z", "2026-10-11T12:03:01Z")
         );
+        // How long it ran stays to the millisecond.
+        assert_eq!(shot.running_ms, Some(180_250));
     }
 
     #[test]
@@ -738,7 +816,7 @@ mod tests {
         ] {
             let mut r = Recorder::default();
             r.feed(&started(true), at(0));
-            let shot = r.feed(&MachineEvent::shot_aborted(cause), at(1));
+            let shot = r.feed(&aborted(cause), at(1));
             let shot = shot.unwrap();
             assert_eq!((shot.outcome, shot.cause), (kind, Some(cause)));
             assert_eq!(shot.reason.as_deref(), Some(cause.text()));
@@ -751,6 +829,7 @@ mod tests {
         r.feed(&started(true), at(0));
         let missed = r.feed(&started(true), at(100)).unwrap();
         assert_eq!(missed.outcome, ShotOutcome::Failed);
+        assert_eq!(missed.running_ms, Some(100_000), "until the next one");
         assert_eq!(missed.cause, Some(AbortCause::ShotEndMissed));
         assert_eq!(
             missed.reason.as_deref(),
@@ -903,7 +982,8 @@ mod tests {
         let dir = temp_path("history");
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("history.json");
-        // Shots as saved before `cause` and `in_grinder_range` were kept,
+        // Shots as saved before `cause`, `in_grinder_range`, `running_ms` and
+        // `integration_id` were kept,
         // with the names of then (`at`, `kind`, times in seconds) and the
         // kinds of then (`success`, `error`). Whether the grinder took the
         // success is not known, and stays so.
@@ -941,6 +1021,10 @@ mod tests {
         );
         assert_eq!(shots[0].started_at, "2026-10-11T12:00:00Z");
         assert_eq!(shots[1].cause, Some(AbortCause::ShotTimedOut));
+        // How long each ran, from its two times.
+        let running: Vec<_> = shots.iter().map(|s| s.running_ms).collect();
+        assert_eq!(running, [Some(30_000), Some(180_000), Some(20_000)]);
+        assert_eq!(shots[0].integration_id, None, "not known for an older shot");
         // Written back with the names of now.
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let saved_outcomes: Vec<_> = saved["shots"]
@@ -967,6 +1051,7 @@ mod tests {
         for old in ["at", "kind", "time_s", "target_time_s"] {
             assert!(first.get(old).is_none(), "{old}");
         }
+        assert_eq!(first["running_ms"], 30_000);
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -197,6 +197,12 @@ pub enum MachineEvent {
         /// Whether the grinder adjusts from its time
         /// ([`Machine::grinder_range`]); `None` when that is not known.
         in_grinder_range: Option<bool>,
+        /// How long the brew ran until the result came, on the machine's
+        /// clock (not the shot's own `time_ms`).
+        running_ms: u64,
+        /// The integration that reported it (its `id`); `None` when it was
+        /// typed in the app or sent through the API.
+        integration_id: Option<String>,
     },
     /// The shot ended without a result; the grinder skips it. Made with
     /// [`MachineEvent::shot_aborted`].
@@ -206,19 +212,28 @@ pub enum MachineEvent {
         reason: &'static str,
         /// Why, as a fixed code for apps to match on.
         cause: AbortCause,
+        /// How long the brew ran until it ended, on the machine's clock.
+        running_ms: u64,
     },
     /// The shot is over and the machine back to `ON`.
     ShotFinished,
 }
 
 impl MachineEvent {
-    /// The event for a brew that ended for `cause`, with its words as `reason`.
-    pub fn shot_aborted(cause: AbortCause) -> Self {
+    /// The event for a brew that ended for `cause` after running for
+    /// `running`, with its words as `reason`.
+    pub fn shot_aborted(cause: AbortCause, running: Duration) -> Self {
         Self::ShotAborted {
             reason: cause.text(),
             cause,
+            running_ms: millis(running),
         }
     }
+}
+
+/// `d` in whole milliseconds, as the API's `_ms` numbers are.
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Why a brew ended without a result, as a fixed code (`cause` next to the
@@ -507,10 +522,21 @@ impl Machine {
     /// weight of 0 (none given) becomes the recipe weight; with no recipe
     /// weight either, the result is refused.
     pub fn report_shot(&mut self, now: Instant, result: ShotResult) -> Result<(), MachineError> {
+        self.report_shot_by(now, result, None)
+    }
+
+    /// [`Machine::report_shot`] for the integration `integration_id`, which
+    /// its event names.
+    pub fn report_shot_by(
+        &mut self,
+        now: Instant,
+        result: ShotResult,
+        integration_id: Option<&str>,
+    ) -> Result<(), MachineError> {
         self.tick(now);
-        if !matches!(self.phase, Phase::Running { .. }) {
+        let Phase::Running { since, .. } = self.phase else {
             return Err(MachineError::NotRunning);
-        }
+        };
         // Never send 0 g: without a weight, use the recipe's.
         let result = if result.weight_g.is_finite() && result.weight_g > 0.0 {
             result
@@ -532,6 +558,8 @@ impl Machine {
             MachineEvent::ShotReported {
                 result,
                 in_grinder_range: self.range.map(|r| r.contains(result.time_ms)),
+                running_ms: millis(now.saturating_duration_since(since)),
+                integration_id: integration_id.map(str::to_owned),
             },
         );
         Ok(())
@@ -641,12 +669,13 @@ impl Machine {
     }
 
     fn abort_shot(&mut self, now: Instant, since: Instant, cause: AbortCause) {
+        let running = now.saturating_duration_since(since);
         self.phase = Phase::Finishing {
             until: now + self.config.finishing_hold,
-            result: ShotResult::new(now.saturating_duration_since(since), 0.0),
+            result: ShotResult::new(running, 0.0),
             aborted: true,
         };
-        self.push(now, MachineEvent::shot_aborted(cause));
+        self.push(now, MachineEvent::shot_aborted(cause, running));
     }
 
     fn push(&mut self, at: Instant, event: MachineEvent) {
@@ -802,6 +831,14 @@ mod tests {
         g.observe(&m.mako(t2));
         m.report_shot(t2, ShotResult::new(Duration::from_secs(30), 36.0))
             .unwrap();
+        // How long the brew ran, from the request: on the machine's clock.
+        assert!(matches!(
+            m.events_after(0).last().map(|e| &e.event),
+            Some(MachineEvent::ShotReported {
+                running_ms: 30_000,
+                ..
+            })
+        ));
         assert_eq!(poll_until_ready(&mut m, &mut g, t2), Some(30_000));
         assert_eq!(
             m.mako(t2 + Duration::from_secs(60)).status,
@@ -925,6 +962,7 @@ mod tests {
             == MachineEvent::ShotAborted {
                 reason: "no result reported in time",
                 cause: AbortCause::ShotTimedOut,
+                running_ms: 181_000,
             }));
     }
 
@@ -942,6 +980,7 @@ mod tests {
                 "kind": "shot_aborted",
                 "reason": "aborted by user",
                 "cause": "shot_aborted_by_user",
+                "running_ms": 2_000,
             })
         );
         // Each cause has its own words: the history finds the cause of a shot
