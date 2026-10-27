@@ -239,26 +239,21 @@ impl SettingsChange {
             match key.as_str() {
                 "shot_window_s" => {
                     // `null`: back to `--shot-window-s`, else the default.
-                    let secs = match value {
-                        Value::Null => None,
-                        v => Some(
-                            v.as_f64()
-                                .filter(|s| {
-                                    s.fract() == 0.0
-                                        && (0.0..=f64::from(MAX_SHOT_WINDOW_S)).contains(s)
-                                })
-                                .map(|s| s as u32)
-                                .filter(|s| window_ok(*s))
-                                .ok_or_else(|| {
-                                    format!(
-                                        "the shot window is 0 (no limit), {MIN_SHOT_WINDOW_S} to \
-                                         {MAX_SHOT_WINDOW_S} whole seconds, or null for the start \
-                                         setting"
-                                    )
-                                })?,
-                        ),
-                    };
-                    change.shot_window_s = Some(secs);
+                    change.shot_window_s = Some(or_null(value, |v| {
+                        v.as_f64()
+                            .filter(|s| {
+                                s.fract() == 0.0 && (0.0..=f64::from(MAX_SHOT_WINDOW_S)).contains(s)
+                            })
+                            .map(|s| s as u32)
+                            .filter(|s| window_ok(*s))
+                            .ok_or_else(|| {
+                                format!(
+                                    "the shot window is 0 (no limit), {MIN_SHOT_WINDOW_S} to \
+                                     {MAX_SHOT_WINDOW_S} whole seconds, or null for the start \
+                                     setting"
+                                )
+                            })
+                    })?);
                 }
                 "grinder_host" => {
                     change.grinder_host = Some(match value {
@@ -276,19 +271,30 @@ impl SettingsChange {
                 }
                 "update_check" => {
                     // `null`: back to `--update-check`, else on.
-                    let on = match value {
-                        Value::Null => None,
-                        v => Some(v.as_bool().ok_or(
+                    change.update_check = Some(or_null(value, |v| {
+                        v.as_bool().ok_or_else(|| {
                             "the update check is true (on), false (off), or null for the start \
-                             setting",
-                        )?),
-                    };
-                    change.update_check = Some(on);
+                             setting"
+                                .to_owned()
+                        })
+                    })?);
                 }
                 other => return Err(format!("unknown setting `{other}`")),
             }
         }
         Ok(change)
+    }
+}
+
+/// A value from `PUT /api/settings`: `null` (back to the start setting) is
+/// `None`, anything else what `parse` makes of it.
+fn or_null<T>(
+    value: &Value,
+    parse: impl FnOnce(&Value) -> Result<T, String>,
+) -> Result<Option<T>, String> {
+    match value {
+        Value::Null => Ok(None),
+        v => parse(v).map(Some),
     }
 }
 
@@ -358,12 +364,66 @@ fn checked(mut app: AppSettings) -> AppSettings {
     app
 }
 
-/// The shot window in seconds and where it comes from.
-fn shot_window(startup: &Startup, app: &AppSettings) -> (u32, SettingSource) {
-    match (app.shot_window_s, startup.shot_window_s) {
-        (Some(s), _) => (s, SettingSource::App),
-        (None, Some(s)) => (whole_seconds(s), SettingSource::CommandLine),
-        (None, None) => (DEFAULT_SHOT_WINDOW_S, SettingSource::Default),
+/// Which value counts: the one set in the app, else the start setting (a
+/// flag or environment variable), else the default.
+fn resolve<T>(app: Option<T>, start: Option<T>, default: T) -> (T, SettingSource) {
+    match (app, start) {
+        (Some(v), _) => (v, SettingSource::App),
+        (None, Some(v)) => (v, SettingSource::CommandLine),
+        (None, None) => (default, SettingSource::Default),
+    }
+}
+
+/// Every setting as it counts, and where it comes from. A new setting gets
+/// a field in [`AppSettings`], [`Startup`] and [`SettingsChange`], its arm
+/// in [`SettingsChange::parse`], a field here (in `of` and `entries`), and
+/// then is applied in `start_settings` and `change_settings`, logged through
+/// a [`Logged`] of its own.
+#[derive(Debug, Clone, PartialEq)]
+struct Values {
+    /// In whole seconds; 0 waits forever.
+    shot_window_s: (u32, SettingSource),
+    /// The E65/E80 grinder's address, if there is one.
+    grinder_host: (Option<String>, SettingSource),
+    /// Whether to look for newer releases; on unless set.
+    update_check: (bool, SettingSource),
+}
+
+impl Values {
+    fn of(startup: &Startup, app: &AppSettings) -> Self {
+        Self {
+            shot_window_s: resolve(
+                app.shot_window_s,
+                startup.shot_window_s.map(whole_seconds),
+                DEFAULT_SHOT_WINDOW_S,
+            ),
+            grinder_host: resolve(
+                app.grinder_host.clone(),
+                startup.grinder_host.clone().map(Some),
+                None,
+            ),
+            update_check: resolve(app.update_check, startup.update_check, true),
+        }
+    }
+
+    /// What `null` goes back to: the flags, else the defaults.
+    fn start(startup: &Startup) -> Self {
+        Self::of(startup, &AppSettings::default())
+    }
+
+    /// Each value under its name in the API, with where it comes from.
+    fn entries(&self) -> [(&'static str, Value, SettingSource); 3] {
+        fn entry<T: Serialize>(
+            key: &'static str,
+            (v, from): &(T, SettingSource),
+        ) -> (&'static str, Value, SettingSource) {
+            (key, json!(v), *from)
+        }
+        [
+            entry("shot_window_s", &self.shot_window_s),
+            entry("grinder_host", &self.grinder_host),
+            entry("update_check", &self.update_check),
+        ]
     }
 }
 
@@ -378,28 +438,64 @@ fn whole_seconds(secs: f64) -> u32 {
     }
 }
 
-/// The E65/E80 grinder's address and where it comes from.
-fn grinder_host(startup: &Startup, app: &AppSettings) -> (Option<String>, SettingSource) {
-    match (&app.grinder_host, &startup.grinder_host) {
-        (Some(h), _) => (h.clone(), SettingSource::App),
-        (None, Some(h)) => (Some(h.clone()), SettingSource::CommandLine),
-        (None, None) => (None, SettingSource::Default),
-    }
-}
-
-/// Whether to look for newer releases (on unless set) and where that comes
-/// from.
-fn update_check(startup: &Startup, app: &AppSettings) -> (bool, SettingSource) {
-    match (app.update_check, startup.update_check) {
-        (Some(on), _) => (on, SettingSource::App),
-        (None, Some(on)) => (on, SettingSource::CommandLine),
-        (None, None) => (true, SettingSource::Default),
-    }
-}
-
 /// The machine's limit for a shot window of `secs` (0: none).
 fn window_limit(secs: u32) -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs.into()))
+}
+
+/// Whether a value set in the app is used instead of a flag (or
+/// environment variable) that was given too: `now` is the value as it
+/// counts, `start` what the flags say.
+fn app_over_flag<T>(now: &(T, SettingSource), start: &(T, SettingSource)) -> bool {
+    now.1 == SettingSource::App && start.1 == SettingSource::CommandLine
+}
+
+/// How the log names a setting, its flag and its value.
+struct Logged<T> {
+    name: &'static str,
+    flag: &'static str,
+    show: fn(&T) -> String,
+}
+
+const SHOT_WINDOW: Logged<u32> = Logged {
+    name: "shot window",
+    flag: "--shot-window-s",
+    show: |secs| format!("{secs} s"),
+};
+
+const UPDATE_CHECK: Logged<bool> = Logged {
+    name: "update check",
+    flag: "--update-check",
+    show: |on| if *on { "on" } else { "off" }.to_owned(),
+};
+
+impl<T: PartialEq> Logged<T> {
+    /// At startup: says so when the value set in the app is used instead of
+    /// the flag.
+    fn app_over_flag(&self, now: &(T, SettingSource), start: &(T, SettingSource)) {
+        if app_over_flag(now, start) {
+            tracing::info!(
+                "settings: the {} set in the app ({}) is used instead of {}",
+                self.name,
+                (self.show)(&now.0),
+                self.flag
+            );
+        }
+    }
+
+    /// After a change: says so when the value, or where it comes from,
+    /// changed. True when the value itself did, so it needs applying.
+    fn changed(&self, old: &(T, SettingSource), new: &(T, SettingSource)) -> bool {
+        if old != new {
+            tracing::info!(
+                "settings: {} now {} ({})",
+                self.name,
+                (self.show)(&new.0),
+                changed_by(new.1)
+            );
+        }
+        old.0 != new.0
+    }
 }
 
 /// Why a value changed, for the log.
@@ -412,32 +508,26 @@ fn changed_by(from: SettingSource) -> &'static str {
 
 impl Live {
     fn json(&self) -> Value {
-        let (window, window_from) = shot_window(&self.startup, &self.app);
-        let (host, host_from) = grinder_host(&self.startup, &self.app);
-        let (update, update_from) = update_check(&self.startup, &self.app);
-        // What `null` goes back to: the flags, else the defaults.
-        let start = AppSettings::default();
-        json!({
-            "shot_window_s": window,
-            "grinder_host": host,
-            "update_check": update,
-            "source": {
-                "shot_window_s": window_from,
-                "grinder_host": host_from,
-                "update_check": update_from,
-            },
-            "start": {
-                "shot_window_s": shot_window(&self.startup, &start).0,
-                "grinder_host": grinder_host(&self.startup, &start).0,
-                "update_check": update_check(&self.startup, &start).0,
-            },
-            // What the app can set, besides 0 (no limit).
-            "shot_window_range": {
-                "min_s": MIN_SHOT_WINDOW_S,
-                "max_s": MAX_SHOT_WINDOW_S,
-            },
-            "persistent": self.file.is_some(),
-        })
+        let mut out = Map::new();
+        let mut source = Map::new();
+        for (key, value, from) in Values::of(&self.startup, &self.app).entries() {
+            out.insert(key.into(), value);
+            source.insert(key.into(), json!(from));
+        }
+        let start: Map<_, _> = Values::start(&self.startup)
+            .entries()
+            .into_iter()
+            .map(|(key, value, _)| (key.to_owned(), value))
+            .collect();
+        out.insert("source".into(), source.into());
+        out.insert("start".into(), start.into());
+        // What the app can set, besides 0 (no limit).
+        out.insert(
+            "shot_window_range".into(),
+            json!({ "min_s": MIN_SHOT_WINDOW_S, "max_s": MAX_SHOT_WINDOW_S }),
+        );
+        out.insert("persistent".into(), self.file.is_some().into());
+        out.into()
     }
 
     /// The link for `host`, ready to run; loads (or makes) the pairing.
@@ -466,26 +556,14 @@ impl Server {
         live.app = checked(file.as_ref().map(|f| f.data().settings).unwrap_or_default());
         live.startup = startup;
         live.file = file;
-        let (window, from) = shot_window(&live.startup, &live.app);
-        if from == SettingSource::App && live.startup.shot_window_s.is_some() {
-            tracing::info!(
-                "settings: the shot window set in the app ({window} s) is used instead of \
-                 --shot-window-s"
-            );
-        }
-        self.with(|m, _| m.set_shot_window(window_limit(window)));
-        let (update, from) = update_check(&live.startup, &live.app);
-        if from == SettingSource::App && live.startup.update_check.is_some() {
-            tracing::info!(
-                "settings: the update check set in the app ({}) is used instead of \
-                 --update-check",
-                if update { "on" } else { "off" }
-            );
-        }
-        self.set_update_check(update);
-        let (host, from) = grinder_host(&live.startup, &live.app);
-        if from == SettingSource::App && live.startup.grinder_host.is_some() {
-            if host.is_some() {
+        let now = Values::of(&live.startup, &live.app);
+        let start = Values::start(&live.startup);
+        SHOT_WINDOW.app_over_flag(&now.shot_window_s, &start.shot_window_s);
+        self.with(|m, _| m.set_shot_window(window_limit(now.shot_window_s.0)));
+        UPDATE_CHECK.app_over_flag(&now.update_check, &start.update_check);
+        self.set_update_check(now.update_check.0);
+        if app_over_flag(&now.grinder_host, &start.grinder_host) {
+            if now.grinder_host.0.is_some() {
                 tracing::info!(
                     "settings: the grinder address set in the app is used instead of --grinder"
                 );
@@ -495,7 +573,7 @@ impl Server {
                 );
             }
         }
-        if let Some(host) = host {
+        if let (Some(host), from) = now.grinder_host {
             let lock = self.pairing_lock.clone();
             let link = live.prepare_link(&host, lock).with_context(|| match from {
                 SettingSource::App => "the grinder address set in the app".to_owned(),
@@ -542,10 +620,11 @@ impl Server {
         if let Some(on) = change.update_check {
             app.update_check = on;
         }
-        let (old_host, old_host_from) = grinder_host(&live.startup, &live.app);
-        let (new_host, host_from) = grinder_host(&live.startup, &app);
-        let relink = old_host != new_host;
-        let link = match &new_host {
+        let old = Values::of(&live.startup, &live.app);
+        let new = Values::of(&live.startup, &app);
+        let (new_host, host_from) = &new.grinder_host;
+        let relink = old.grinder_host.0 != *new_host;
+        let link = match new_host {
             // The old link still runs here, and keeps the pairing file until
             // its task has ended (see `PairingLock`).
             Some(host) if relink => Some(
@@ -558,35 +637,18 @@ impl Server {
             file.update(|d| d.settings = app.clone())
                 .map_err(|e| SettingsError::Save(format!("{e:#}")))?;
         }
-        let old_window = shot_window(&live.startup, &live.app);
-        let old_update = update_check(&live.startup, &live.app);
         live.app = app;
-        // Logged when the value or where it comes from changes.
-        let update = update_check(&live.startup, &live.app);
-        if update != old_update {
-            tracing::info!(
-                "settings: update check now {} ({})",
-                if update.0 { "on" } else { "off" },
-                changed_by(update.1)
-            );
+        // Logged when the value or where it comes from changes, applied when
+        // the value does.
+        if UPDATE_CHECK.changed(&old.update_check, &new.update_check) {
+            self.set_update_check(new.update_check.0);
         }
-        if update.0 != old_update.0 {
-            self.set_update_check(update.0);
-        }
-        let window = shot_window(&live.startup, &live.app);
-        if window != old_window {
-            tracing::info!(
-                "settings: shot window now {} s ({})",
-                window.0,
-                changed_by(window.1)
-            );
-        }
-        if window.0 != old_window.0 {
-            self.with(|m, _| m.set_shot_window(window_limit(window.0)));
+        if SHOT_WINDOW.changed(&old.shot_window_s, &new.shot_window_s) {
+            self.with(|m, _| m.set_shot_window(window_limit(new.shot_window_s.0)));
         }
         // (With no address left, the link's line below says it.)
-        if old_host_from == SettingSource::App
-            && host_from != SettingSource::App
+        if old.grinder_host.1 == SettingSource::App
+            && *host_from != SettingSource::App
             && new_host.is_some()
         {
             tracing::info!("settings: grinder address is the start setting again");
@@ -595,7 +657,7 @@ impl Server {
             self.stop_link(&mut live);
             match link {
                 Some(link) => self.run_link(&mut live, link),
-                None if host_from == SettingSource::App => tracing::info!(
+                None if *host_from == SettingSource::App => tracing::info!(
                     "grinder: address removed in the app (instead of --grinder), link stopped"
                 ),
                 None => tracing::info!("grinder: no address any more, link stopped"),
@@ -746,7 +808,7 @@ mod tests {
             shot_window_s: Some(150.6),
             ..Startup::default()
         };
-        let (secs, from) = shot_window(&startup, &AppSettings::default());
+        let (secs, from) = Values::start(&startup).shot_window_s;
         assert_eq!((secs, from), (151, SettingSource::CommandLine));
         assert_eq!(window_limit(secs), Some(Duration::from_secs(151)));
     }
@@ -1060,6 +1122,34 @@ mod tests {
         assert_eq!(s["source"]["update_check"], "app");
         assert!(x.update_check_on());
         assert!(change(json!({ "update_check": "off" })).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_settings_show_value_source_and_start_of_each() {
+        let x = Server::new(MachineConfig::default());
+        let flags = Startup {
+            shot_window_s: Some(150.0),
+            ..Startup::default()
+        };
+        x.start_settings(flags, None).unwrap();
+        x.change_settings(change(json!({ "update_check": false })).unwrap())
+            .unwrap();
+        assert_eq!(
+            x.settings_json(),
+            json!({
+                "shot_window_s": 150,
+                "grinder_host": null,
+                "update_check": false,
+                "source": {
+                    "shot_window_s": "command_line",
+                    "grinder_host": "default",
+                    "update_check": "app",
+                },
+                "start": { "shot_window_s": 150, "grinder_host": null, "update_check": true },
+                "shot_window_range": { "min_s": MIN_SHOT_WINDOW_S, "max_s": MAX_SHOT_WINDOW_S },
+                "persistent": false,
+            })
+        );
     }
 
     #[tokio::test]
