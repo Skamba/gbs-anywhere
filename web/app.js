@@ -1260,7 +1260,11 @@
 
   // The group head's state in the grinder's facts, by the shot's phase
   // (the server's `Phase`; a test in control_api.rs checks the keys).
-  const GROUP = { ready: "grinder.group.idle", running: "grinder.group.running", finishing: "grinder.group.finishing" };
+  const GROUP = {
+    ready: "grinder.group.idle",
+    running: "grinder.group.running",
+    finishing: "grinder.group.finishing",
+  };
 
   function renderGrinder() {
     const wifi = link.wifi;
@@ -3785,13 +3789,14 @@
 
   // Machine events arrive as server-sent events; /api/state is polled for the
   // rest (grinder link, integrations), less often while the stream is up.
+  // The stream names each event by its kind (the server's MachineEvent); a
+  // test in control_api.rs checks this list against it.
+  const EVENT_KINDS = ["grinder_grind_finished", "grinder_shot_requested", "shot_started", "shot_reported", "shot_aborted", "shot_finished"];
   function connectEvents() {
     if (!window.EventSource) return;
     const es = new EventSource("/api/events/stream");
     const onEvent = () => tick();
-    for (const k of ["grinder_grind_finished", "grinder_shot_requested", "shot_started", "shot_reported", "shot_aborted", "shot_finished", "message"]) {
-      es.addEventListener(k, onEvent);
-    }
+    for (const k of EVENT_KINDS) es.addEventListener(k, onEvent);
     es.addEventListener("open", () => { sseOpen = true; tick(); });
     es.addEventListener("error", () => { sseOpen = false; if (es.readyState === 2) setTimeout(connectEvents, 5000); });
   }

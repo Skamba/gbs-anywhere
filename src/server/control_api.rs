@@ -908,28 +908,43 @@ mod tests {
                 en.keys().any(|k| k.starts_with(&prefix))
             }
         };
-        let script = PAGE_JS;
         let markup = &PAGE_HTML[PAGE_HTML.find("<body").expect("body")..];
+        // Every quoted string in the script that reads as a key of one of
+        // the catalog's groups: in t() and tv(), and in the tables and
+        // ternaries the script picks its keys from. A key is never made by
+        // adding to a prefix, except for the prefixes in DYNAMIC, whose
+        // keys other tests check.
+        const DYNAMIC: [&str; 3] = [
+            "kind.",         // kindKey(): integration texts, integration_texts_are_german
+            "integ.detail.", // integDetail(): the same
+            "history.kind.", // kindLabel(): the_page_knows_every_shot_kind
+        ];
+        let de = catalog("de");
+        let groups: BTreeSet<&str> = en
+            .keys()
+            .chain(de.keys())
+            .filter_map(|k| k.split('.').next())
+            .collect();
         let mut used = BTreeSet::new();
-        // t("…") and tv("…") with a literal key.
-        for call in ["t(\"", "tv(\""] {
-            for (i, _) in script.match_indices(call) {
-                let before = script[..i].chars().next_back();
-                if before
-                    .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$' || c == '.')
-                {
-                    continue;
-                }
-                let rest = &script[i + call.len()..];
-                let key: String = rest
+        let mut prefixes = BTreeSet::new();
+        for literal in js_strings(PAGE_JS) {
+            let dotted = literal.contains('.')
+                && literal.starts_with(|c: char| c.is_ascii_lowercase())
+                && literal
                     .chars()
-                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '.')
-                    .collect();
-                if rest[key.len()..].starts_with('"') && !key.is_empty() {
-                    used.insert(key);
-                }
+                    .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+            let group = literal.split('.').next().unwrap_or("");
+            if !dotted || !groups.contains(group) {
+                continue;
+            }
+            if literal.ends_with('.') {
+                prefixes.insert(literal);
+            } else {
+                used.insert(literal.to_owned());
             }
         }
+        let dynamic: BTreeSet<&str> = DYNAMIC.into_iter().collect();
+        assert_eq!(prefixes, dynamic, "keys made from a prefix");
         // data-i18n="key" and data-i18n-attr="attr:key;…" in the markup.
         for (i, _) in markup.match_indices("data-i18n=\"") {
             let rest = &markup[i + "data-i18n=\"".len()..];
@@ -943,9 +958,222 @@ mod tests {
                 }
             }
         }
-        assert!(used.len() > 100, "the page's keys were found");
+        assert!(used.len() > 300, "the page's keys were found");
+        // Keys picked through tables, not t("…"), are in the scan too.
+        for key in [
+            "badge.pressKnob",
+            "setup.pill.restart",
+            "grinder.state.problem",
+        ] {
+            assert!(used.contains(key), "{key} was found");
+        }
         let unknown: Vec<_> = used.iter().filter(|k| !known(k)).collect();
         assert!(unknown.is_empty(), "keys not in the catalog: {unknown:?}");
+    }
+
+    /// The contents of the double- and single-quoted strings in `script`,
+    /// with comments and template strings left out.
+    fn js_strings(script: &str) -> Vec<&str> {
+        let bytes = script.as_bytes();
+        let mut found = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'/' if bytes.get(i + 1) == Some(&b'/') => {
+                    i = script[i..].find('\n').map_or(bytes.len(), |n| i + n);
+                }
+                b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                    i = script[i + 2..]
+                        .find("*/")
+                        .map_or(bytes.len(), |n| i + n + 4);
+                }
+                quote @ (b'"' | b'\'' | b'`') => {
+                    let start = i + 1;
+                    i = start;
+                    while i < bytes.len() && bytes[i] != quote {
+                        i += if bytes[i] == b'\\' { 2 } else { 1 };
+                    }
+                    assert!(i < bytes.len(), "a string that does not end at {start}");
+                    if quote != b'`' {
+                        found.push(&script[start..i]);
+                    }
+                    i += 1;
+                }
+                _ => i += 1,
+            }
+        }
+        found
+    }
+
+    /// The keys of the script's table `const <name> = { … };`, one
+    /// `    <key>: …` line each.
+    fn js_table(name: &str) -> Vec<&'static str> {
+        let head = format!("\n  const {name} = {{\n");
+        let start = PAGE_JS
+            .find(&head)
+            .unwrap_or_else(|| panic!("the {name} table"));
+        let table = &PAGE_JS[start + head.len()..];
+        let table = &table[..table
+            .find("\n  };")
+            .unwrap_or_else(|| panic!("end of {name}"))];
+        table
+            .lines()
+            .filter_map(|line| line.strip_prefix("    ")?.split_once(": "))
+            .map(|(key, _)| key)
+            .collect()
+    }
+
+    #[test]
+    fn the_page_knows_every_integration_health() {
+        use crate::integration::Health;
+        let all = [
+            Health::Starting,
+            Health::Connected,
+            Health::Watching,
+            Health::Failing,
+            Health::Stopped,
+        ];
+        for health in all {
+            // No wildcard: a new health has to be named here, next to `all`.
+            match health {
+                Health::Starting
+                | Health::Connected
+                | Health::Watching
+                | Health::Failing
+                | Health::Stopped => {}
+            }
+        }
+        let names: BTreeSet<String> = all
+            .iter()
+            .map(|h| {
+                serde_json::to_value(h)
+                    .unwrap()
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        let table: BTreeSet<String> = js_table("HEALTH").into_iter().map(str::to_owned).collect();
+        assert_eq!(table, names, "HEALTH in app.js and the server's Health");
+    }
+
+    #[test]
+    fn the_page_knows_every_shot_phase() {
+        use crate::protocol::{Phase, ShotResult};
+        use std::time::Instant;
+        let all = [
+            Phase::Ready,
+            Phase::Running {
+                since: Instant::now(),
+                requested_by_grinder: true,
+            },
+            Phase::Finishing {
+                until: Instant::now(),
+                result: ShotResult {
+                    time_ms: 25_000,
+                    weight_g: 36.0,
+                },
+                aborted: false,
+            },
+        ];
+        for phase in all {
+            // No wildcard: a new phase has to be named here, next to `all`.
+            match phase {
+                Phase::Ready | Phase::Running { .. } | Phase::Finishing { .. } => {}
+            }
+        }
+        let names: BTreeSet<String> = all
+            .iter()
+            .map(|p| {
+                serde_json::to_value(p).unwrap()["phase"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        let table: BTreeSet<String> = js_table("GROUP").into_iter().map(str::to_owned).collect();
+        assert_eq!(table, names, "GROUP in app.js and the server's Phase");
+    }
+
+    #[test]
+    fn the_page_listens_for_every_event() {
+        use crate::protocol::{AbortCause, GrindResult, MachineEvent, ShotResult};
+        let result = ShotResult {
+            time_ms: 25_000,
+            weight_g: 36.0,
+        };
+        let all = [
+            MachineEvent::GrinderGrindFinished {
+                result: GrindResult {
+                    target_weight_g: Some(36.0),
+                    filter: None,
+                    raw: serde_json::Value::Null,
+                },
+            },
+            MachineEvent::GrinderShotRequested {
+                script_id: Some(9),
+                target_time_ms: None,
+            },
+            MachineEvent::ShotStarted {
+                requested_by_grinder: true,
+                human_action: "",
+            },
+            MachineEvent::ShotReported {
+                result,
+                in_grinder_range: None,
+            },
+            MachineEvent::shot_aborted(AbortCause::ShotTimedOut),
+            MachineEvent::ShotFinished,
+        ];
+        for event in &all {
+            // No wildcard: a new event has to be named here, next to `all`.
+            match event {
+                MachineEvent::GrinderGrindFinished { .. }
+                | MachineEvent::GrinderShotRequested { .. }
+                | MachineEvent::ShotStarted { .. }
+                | MachineEvent::ShotReported { .. }
+                | MachineEvent::ShotAborted { .. }
+                | MachineEvent::ShotFinished => {}
+            }
+        }
+        let kinds: BTreeSet<String> = all
+            .iter()
+            .map(|e| {
+                serde_json::to_value(e).unwrap()["kind"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect();
+        // The stream names every event by its kind (stream_events), so the
+        // page listens for exactly these.
+        let start = PAGE_JS.find("const EVENT_KINDS = [").expect("EVENT_KINDS");
+        let list = &PAGE_JS[start..];
+        let list = &list[..list.find("];").expect("end of EVENT_KINDS")];
+        let listened: BTreeSet<String> = js_strings(list).into_iter().map(str::to_owned).collect();
+        assert_eq!(listened, kinds, "EVENT_KINDS in app.js and MachineEvent");
+    }
+
+    #[test]
+    fn the_theme_colour_is_the_background() {
+        // --bg of a palette in app.css: `--bg: #…;` in the block after `head`.
+        let bg = |head: &str| {
+            let block = &PAGE_CSS[PAGE_CSS.find(head).unwrap_or_else(|| panic!("{head}"))..];
+            let block = &block[..block.find('}').unwrap()];
+            let at = block.find("--bg:").expect("--bg") + "--bg:".len();
+            block[at..].split(';').next().unwrap().trim().to_owned()
+        };
+        let light = bg(":root {");
+        let dark = bg(":root[data-theme=\"dark\"] {");
+        // The meta tag the page starts with, and the head script's choice.
+        assert!(
+            PAGE_HTML.contains(&format!("<meta name=\"theme-color\" content=\"{light}\">")),
+            "the theme-color meta tag is {light}"
+        );
+        assert!(
+            PAGE_HTML.contains(&format!("dark ? \"{dark}\" : \"{light}\"")),
+            "the head script sets {dark} and {light}"
+        );
     }
 
     #[test]
