@@ -268,8 +268,14 @@ pub struct WifiLink {
     pub quiet_ms: u64,
     /// What is going on, in one sentence.
     pub detail: String,
-    /// What went wrong with the last shot, until the next one goes through.
+    /// While `failing`: why, in English words, without the steps that led
+    /// there (`detail` has them all), e.g. `operation timed out`.
+    pub failure: Option<String>,
+    /// What went wrong with the last shot, in English words, until the next
+    /// one goes through.
     pub problem: Option<String>,
+    /// The same as a fixed code, for the app to match on.
+    pub problem_cause: Option<ProblemCause>,
     /// The Pairing ID in use, the pairing's lasting number (`pairingId`);
     /// `None` while unpaired.
     pub pairing_id: Option<u32>,
@@ -282,6 +288,52 @@ pub struct WifiLink {
     /// not set up rather than failing. Cleared once it takes one, or fails
     /// some other way.
     pub not_set_up: bool,
+}
+
+/// Why the last shot did not go through to the grinder
+/// (`grinder.wifi.problem_cause`), as a fixed code: the [`AbortCause`] of a
+/// brew that ended without an answer, or what kept the answer from the
+/// grinder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum ProblemCause {
+    /// The brew ended for this cause; the grinder got no answer.
+    Shot(AbortCause),
+    /// The shot was measured, but its answer did not reach the grinder.
+    Result(ResultProblem),
+}
+
+/// What kept a measured shot from the grinder. Codes read
+/// `grinder_result_<what happened>`, as [`AbortCause`]'s do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResultProblem {
+    /// The grinder did not take it in time, and it was given up.
+    GrinderResultExpired,
+    /// The grinder refused it.
+    GrinderResultRefused,
+    /// It has not reached the grinder yet, and is tried again.
+    GrinderResultDelayed,
+}
+
+impl ProblemCause {
+    /// Every problem the link reports, one entry per case.
+    pub const ALL: [Self; 6] = [
+        Self::Shot(AbortCause::GrinderShotDropped),
+        Self::Shot(AbortCause::GrinderShotRefused),
+        Self::Shot(AbortCause::GrinderUnpaired),
+        Self::Result(ResultProblem::GrinderResultExpired),
+        Self::Result(ResultProblem::GrinderResultRefused),
+        Self::Result(ResultProblem::GrinderResultDelayed),
+    ];
+}
+
+/// What went wrong with the last shot (`WifiLink::problem` and
+/// `problem_cause`).
+#[derive(Debug, Clone, PartialEq)]
+struct Problem {
+    cause: ProblemCause,
+    text: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -499,7 +551,9 @@ pub struct WifiGrinder {
     first_seen: VecDeque<(String, u64)>,
     polls: u64,
     /// What went wrong with the last shot (shown in the app).
-    problem: Option<String>,
+    problem: Option<Problem>,
+    /// Why the link fails, for `WifiLink::failure` while it does.
+    failure: Option<String>,
     /// Which link this is to the server: what an older link that was
     /// replaced (new grinder address) still reports is ignored.
     owner: u64,
@@ -575,6 +629,7 @@ impl WifiGrinder {
             first_seen: VecDeque::new(),
             polls: 0,
             problem: None,
+            failure: None,
             unreachable: false,
             last_failure: None,
             not_set_up: false,
@@ -618,6 +673,7 @@ impl WifiGrinder {
             self.holding = Some(self.lock.clone().lock_owned().await);
             while let Err(e) = self.reopen_pairing() {
                 tracing::warn!("grinder: {e:#}");
+                self.failure = Some(e.root_cause().to_string());
                 self.status(&server, WifiState::Failing, None, format!("{e:#}"));
                 backoff.wait().await;
             }
@@ -652,7 +708,8 @@ impl WifiGrinder {
                 }
                 self.last_failure = (!unreachable).then(|| message.clone());
                 self.unreachable = unreachable;
-                self.status(&server, WifiState::Failing, None, format!("{e:#}"));
+                self.failure = Some(e.root_cause().to_string());
+                self.status(&server, WifiState::Failing, None, message);
                 tokio::time::sleep(self.retry_delay(&mut backoff)).await;
             } else {
                 backoff.reset();
@@ -1014,6 +1071,7 @@ impl WifiGrinder {
                             return self.forget_pairing(server);
                         }
                         let detail = "the grinder refused the pairing, checking again";
+                        self.failure = Some(detail.to_owned());
                         self.status(server, WifiState::Failing, None, detail);
                         continue;
                     }
@@ -1084,7 +1142,11 @@ impl WifiGrinder {
                 self.refresh(server);
             } else if expired {
                 self.answer = None;
-                self.report_problem(server, "the shot did not reach the grinder in time");
+                self.report_problem(
+                    server,
+                    ProblemCause::Result(ResultProblem::GrinderResultExpired),
+                    "the shot did not reach the grinder in time",
+                );
             } else {
                 self.send_answer(server).await;
             }
@@ -1220,7 +1282,7 @@ impl WifiGrinder {
         }
         // Already over when someone reported or aborted it a moment ago.
         let _ = server.with_wifi(self.owner, |m, now| m.give_up(now, cause));
-        self.report_problem(server, cause.text());
+        self.report_problem(server, ProblemCause::Shot(cause), cause.text());
     }
 
     /// A reported or aborted shot becomes the answer to the current job.
@@ -1274,7 +1336,8 @@ impl WifiGrinder {
                 Ok(reply) if reply.status() == wifi::STATUS_JOB_UNKNOWN => answer.accepted = true,
                 Ok(reply) if refused(&reply) => {
                     let why = format!("the grinder refused the shot: {:?}", reply.status());
-                    self.report_problem(server, &why);
+                    let cause = ProblemCause::Result(ResultProblem::GrinderResultRefused);
+                    self.report_problem(server, cause, &why);
                     return;
                 }
                 other => {
@@ -1296,7 +1359,8 @@ impl WifiGrinder {
             }
             Ok(reply) if refused(&reply) => {
                 let why = format!("the grinder refused the shot: {:?}", reply.status());
-                self.report_problem(server, &why);
+                let cause = ProblemCause::Result(ResultProblem::GrinderResultRefused);
+                self.report_problem(server, cause, &why);
             }
             other => self.retry_later(server, answer, other),
         }
@@ -1306,15 +1370,19 @@ impl WifiGrinder {
         let why = failure(outcome);
         tracing::warn!("grinder: the shot has not reached the grinder yet, retrying: {why}");
         self.answer = Some(answer);
-        self.problem = Some(format!(
-            "the shot has not reached the grinder yet, retrying: {why}"
-        ));
+        self.problem = Some(Problem {
+            cause: ProblemCause::Result(ResultProblem::GrinderResultDelayed),
+            text: format!("the shot has not reached the grinder yet, retrying: {why}"),
+        });
         self.refresh(server);
     }
 
-    fn report_problem(&mut self, server: &Server, problem: &str) {
+    fn report_problem(&mut self, server: &Server, cause: ProblemCause, problem: &str) {
         tracing::warn!("grinder: {problem}");
-        self.problem = Some(problem.to_owned());
+        self.problem = Some(Problem {
+            cause,
+            text: problem.to_owned(),
+        });
         let idle = "paired, waiting for a Grind-by-Sync grind";
         self.status(server, WifiState::Paired, None, idle);
     }
@@ -1377,7 +1445,11 @@ impl WifiGrinder {
             pairing_lost: self.pairing_lost,
             quiet_ms: self.cfg.restart_quiet.as_millis() as u64,
             detail,
-            problem: self.problem.clone(),
+            failure: (state == WifiState::Failing)
+                .then(|| self.failure.clone())
+                .flatten(),
+            problem: self.problem.as_ref().map(|p| p.text.clone()),
+            problem_cause: self.problem.as_ref().map(|p| p.cause),
             pairing_id: self.pairing.pairing_id,
             unreachable: self.unreachable,
             not_set_up: self.not_set_up,
@@ -1387,7 +1459,8 @@ impl WifiGrinder {
     /// Shows the current problem without changing the rest of the state.
     fn refresh(&self, server: &Server) {
         if let Some(mut link) = server.grinder_link().wifi {
-            link.problem = self.problem.clone();
+            link.problem = self.problem.as_ref().map(|p| p.text.clone());
+            link.problem_cause = self.problem.as_ref().map(|p| p.cause);
             server.set_wifi(self.owner, link);
         }
     }
@@ -1408,7 +1481,9 @@ impl WifiGrinder {
                 pairing_lost: false,
                 quiet_ms: self.cfg.restart_quiet.as_millis() as u64,
                 detail: detail.to_owned(),
+                failure: None,
                 problem: None,
+                problem_cause: None,
                 pairing_id: None,
                 unreachable: false,
                 not_set_up: false,

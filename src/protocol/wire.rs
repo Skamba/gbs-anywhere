@@ -151,6 +151,18 @@ pub enum GrindBlocked {
 }
 
 impl GrindBlocked {
+    /// Every cause, one entry per variant.
+    pub const ALL: [Self; 7] = [
+        Self::ShotRunning,
+        Self::MachineInStandby,
+        Self::MachineInEco,
+        Self::MachineTesting,
+        Self::MachineFaulty,
+        Self::MachineWarmingUp,
+        Self::MachineTankEmpty,
+    ];
+
+    /// What the grinder shows on its screen, in English.
     pub fn grinder_message(self) -> &'static str {
         match self {
             Self::MachineInStandby => "Xenia is in standby. Please wake it up.",

@@ -412,6 +412,33 @@
     grinder_unpaired: { onPurpose: false, text: "start.error.unknownApp", title: "start.error.unknownApp" },
     shot_end_missed: { onPurpose: false, title: "history.endMissed" },
   };
+  // What went wrong with the last shot on an E65/E80, by the link's
+  // `problem_cause` (the server's ProblemCause): a brew that ended for one
+  // of the causes above, or a result that did not reach the grinder. A
+  // test in control_api.rs checks this table against the server.
+  const PROBLEMS = {
+    grinder_shot_dropped: "problem.shotDropped",
+    grinder_shot_refused: "problem.shotRefused",
+    grinder_unpaired: "problem.unpaired",
+    grinder_result_expired: "problem.resultExpired",
+    grinder_result_refused: "problem.resultRefused",
+    grinder_result_delayed: "problem.resultDelayed",
+  };
+  /** The E65/E80 link `w`'s problem in words. */
+  const problemText = (w) => (PROBLEMS[w.problem_cause] ? t(PROBLEMS[w.problem_cause]) : sentence(w.problem));
+  // Why the grinder won't grind, by `grind_blocked.cause` (the server's
+  // GrindBlocked). A test in control_api.rs checks this table against it.
+  const BLOCKED = {
+    shot_running: "blocked.shotRunning",
+    machine_in_standby: "blocked.standby",
+    machine_in_eco: "blocked.eco",
+    machine_testing: "blocked.testing",
+    machine_faulty: "blocked.faulty",
+    machine_warming_up: "blocked.warmingUp",
+    machine_tank_empty: "blocked.tankEmpty",
+  };
+  /** System status's line for the grind_blocked `b`. */
+  const blockedText = (b) => t("sys.text.blocked", { message: BLOCKED[b.cause] ? t(BLOCKED[b.cause]) : b.grinder_message });
   /** The cause of a shot_aborted event or a history entry, or null. */
   const causeOf = (x) => (x && x.cause) || null;
   const causeInfo = (cause) => CAUSES[cause] || {};
@@ -448,7 +475,7 @@
     const on = linkOn();
     const L = { state: "ready", wifi, on, phase: pairingPhase(wifi), unreached: false, missing: null };
     if (wifi && wifi.state === "pairing") L.state = "pairing";
-    else if (on) L.state = wifi && wifi.problem ? "problem" : "ready";
+    else if (on) L.state = wifi && wifi.problem_cause ? "problem" : "ready";
     else if (wifi ? wifi.state === "connecting" && linkStateAge(wifi) <= CONNECT_LONG_MS : !!(S.settings && S.settings.grinder_host)) L.state = "connecting";
     else if (setupNeeded() && wifi && wifi.not_set_up) L.state = "notSetUp";
     else L.state = "missing";
@@ -631,16 +658,12 @@
     return b && !(S.shot.phase !== "ready" && b.cause === "shot_running") ? b : null;
   }
 
-  /** The last part of a server error ("cannot reach the grinder at …:
-   *  operation timed out" gives "operation timed out"): the cause, without
-   *  the addresses before it. */
-  const lastCause = (text) => String(text || "").split(": ").pop().trim();
-
   /** Why there is no grinder, in plain words (`text`), and the server's
-   *  error behind it (`detail`), which stays English like the log. */
+   *  error behind it (`detail`: its `failure`, without the addresses
+   *  before it), which stays English like the log. */
   function grinderMissing(wifi) {
     if (!wifi) return { text: t("sys.missing.e64"), detail: "" };
-    const error = wifi.state === "failing" && wifi.detail ? lastCause(wifi.detail) : "";
+    const error = (wifi.state === "failing" && wifi.failure) || "";
     // It answers, but not as it should: not a matter of switching it on.
     if (error && wifi.unreachable === false) return { text: t("sys.missing.linkError"), detail: error };
     return { text: t("sys.missing.wifi"), detail: error };
@@ -717,12 +740,12 @@
     // It answers but turns pairing down: not set up, rather than not
     // connected; its answer stays at hand with the log. Any other error
     // shows as one.
-    if (L.state === "notSetUp") return s("start", "alert", "setup", t("sys.text.setup"), lastCause(L.wifi.detail));
+    if (L.state === "notSetUp") return s("start", "alert", "setup", t("sys.text.setup"), L.wifi.failure || "");
     if (L.state === "missing") return s("error", "alert", "noGrinder", L.missing.text, L.missing.detail);
-    if (blocked) return s("warn", "alert", "blocked", t("sys.text.blocked", { message: blocked.grinder_message }));
+    if (blocked) return s("warn", "alert", "blocked", blockedText(blocked));
     if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f));
     // Shots can still be made, but something needs a look: not green.
-    if (L.state === "problem") return s("warn", "alert", "problem", t("sys.text.problem"), sentence(L.wifi.problem));
+    if (L.state === "problem") return s("warn", "alert", "problem", t("sys.text.problem"), problemText(L.wifi));
     const failing = (S.integrations || []).find(badHealth);
     if (failing) {
       const r = s("warn", "alert", "integError", t("sys.text.integError", { title: failing.title }), failing.last_error);
@@ -837,11 +860,12 @@
     const show = (cls, text) => { b.hidden = false; setText(b, text, "banner " + cls); };
     if (!S || !online) { b.hidden = true; return; }
     const blocked = grindBlocked();
-    if (blocked && s.key !== "blocked") show("warn", t("sys.text.blocked", { message: blocked.grinder_message }));
+    if (blocked && s.key !== "blocked") show("warn", blockedText(blocked));
     // Pairing or connecting: System status and the setup say it.
     else if (L.state === "pairing" || L.state === "connecting" || s.def.grinder) b.hidden = true;
     else if (L.missing) show("bad", L.missing.text);
-    else if (L.state === "problem" && !(f.sc === "error" && f.reason === wifi.problem)) show("warn", t("sys.problem", { problem: sentence(wifi.problem) }));
+    // A brew that ended for the problem's cause says it already.
+    else if (L.state === "problem" && !(f.sc === "error" && f.cause === wifi.problem_cause)) show("warn", t("sys.problem", { problem: problemText(wifi) }));
     else b.hidden = true;
   }
 

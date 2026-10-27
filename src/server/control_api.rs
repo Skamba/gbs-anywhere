@@ -18,7 +18,7 @@
 //! | GET | `/` | the support app (one HTML page, phone friendly) |
 //! | GET | `/icons/<name>` | an icon from `--icons`, e.g. `la_marzocco.svg` (404 otherwise) |
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
-//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80: its `grinder` address, its `state` (`connecting`, `pairing`, `paired`, `failing`) and, only while `pairing`, its `phase`: `accepting` while gbs-anywhere shows the code and waits for the person to accept it on the grinder and confirm that in the app, for as long as it takes (meanwhile it checks the pairing with the grinder every 40 s), `holding` while it waits 30 s after the confirmation and sends the grinder nothing, `checking` while it checks the pairing with the grinder after that (if the grinder has not accepted it yet, the phase is `accepting` again), `quiet` while gbs-anywhere sends the grinder nothing for a while after a pairing check went unanswered (the grinder may be restarting), `asking` while the grinder has it paired but the pairing ID is missing here; `phase_age_ms`, how long the link has been in that phase (for `quiet`, in the current round), and `quiet_ms`, how long a `quiet` round lasts; `state_age_ms`, how long it has been in its `state` (from the start of the link: a restart or a new address starts it over); with `pairing_code`, `pairing_id`, `unknown_pairing_id` (the last pairing ID the grinder did not take, while asking), `pairing_lost`, `unreachable`, `not_set_up` (not paired, and the grinder answered the pairing application with a client error, as one not set up for pairing would), `detail` and `problem`. The two numbers carry the grinder's own names: `pairing_code` is the "Pairing Code" it shows for one attempt (`pairingCode` in its protocol), `pairing_id` the "Pairing ID", the pairing's lasting number (`pairingId`)), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and the grinder's `grinder_message`), and `shot_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, 0 for no limit, `finishing_hold_s`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq`; on this route also `ip`, the IPv4 address the request came in on, which an E64 WS can use as its Xenia hostname (`null` over loopback, a link-local or shared (Tailscale) address, or IPv6), and `ip_in_docker_range`: whether it is in 172.17.0.0 to 172.31.255.255, where Docker most likely gave it to its container, so the grinder can't reach it |
+//! | GET | `/api/state` | everything, by group. `shot`: its `phase` (`ready`, `running`, `finishing`), `requested_by_grinder` while running, `result` and `aborted` while finishing, and the `last` result. `grinder`: the link (`peer`, `polls`, `requests`, `last_poll_age_ms`, `wifi` for an E65/E80: its `grinder` address, its `state` (`connecting`, `pairing`, `paired`, `failing`) and, only while `pairing`, its `phase`: `accepting` while gbs-anywhere shows the code and waits for the person to accept it on the grinder and confirm that in the app, for as long as it takes (meanwhile it checks the pairing with the grinder every 40 s), `holding` while it waits 30 s after the confirmation and sends the grinder nothing, `checking` while it checks the pairing with the grinder after that (if the grinder has not accepted it yet, the phase is `accepting` again), `quiet` while gbs-anywhere sends the grinder nothing for a while after a pairing check went unanswered (the grinder may be restarting), `asking` while the grinder has it paired but the pairing ID is missing here; `phase_age_ms`, how long the link has been in that phase (for `quiet`, in the current round), and `quiet_ms`, how long a `quiet` round lasts; `state_age_ms`, how long it has been in its `state` (from the start of the link: a restart or a new address starts it over); with `pairing_code`, `pairing_id`, `unknown_pairing_id` (the last pairing ID the grinder did not take, while asking), `pairing_lost`, `unreachable`, `not_set_up` (not paired, and the grinder answered the pairing application with a client error, as one not set up for pairing would), `detail`, `failure` (while `failing`: why, in English, without the steps before it that `detail` lists, e.g. `operation timed out`), `problem` (what went wrong with the last shot, in English, until the next one goes through) and `problem_cause`, the same as a code: the `AbortCause` of a brew that ended without an answer (`grinder_shot_dropped`, `grinder_shot_refused`, `grinder_unpaired`), or `grinder_result_expired` (the result did not reach the grinder in time), `grinder_result_refused` or `grinder_result_delayed` (not yet, still trying). The two numbers carry the grinder's own names: `pairing_code` is the "Pairing Code" it shows for one attempt (`pairingCode` in its protocol), `pairing_id` the "Pairing ID", the pairing's lasting number (`pairingId`)), `last_grind` (`target_weight_g`, `filter`, `raw`), `grind_blocked` (`cause`, e.g. `machine_tank_empty`, and `grinder_message`, what the grinder shows, in English), and `shot_range`: the shot times the grinder adjusts from for its current or last request, over `min_ms` and up to `max_ms`, as `in_grinder_range` checks them: 10 000 and 80 000 after an E64 WS knob press, 15 000 below (but at least 10 000) and 15 000 above the target time after an E65/E80 brew job; `null` before the grinder's first request and after a brew job without a target time. `machine`: the current `mako` reply, the `overrides`, and its `config` (`shot_window_s`, 0 for no limit, `finishing_hold_s`, …). `integrations`: each with its `health` (`starting`, `connected`, `watching`, `failing`, `stopped`) and `health_age_ms`, and its status line also as `detail_key` and `detail_vars`, for wording it in another language. `settings`: with each one's `source`, the `start` value it goes back to, and `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit. `update`: the update check. `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq`; on this route also `ip`, the IPv4 address the request came in on, which an E64 WS can use as its Xenia hostname (`null` over loopback, a link-local or shared (Tailscale) address, or IPv6), and `ip_in_docker_range`: whether it is in 172.17.0.0 to 172.31.255.255, where Docker most likely gave it to its container, so the grinder can't reach it |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them; they win over flags from then on. `null` goes back to the start setting (the flag or environment variable, else the default); `"grinder_host":""` removes the address (without a start address, the same as `null`). Replies with the settings as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
@@ -1265,6 +1265,83 @@ mod tests {
         }
         let stale: Vec<_> = rows.keys().filter(|k| !codes.contains(**k)).collect();
         assert!(stale.is_empty(), "not a cause: {stale:?}");
+    }
+
+    /// The script's table `const <name> = { … };` of `    <code>: "<key>",`
+    /// lines, as code and catalog key, checked against `codes`: one row per
+    /// code, each key in the catalog.
+    fn check_key_table(name: &str, codes: BTreeSet<String>) {
+        let head = format!("\n  const {name} = {{\n");
+        let start = PAGE_JS.find(&head).unwrap_or_else(|| panic!("{name}"));
+        let table = &PAGE_JS[start + head.len()..];
+        let table = &table[..table.find("\n  };").expect("end of the table")];
+        let en = catalog("en");
+        let mut rows = BTreeSet::new();
+        for line in table.lines() {
+            let (code, key) = line
+                .trim()
+                .split_once(": ")
+                .unwrap_or_else(|| panic!("{name}: {line}"));
+            let key = key.trim_end_matches(',').trim_matches('"');
+            assert!(
+                en.contains_key(key),
+                "{name}.{code}: {key} is not in the catalog"
+            );
+            rows.insert(code.to_owned());
+        }
+        assert_eq!(rows, codes, "{name} in app.js and the server's codes");
+    }
+
+    /// The JSON string `value` serializes to.
+    fn code_of(value: impl serde::Serialize) -> String {
+        serde_json::to_value(value)
+            .unwrap()
+            .as_str()
+            .expect("a code")
+            .to_owned()
+    }
+
+    #[test]
+    fn the_page_words_every_link_problem() {
+        use crate::protocol::AbortCause;
+        use crate::server::wifi_grinder::{ProblemCause, ResultProblem};
+        for cause in ProblemCause::ALL {
+            // No wildcard: a new problem has to be named here, next to `ALL`.
+            match cause {
+                ProblemCause::Shot(
+                    AbortCause::GrinderShotDropped
+                    | AbortCause::GrinderShotRefused
+                    | AbortCause::GrinderUnpaired,
+                )
+                | ProblemCause::Result(
+                    ResultProblem::GrinderResultExpired
+                    | ResultProblem::GrinderResultRefused
+                    | ResultProblem::GrinderResultDelayed,
+                ) => {}
+                ProblemCause::Shot(other) => panic!("{other:?} is not a link problem"),
+            }
+        }
+        let codes = ProblemCause::ALL.into_iter().map(code_of).collect();
+        check_key_table("PROBLEMS", codes);
+    }
+
+    #[test]
+    fn the_page_words_every_grind_block() {
+        use crate::protocol::wire::GrindBlocked;
+        for b in GrindBlocked::ALL {
+            // No wildcard: a new cause has to be named here, next to `ALL`.
+            match b {
+                GrindBlocked::ShotRunning
+                | GrindBlocked::MachineInStandby
+                | GrindBlocked::MachineInEco
+                | GrindBlocked::MachineTesting
+                | GrindBlocked::MachineFaulty
+                | GrindBlocked::MachineWarmingUp
+                | GrindBlocked::MachineTankEmpty => {}
+            }
+        }
+        let codes = GrindBlocked::ALL.into_iter().map(code_of).collect();
+        check_key_table("BLOCKED", codes);
     }
 
     /// Every `code` an error reply can carry: the codes of the error types,
