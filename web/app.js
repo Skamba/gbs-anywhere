@@ -1661,7 +1661,25 @@
     } finally { $("add-submit").disabled = false; }
   });
 
-  // Settings
+  // Settings saved on the server (PUT /api/settings): the shot window, the
+  // grinder's address and the update check. While a save is under way,
+  // and for a state poll that began before its answer, the settings from
+  // the poll may be the ones from before it: refresh() keeps S.settings
+  // then (settingsGen), so a setting does not flick back.
+  let settingsGen = 0, settingsSaving = 0, settingsSeq = 0;
+  /** Saves `patch` (null for a setting's start value) and takes the
+   *  server's answer, the settings as now saved, into S.settings; only
+   *  the newest save's answer, as an older one may come back later.
+   *  Throws when it was not saved. */
+  async function putSettings(patch) {
+    const mine = ++settingsSeq;
+    settingsSaving++; settingsGen++;
+    try {
+      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify(patch) });
+      if (mine === settingsSeq && st && typeof st === "object" && Object.keys(patch).every((k) => k in st)) S.settings = st;
+    } finally { settingsSaving--; settingsGen++; }
+  }
+
   function renderSettings() {
     renderAppearance();
     renderLanguage();
@@ -1709,17 +1727,10 @@
     const r = S && S.settings && S.settings.shot_window_range;
     return r && typeof r.min_s === "number" && typeof r.max_s === "number" ? r : null;
   }
-  const win = { pending: null, saved: null, seq: 0, timer: null, msg: "", warn: false, lastLimit: 0 };
-  /** The shot window as shown: the one waiting to be saved, else the one
-   *  just saved (a state poll that left before the save still brings the
-   *  old one, for a moment), else the server's. */
-  function winValue() {
-    if (win.pending != null) return win.pending;
-    const v = S.settings.shot_window_s;
-    if (win.saved && v !== win.saved.value && Date.now() - win.saved.at < 5000) return win.saved.value;
-    win.saved = null;
-    return v;
-  }
+  const win = { pending: null, seq: 0, timer: null, msg: "", warn: false, lastLimit: 0 };
+  /** The shot window as shown: the one waiting to be saved, else the
+   *  server's. */
+  const winValue = () => (win.pending != null ? win.pending : S.settings.shot_window_s);
   const winText = (v) => (v === 0 ? t("settings.noLimit") : clock(v * 1000));
   function renderWindow() {
     const r = winRange();
@@ -1793,15 +1804,9 @@
     const seq = ++win.seq;
     let saved = false;
     try {
-      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shot_window_s: value }) });
+      await putSettings({ shot_window_s: value });
       if (seq === win.seq) {
-        if (st && typeof st.shot_window_s === "number") {
-          S.settings = st;
-          win.saved = { value: st.shot_window_s, at: Date.now() };
-          // A state poll that left before this answer would bring back the
-          // old source line; one more poll after it puts it right.
-          tick();
-        }
+        tick();
         if (win.warn) windowNote("");   // an earlier failure is past
         saved = true;
       }
@@ -1975,8 +1980,7 @@
     $("set-update").setAttribute("aria-busy", "true");
     $("set-update-error").hidden = true;
     try {
-      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ update_check: on }) });
-      if (st && "update_check" in st) S.settings = st;
+      await putSettings({ update_check: on });
       renderSettings();
       tick();
       return true;
@@ -2011,11 +2015,9 @@
   function hostError(x) { setText($("g-host-error"), t("common.notSaved", { error: x.message })); $("g-host-error").hidden = false; }
   $("g-host-cancel").addEventListener("click", () => hostEditor(false, true));
   /** Saves the grinder's address on the server (the grinder card's form and
-   *  setup step 1); the server says what it does not take. */
-  async function saveHost(v) {
-    const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: v }) });
-    if (st && "grinder_host" in st) S.settings = st;
-  }
+   *  setup step 1; null for the start address); the server says what it
+   *  does not take. */
+  const saveHost = (v) => putSettings({ grinder_host: v });
   // An empty field removes the address ("" to the server, which without a
   // start address only forgets the app's one); Use start setting (null)
   // goes back to the start address.
@@ -2033,8 +2035,7 @@
   resetButton("g-host", async () => {
     $("g-host-error").hidden = true;
     try {
-      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: null }) });
-      if (st && "grinder_host" in st) S.settings = st;
+      await saveHost(null);
       hostEditor(false, true);
       tick();
       return true;
@@ -3700,6 +3701,7 @@
 
   async function refresh() {
     let st;
+    const gen = settingsGen;
     try { st = await api("/api/state"); }
     catch (_) { if (online) offlineSince = Date.now(); online = false; renderAll(); return; }
     online = true;
@@ -3717,6 +3719,9 @@
     }
     // The server restarted: a new boot_id.
     const restarted = !!S && st.server.boot_id !== S.server.boot_id;
+    // A settings save under way or answered since this poll began: its
+    // answer stands, not the settings from before it (see putSettings).
+    if (S && S.settings && !restarted && (settingsSaving || gen !== settingsGen)) st.settings = S.settings;
     S = st; stateAt = performance.now();
     if (restarted) {
       events = []; lastSeq = 0; seenAt.clear();
