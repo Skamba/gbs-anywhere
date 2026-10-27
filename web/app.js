@@ -1510,7 +1510,8 @@
     for (const [name, x] of Object.entries(i.detail_vars || {})) {
       if (x == null || typeof x === "object") continue;   // only numbers and text are filled in
       vars[name.replace(/_(ms|s|g)$/, "")] = typeof x !== "number" ? String(x)
-        : name === "age_ms" ? ageOf(x) : name === "time_ms" ? secs(x / 1000) : name === "weight_g" ? grams(x)
+        // An age is as of the state, so it goes on until the next one.
+        : name === "age_ms" ? ageOf(x + (performance.now() - stateAt)) : name === "time_ms" ? secs(x / 1000) : name === "weight_g" ? grams(x)
         : fmt.upToOne.format(x);
     }
     const text = serverText("integ.detail." + i.detail_key, i.detail, vars);
@@ -2283,6 +2284,9 @@
     for (const l of lines) {
       if (!l || typeof l.seq !== "number" || l.seq <= log.last) continue;
       log.last = l.seq;
+      // When, on this device's clock, from how long ago the server says it
+      // was: its own clock (`at`) may not be set.
+      l.seenAt = Date.now() - (l.age_ms || 0);
       log.lines.push(l);
       frag.append(lineEl(l));
     }
@@ -2497,7 +2501,7 @@
 
   $("log-copy").addEventListener("click", async () => {
     const since = Date.now() - 60 * 60000;
-    let lines = log.lines.filter((l) => Date.parse(l.at) >= since && (!log.warnOnly || l.level !== "info"));
+    let lines = log.lines.filter((l) => l.seenAt >= since && (!log.warnOnly || l.level !== "info"));
     if (lines.length > 500) lines = lines.slice(-500);
     if (!lines.length) {
       logDone("note", log.warnOnly ? t("log.nothingWarnings") : t("log.nothingLines"));

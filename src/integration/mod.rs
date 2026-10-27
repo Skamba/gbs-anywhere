@@ -398,8 +398,10 @@ pub struct StatusSnapshot {
     /// Names `detail` for translation, e.g. `la_marzocco.last_coffee`;
     /// `None` when the integration gives no key for it.
     pub detail_key: Option<&'static str>,
-    /// The values the app fills into its wording for `detail_key`, as of
-    /// when `detail` was set: e.g. `{"age_ms": 180000, "time_ms": 25100}`.
+    /// The values the app fills into its wording for `detail_key`: e.g.
+    /// `{"age_ms": 180000, "time_ms": 25100}`. An `age_ms` is as of now,
+    /// the rest as of when `detail` was set (whose English words keep the
+    /// age of then).
     pub detail_vars: DetailVars,
     pub last_error: Option<String>,
     /// How long the current health has been in place.
@@ -413,6 +415,8 @@ struct StatusInner {
     health: Health,
     subject: String,
     detail: Detail,
+    /// When `detail` was set, for its `age_ms` as of a snapshot.
+    detail_since: Instant,
     last_error: Option<String>,
     since: Instant,
     reports: u32,
@@ -438,6 +442,7 @@ impl Status {
                 health: Health::Starting,
                 subject: String::new(),
                 detail: Detail::default(),
+                detail_since: Instant::now(),
                 last_error: None,
                 since: Instant::now(),
                 reports: 0,
@@ -484,6 +489,7 @@ impl Status {
         }
         s.health = Health::Failing;
         s.detail = Detail::from(message.as_str());
+        s.detail_since = Instant::now();
         s.last_error = Some(message);
     }
 
@@ -498,6 +504,7 @@ impl Status {
         }
         s.health = health;
         s.detail = detail;
+        s.detail_since = Instant::now();
         if health != Health::Failing {
             s.last_error = None;
         }
@@ -511,6 +518,14 @@ impl Status {
 
     pub fn snapshot(&self) -> StatusSnapshot {
         let s = self.lock();
+        let mut detail_vars = s.detail.vars.clone();
+        // An age goes on from when the line was set.
+        if let Some(age) = detail_vars.get_mut("age_ms")
+            && let Some(then) = age.as_u64()
+        {
+            let since = u64::try_from(s.detail_since.elapsed().as_millis()).unwrap_or(u64::MAX);
+            *age = then.saturating_add(since).into();
+        }
         StatusSnapshot {
             id: self.id.to_string(),
             kind: self.kind.to_string(),
@@ -519,7 +534,7 @@ impl Status {
             subject: s.subject.clone(),
             detail: s.detail.text.clone(),
             detail_key: s.detail.key,
-            detail_vars: s.detail.vars.clone(),
+            detail_vars,
             last_error: s.last_error.clone(),
             health_age_ms: u64::try_from(s.since.elapsed().as_millis()).unwrap_or(u64::MAX),
             reports: s.reports,
@@ -602,6 +617,22 @@ mod tests {
         let at = Instant::now() + after;
         l.server.with(|m, _| m.on_start_request(at, Some(9)));
         l.waiting_brew().expect("the grinder waits")
+    }
+
+    #[test]
+    fn a_status_lines_age_is_as_of_now() {
+        let status = Status::new("test", "test", "Test");
+        let line = Detail::keyed("test.last", "last 1 s ago: 25.1 s")
+            .var("age_ms", 1_000)
+            .var("time_ms", 25_100);
+        status.connected(line);
+        std::thread::sleep(Duration::from_millis(50));
+        let snap = status.snapshot();
+        let age = snap.detail_vars["age_ms"].as_u64().unwrap();
+        assert!((1_050..10_000).contains(&age), "{age} ms");
+        // The rest, and the English words, stay as they were set.
+        assert_eq!(snap.detail_vars["time_ms"], 25_100);
+        assert_eq!(snap.detail, "last 1 s ago: 25.1 s");
     }
 
     #[test]

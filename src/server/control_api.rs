@@ -27,8 +27,8 @@
 //! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app; replies `{"id":…}`, as adding and changing do |
 //! | GET | `/api/history` | `shots`: the last 200 shots the grinder asked for, newest first: how each ended as `outcome` (`succeeded`, `aborted` or `failed`), `started_at` and `ended_at` (UTC, whole seconds; `ended_at` as the clock read when the shot ended, `started_at` counted back from it by the shot's length on a clock that does not jump), `running_ms` (how long it ran, from the grinder's request to its end, on that clock; for shots saved by earlier builds, `ended_at` less `started_at`), `time_ms` and `weight_g` of each that succeeded, with `in_grinder_range` as on `shot_reported` (`null` when the shot's window was not known, see `grinder.shot_range`, and on shots saved by earlier builds), `target_time_ms` and `target_weight_g` when the grinder said, each other with `reason` and `cause` as on `shot_aborted` (or `shot_end_missed`: still open when the next one started); `capacity` (200); `persistent`: whether they survive a restart (false while saving fails) |
-//! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (`at`, `level`: `info`, `warn` or `error`, `text`) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
-//! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`); `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
+//! | GET | `/api/log?after=N` | `lines`: the server's last 1000 log lines (`at`, the server's clock, which may not be set; `age_ms`, how long ago; `level`: `info`, `warn` or `error`; `text`) with `seq > N`; `last_seq`: the newest line's number; `capacity` (1000) |
+//! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`), each as in `/api/log` with its `age_ms` as it is sent; `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
 //! | GET | `/api/events?after=N` | events with `seq > N`, each with its `kind`: `grinder_grind_finished` (`result`: the grind's `target_weight_g`, `filter`, `raw`), `grinder_shot_requested` (an E64 WS's `script_id`, an E65/E80's `target_time_ms`), `shot_started`, `shot_reported` (`result`: `time_ms`, `weight_g`; `in_grinder_range`: whether the grinder adjusts from its time, by the window of the grinder's request, see `grinder.shot_range`, or `null` when that is not known), `shot_aborted` and `shot_finished`; `shot_reported` and `shot_aborted` say how long the brew ran until then as `running_ms`; `age_ms` says how long ago each happened. `shot_aborted` says why as `cause`, a fixed code to match on (`shot_aborted_by_user`, `shot_timed_out`, `grinder_shot_dropped`, … see `AbortCause`), and in English words as `reason` |
 //! | GET | `/api/events/stream` | the same, live, as server-sent events named by `kind`, each with its `seq` as the event `id`, none skipped; `Last-Event-ID` (or else `?after=N`) sends the missed ones still kept first, all of them for an `N` from before a restart |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` (or `time_ms`) — ends the shot with these numbers; without a weight, the recipe's |
@@ -456,11 +456,27 @@ async fn get_history(State(x): State<Arc<Server>>) -> Json<Value> {
 
 async fn get_log(State(x): State<Arc<Server>>, Params(q): Params<After>) -> Json<Value> {
     let (lines, last_seq) = x.log().after(q.after);
+    let now = Instant::now();
     Json(json!({
-        "lines": lines,
+        "lines": lines.iter().map(|l| log_json(l, now)).collect::<Vec<_>>(),
         "last_seq": last_seq,
         "capacity": x.log().capacity(),
     }))
+}
+
+/// A log line as the API sends it, with `age_ms`: how long before `now` it
+/// was logged, as [`event_json`] does for events. Its `at` is the server's
+/// wall clock, which may not be set.
+fn log_json(line: &LogLine, now: Instant) -> Value {
+    let mut v = serde_json::to_value(line).unwrap_or(Value::Null);
+    if let Value::Object(o) = &mut v {
+        let age = now.saturating_duration_since(line.logged).as_millis();
+        o.insert(
+            "age_ms".into(),
+            json!(u64::try_from(age).unwrap_or(u64::MAX)),
+        );
+    }
+    v
 }
 
 /// Live log lines. With the `Last-Event-ID` a browser sends when it
@@ -498,7 +514,7 @@ async fn stream_log(
         let ev = Event::default()
             .event("log")
             .id(line.seq.to_string())
-            .data(serde_json::to_string(&line).unwrap_or_default());
+            .data(log_json(&line, Instant::now()).to_string());
         Some((Ok::<_, Infallible>(ev), s))
     });
     // Ends when the server stops, so it can close the connection.

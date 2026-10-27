@@ -948,6 +948,7 @@ async fn the_log_is_kept_for_the_app() {
     let first = x.log().push(tracing::Level::WARN, "routes test: first");
     x.log().push(tracing::Level::INFO, "routes test: second");
     x.log().push(tracing::Level::ERROR, "routes test: third");
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let (code, body) = call(
         reqwest::Method::GET,
@@ -966,6 +967,9 @@ async fn the_log_is_kept_for_the_app() {
     assert_eq!(ours[0]["seq"], first.seq);
     assert_eq!(ours[0]["text"], "routes test: first");
     assert!(ours[0]["at"].as_str().unwrap().ends_with('Z'));
+    // How long ago, for an app whose clock is not the server's.
+    let age = ours[0]["age_ms"].as_u64().expect("age_ms");
+    assert!((200..10_000).contains(&age), "logged {age} ms ago");
     assert_eq!(body["last_seq"], first.seq + 2);
     // Lower case, like the API's other codes.
     let levels: Vec<_> = ours.iter().map(|l| l["level"].as_str().unwrap()).collect();
@@ -985,6 +989,7 @@ async fn the_log_is_kept_for_the_app() {
     assert!(text.contains(&format!("id: {}", first.seq)), "{text}");
     assert!(text.contains(r#""text":"routes test: first""#), "{text}");
     assert!(text.contains(r#""level":"warn""#), "{text}");
+    assert!(text.contains(r#""age_ms":"#), "{text}");
 
     // A browser reconnecting says what it saw last, and gets what it missed;
     // that wins over the query of the URL it reconnects to.

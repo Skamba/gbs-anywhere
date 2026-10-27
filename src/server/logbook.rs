@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -26,6 +26,11 @@ pub struct LogLine {
     pub seq: u64,
     /// UTC, RFC 3339 with milliseconds.
     pub at: String,
+    /// When, on a clock that does not jump: the API says how long ago as
+    /// `age_ms`, which a phone can place on its own clock when the server's
+    /// is not set.
+    #[serde(skip)]
+    pub logged: Instant,
     /// `error`, `warn` or `info`, lower case like the API's other codes.
     pub level: &'static str,
     /// The message as printed, without colour codes.
@@ -73,6 +78,7 @@ impl LogBook {
         let line = LogLine {
             seq: lines.seq,
             at: super::utc::with_millis(SystemTime::now()),
+            logged: Instant::now(),
             level: level_name(level),
             text: shorten(strip_ansi(text)),
         };
