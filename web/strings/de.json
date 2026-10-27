@@ -19,6 +19,7 @@
   "unit.shot": "{time}\u00a0s · {weight}\u00a0g",
   "unit.seconds": "{time}\u00a0s",
   "unit.grams": "{weight}\u00a0g",
+  "unit.minutes": "{time}\u00a0min",
 
   "ago.s": "vor {n}\u00a0Sek.",
   "ago.min": "vor {n}\u00a0Min.",

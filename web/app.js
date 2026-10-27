@@ -18,6 +18,19 @@
     return e;
   }
 
+  /** Sets the text of `node` (and its class, when `cls` is given) only when
+   *  it changed: a status or alert region announces every write, also of
+   *  the same words. */
+  function setText(node, text, cls) {
+    text = text == null ? "" : String(text);
+    if (node.textContent !== text) node.textContent = text;
+    if (cls != null && node.className !== cls) node.className = cls;
+    return node;
+  }
+
+  /** A plain click: not one that opens a new tab or window. */
+  const plainClick = (e) => !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0);
+
   // Static icon markup (paths from the design), never built from server data.
   const PATHS = {
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
@@ -203,15 +216,16 @@
   const grams = (g) => fmt.one.format(Math.round(g * 10) / 10);
   /** A recipe weight: 40, 36.5. */
   const gramsShort = (g) => fmt.upToOne.format(Math.round(g * 10) / 10);
-  /** m:ss from milliseconds. */
-  function clock(ms) {
-    const s = Math.max(0, Math.round(ms / 1000));
+  /** m:ss from milliseconds, to the nearest second; `round` Math.floor for
+   *  a running timer, Math.ceil for the time left. */
+  function clock(ms, round) {
+    const s = Math.max(0, (round || Math.round)(ms / 1000));
     return Math.floor(s / 60) + ":" + pad2(s % 60);
   }
-  /** m:ss from milliseconds, rounding down (a running timer). */
-  function clockDown(ms) {
-    const s = Math.max(0, Math.floor(ms / 1000));
-    return Math.floor(s / 60) + ":" + pad2(s % 60);
+  /** "0.4.0 · abc123" from a version "0.4.0+abc123", or "". */
+  function versionText(v) {
+    const [release, build] = String(v || "").split("+");
+    return release ? release + (build ? " · " + build : "") : "";
   }
   /** Clock times in the language's format. */
   const hhmm = (d) => fmt.hm.format(d);
@@ -467,7 +481,7 @@
   }
   for (const a of document.querySelectorAll("nav.tabs a")) {
     a.addEventListener("click", (e) => {
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;   // new tab/window
+      if (!plainClick(e)) return;   // a new tab or window
       e.preventDefault();
       goTab(a.dataset.tab);
     });
@@ -674,12 +688,7 @@
   function renderBanner(f, s) {
     const b = $("banner");
     const wifi = wifiOf();
-    // A status region announces every change, so only real ones.
-    const show = (cls, text) => {
-      b.hidden = false;
-      if (b.className !== "banner " + cls) b.className = "banner " + cls;
-      if (b.textContent !== text) b.textContent = text;
-    };
+    const show = (cls, text) => { b.hidden = false; setText(b, text, "banner " + cls); };
     if (!S || !online) { b.hidden = true; return; }
     const blocked = grindBlocked();
     if (blocked && s.key !== "blocked") show("warn", t("sys.text.blocked", { message: blocked.grinder_message }));
@@ -801,8 +810,7 @@
       // Whichever comes first wins: the shot typed in or an integration's.
       const note = r.manual && r.list.length ? cap(t("start.step2.failed", { n: r.list.length, names: theTitles(r.list) }))
         : ui.missed ? t("start.step2.missed", { n: r.live.length, names: theTitles(r.live) }) : "";
-      // A status region announces every change, so only real ones.
-      if ($("s2-missed").textContent !== note) $("s2-missed").textContent = note;
+      setText($("s2-missed"), note);
       $("s2-missed").hidden = !note;
       $("s2-auto").hidden = ui.typeIn;
       $("shot-form").hidden = !ui.typeIn;
@@ -850,7 +858,7 @@
     const ground = !(f.sc === "ready" || f.sc === "knob");
     [ground && recipe ? t("start.step1.recipeTarget", { recipe }) : "", shot, rating].forEach((text, i) => {
       const sum = $("step-" + (i + 1)).querySelector("[data-sum]");
-      if (sum.textContent !== text) sum.textContent = text;
+      setText(sum, text);
       sum.hidden = !text;
       const open = ui.open === i + 1;
       sum.classList.toggle("ghost", open);
@@ -935,13 +943,10 @@
     // A shot counts as missed while the clock runs: show the fields then.
     if (!$("s2-run").hidden && !ui.missed && shotMissed(reporters())) { renderStart(); return; }
     const ms = elapsedMs();
-    $("s2-timer").textContent = clockDown(ms);
+    $("s2-timer").textContent = clock(ms, Math.floor);
     const win = windowS() * 1000;
     $("s2-left").hidden = !(win > 0);
-    if (win > 0) {
-      const left = Math.max(0, Math.ceil((win - ms) / 1000));
-      $("s2-left").textContent = t("start.step2.left", { time: Math.floor(left / 60) + ":" + pad2(left % 60) });
-    }
+    if (win > 0) $("s2-left").textContent = t("start.step2.left", { time: clock(win - ms, Math.ceil) });
   }
 
   $("s2-info-btn").addEventListener("click", () => { ui.info = !ui.info; renderStart(); });
@@ -965,8 +970,7 @@
       if (range && typed * 1000 <= range.min_ms) { text = tv("start.form.tooShort", limit(range.min_ms)); isWarn = true; }
       else if (range && typed * 1000 > range.max_ms) { text = t("start.form.tooLong", limit(range.max_ms)); isWarn = true; }
     }
-    h.textContent = text;
-    h.className = "hint" + (isWarn ? " warn" : "");
+    setText(h, text, "hint" + (isWarn ? " warn" : ""));
     h.hidden = !text;
   }
   let busy = false;
@@ -1422,7 +1426,7 @@
         await api("/api/integrations/" + encodeURIComponent(i.id), { method: "PUT", body: JSON.stringify({ settings: formValues(fields) }) });
         stopEdit();
         await tick();
-      } catch (err) { error.textContent = err.message; error.hidden = false; save.disabled = false; }
+      } catch (err) { setText(error, err.message); error.hidden = false; save.disabled = false; }
     });
     editing = i.id; editForm = form;
     invalidateIntegrations();
@@ -1476,7 +1480,7 @@
       openAdd(false);
       await tick();
     } catch (err) {
-      $("add-error").textContent = err.message; $("add-error").hidden = false;
+      setText($("add-error"), err.message); $("add-error").hidden = false;
     } finally { $("add-submit").disabled = false; }
   });
 
@@ -1489,7 +1493,7 @@
     $("set-foot").hidden = false;
     $("set-window-row").hidden = false;
     renderWindow();
-    renderFrom("set-window", "shot_window_s", (v) => (v === 0 ? t("settings.noLimit") : clock(v * 1000) + " min"));
+    renderFrom("set-window", "shot_window_s", (v) => (v === 0 ? t("settings.noLimit") : t("unit.minutes", { time: clock(v * 1000) })));
     renderUpdateSetting();
     // The grinder's address, in the form on the grinder card. Use start
     // setting only with a start address to go back to: without one it
@@ -1511,7 +1515,7 @@
       : from === "command_line" ? t("settings.from.start")
       : from === "default" ? t("settings.from.default") : "";
     const line = $(id + "-from-text");
-    if (line.textContent !== text) line.textContent = text;
+    setText(line, text);
     $(id + "-from").hidden = !text;
     $(id + "-reset").hidden = from !== "app" || !st.start || !canReset;
   }
@@ -1564,9 +1568,7 @@
     $("set-window-none").setAttribute("aria-pressed", String(v === 0));
     $("set-window-range").textContent = t("settings.windowRange", { min: clock(r.min_s * 1000), max: clock(r.max_s * 1000) });
     $("set-window-field").classList.toggle("bad", win.warn && document.activeElement === input);
-    const msg = $("set-window-msg");
-    if (msg.textContent !== win.msg) msg.textContent = win.msg;
-    msg.className = "hint" + (win.warn ? " warn" : "");
+    setText($("set-window-msg"), win.msg, "hint" + (win.warn ? " warn" : ""));
   }
   function windowNote(text, warn) { win.msg = text || ""; win.warn = !!warn; }
 
@@ -1803,7 +1805,7 @@
       tick();
       return true;
     } catch (x) {
-      $("set-update-error").textContent = t("common.notSaved", { error: x.message }); $("set-update-error").hidden = false;
+      setText($("set-update-error"), t("common.notSaved", { error: x.message })); $("set-update-error").hidden = false;
       return false;
     } finally {
       updateSaving = false;
@@ -1830,7 +1832,7 @@
     renderStatus();
     if (!open && refocus) focusKebab("grinder");
   }
-  function hostError(x) { $("g-host-error").textContent = t("common.notSaved", { error: x.message }); $("g-host-error").hidden = false; }
+  function hostError(x) { setText($("g-host-error"), t("common.notSaved", { error: x.message })); $("g-host-error").hidden = false; }
   $("g-host-cancel").addEventListener("click", () => hostEditor(false, true));
   /** Saves the grinder's address on the server (the grinder card's form and
    *  setup step 1); the server says what it does not take. */
@@ -1866,8 +1868,7 @@
   function renderVersion() {
     const u = S.update;
     const v = String(S.server.version || "");
-    const [release, build] = v.split("+");
-    $("v-installed").textContent = release ? release + (build ? " · " + build : "") : "–";
+    $("v-installed").textContent = versionText(v) || "–";
     $("v-installed").title = v;
     const badge = $("v-badge");
     const on = !!(u && S.settings && S.settings.update_check);
@@ -2135,9 +2136,7 @@
     const live = window.EventSource ? log.connected : log.state === "live" && online;
     $("log-live-block").classList.toggle("on", log.follow && live);
     $("log-live-text").textContent = !live ? t("log.reconnecting") : log.follow ? t("log.live") : t("log.paused");
-    // A status region announces every change, so only real ones.
-    if (!log.done && $("log-note").textContent !== LOG_NOTE()) $("log-note").textContent = LOG_NOTE();
-    if (!log.done) $("log-note").classList.remove("done");
+    if (!log.done) setText($("log-note"), LOG_NOTE(), "log-note");
     $("log-copy").classList.toggle("done", log.done === "copy");
     $("log-dl").classList.toggle("done", log.done === "dl");
   }
@@ -2168,12 +2167,12 @@
     renderLog();
   });
   $("sys-setup-link").addEventListener("click", (e) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    if (!plainClick(e)) return;
     e.preventDefault();
     openSetup("setup");
   });
   $("sys-log-link").addEventListener("click", (e) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    if (!plainClick(e)) return;
     e.preventDefault();
     goTab("log");
   });
@@ -2234,8 +2233,7 @@
   /** Shows `note` under the log for a moment; `kind` "copy" or "dl" also ticks that button. */
   function logDone(kind, note) {
     log.done = kind;
-    $("log-note").textContent = note;
-    $("log-note").classList.toggle("done", kind === "copy" || kind === "dl");
+    setText($("log-note"), note, "log-note" + (kind === "copy" || kind === "dl" ? " done" : ""));
     clearTimeout(log.doneTimer);
     log.doneTimer = setTimeout(() => { log.done = null; renderLog(); }, 3500);
     renderLog();
@@ -2511,13 +2509,13 @@
     setTone(pill, pillTone);
     pill.classList.toggle("pulse", pulse);
     const pillText = pillKey ? t("setup.pill." + pillKey) : t("sys.label.offline");
-    if ($("setup-pill-text").textContent !== pillText) $("setup-pill-text").textContent = pillText;
+    setText($("setup-pill-text"), pillText);
     const cards = F ? [...(wz.kind ? ["kind"] : []), ...F.cards()] : ["kind"];
     const states = cards.map((n) => (n === "kind" ? (F ? "done" : "active") : F.card(n, at)));
     // The bars and "Step n of …" count the numbered steps.
     const steps = F ? F.cards().filter((n) => F.number(n) != null) : [];
     const progress = !F ? t("setup.pill.choose") : F.progress(at) || t("setup.progress.step", { n: F.number(at.step), total: steps.length });
-    if ($("wz-progress").textContent !== progress) $("wz-progress").textContent = progress;
+    setText($("wz-progress"), progress);
 
     // Rebuilt only when something shown changes, so a field keeps what is
     // typed and the focus stays put between polls.
@@ -3073,8 +3071,8 @@
    *  link's phase began (the server's phase_age_ms); in the quiet time, how
    *  long until gbs-anywhere checks again. */
   function pairWaited() {
-    if (wz.pair.quietFrom != null) return clockDown(Math.max(0, wz.pair.quietMs - (performance.now() - wz.pair.quietFrom)));
-    return wz.pair.waitFrom == null ? "0:00" : clockDown(performance.now() - wz.pair.waitFrom);
+    if (wz.pair.quietFrom != null) return clock(wz.pair.quietMs - (performance.now() - wz.pair.quietFrom), Math.floor);
+    return wz.pair.waitFrom == null ? "0:00" : clock(performance.now() - wz.pair.waitFrom, Math.floor);
   }
 
   /** The first Pairing Code after the restart wait: the same one is the
@@ -3480,7 +3478,7 @@
     if (typeof back === "function") back();
     else if (back && back.focus && document.contains(back)) back.focus();
   }
-  function sheetError(text) { $("sheet-error").textContent = text; $("sheet-error").hidden = false; }
+  function sheetError(text) { setText($("sheet-error"), text); $("sheet-error").hidden = false; }
   $("sheet").addEventListener("click", (e) => { if (e.target === $("sheet")) closeSheet(); });
 
   // --- Live updates --------------------------------------------------------------------
@@ -3489,8 +3487,7 @@
     // Name and version at the bottom of every tab but Status, whose
     // gbs-anywhere card shows them.
     $("app-footer").hidden = tab === "status";
-    const [release, build] = String(S.server.version || "").split("+");
-    $("app-footer").textContent = "gbs-anywhere" + (release ? " " + release + (build ? " · " + build : "") : "");
+    $("app-footer").textContent = ["gbs-anywhere", versionText(S.server.version)].filter(Boolean).join(" ");
     $("app-footer").title = String(S.server.version || "");
     renderStart();
     renderStatus();
