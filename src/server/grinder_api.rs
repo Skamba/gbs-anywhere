@@ -21,7 +21,7 @@ use crate::server::browser::{
     REFUSED_GRINDER, UNKNOWN_GRINDER, UNPARSABLE_GRINDER, from_browser, short, tell_once,
 };
 use crate::server::logbook::printable;
-use crate::server::settings::make_private;
+use crate::server::private_file::make_private;
 use crate::server::{Conn, Server};
 
 /// The grinder's writes are a few dozen bytes; anything much bigger is not

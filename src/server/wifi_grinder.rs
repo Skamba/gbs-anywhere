@@ -429,7 +429,7 @@ impl Pairing {
             return Ok(());
         };
         let json = serde_json::to_vec_pretty(self)?;
-        crate::server::settings::save_private(path, &json)
+        crate::server::private_file::save_private(path, &json)
     }
 }
 

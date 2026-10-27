@@ -24,6 +24,7 @@ mod control_api;
 mod grinder_api;
 pub mod history;
 pub mod logbook;
+mod private_file;
 pub mod settings;
 #[cfg(test)]
 mod tests;

@@ -20,7 +20,7 @@ use tokio::sync::broadcast::{self, error::RecvError};
 use crate::protocol::machine::EventRecord;
 use crate::protocol::{AbortCause, GrindResult, MachineEvent, ShotResult};
 use crate::server::Server;
-use crate::server::settings::{make_private, save_private};
+use crate::server::private_file::{make_private, save_private};
 
 /// Shots kept.
 pub const CAPACITY: usize = 200;
