@@ -29,6 +29,8 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use crate::integration::tenths;
+
 /// One reading: the scale's uptime and the weight on it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Reading {
@@ -311,7 +313,7 @@ impl Detector {
         self.state = State::Done;
         Progress::Done(Shot {
             time: Duration::from_millis(time_ms),
-            grams: (in_cup * 10.0).round() / 10.0,
+            grams: tenths(in_cup),
         })
     }
 
