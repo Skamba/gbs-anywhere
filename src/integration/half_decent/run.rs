@@ -15,7 +15,9 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use super::TITLE;
 use super::config::Config;
 use super::shot::{Detector, Progress, Reading, Shot};
-use crate::integration::{Backoff, BoxFuture, Detail, GrinderBrews, Integration, Link, tenths};
+use crate::integration::{
+    Backoff, BoxFuture, Brew, Detail, GrinderBrews, Integration, Link, tenths,
+};
 
 const MIN_BACKOFF: Duration = Duration::from_secs(2);
 /// Short, so a scale switched on after the knob press is found in time.
@@ -128,7 +130,7 @@ async fn run(link: Link, cfg: Config) {
     link.status.subject(&cfg.host);
     // Subscribe first, so no knob press slips by.
     let mut brews = link.grinder_brews();
-    if !link.grinder_waiting() {
+    if link.waiting_brew().is_none() {
         link.status.starting(connecting(&cfg.host));
         match first_look(&link, &cfg).await {
             Ok(()) => link.status.connected(idle_line(last)),
@@ -141,17 +143,11 @@ async fn run(link: Link, cfg: Config) {
     loop {
         // A press seen now, not one already waiting: the cup is on and the
         // shot has not started, so the scale can be tared.
-        let fresh = !link.grinder_waiting();
-        if fresh {
-            if !brews.next().await {
-                return;
-            }
-            if !link.grinder_waiting() {
-                // A press from a brew that is already over.
-                continue;
-            }
-        }
-        if !brew(&link, &cfg, &mut brews, fresh, &mut last).await {
+        let fresh = link.waiting_brew().is_none();
+        let Some(next) = brews.next().await else {
+            return;
+        };
+        if !brew(&link, &cfg, &mut brews, next, fresh, &mut last).await {
             return;
         }
     }
@@ -181,13 +177,14 @@ async fn first_look(link: &Link, cfg: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Watches one brew: connects, retrying while the grinder waits, and
+/// Watches one brew: connects, retrying while the grinder waits for it, and
 /// lets go of the scale once the shot is reported or the grinder stops
 /// waiting. `false` once the server is gone.
 async fn brew(
     link: &Link,
     cfg: &Config,
     brews: &mut GrinderBrews,
+    mut brew: Brew,
     mut tare: bool,
     last: &mut Option<Shot>,
 ) -> bool {
@@ -195,7 +192,7 @@ async fn brew(
     loop {
         link.status.starting(connecting(&cfg.host));
         let result = match connect(&cfg.host).await {
-            Ok(ws) => watch(link, cfg, ws, brews, tare, last).await,
+            Ok(ws) => watch(link, cfg, ws, brews, &mut brew, tare, last).await,
             Err(e) => Err(e),
         };
         match result {
@@ -212,9 +209,8 @@ async fn brew(
         }
         // Once the shot may be running, a tare would hide coffee.
         tare = false;
-        tracing::info!("{TITLE}: retrying in {} s", backoff.peek().as_secs());
-        backoff.wait().await;
-        if !link.grinder_waiting() {
+        backoff.retry(TITLE).await;
+        if !link.waits_for(brew) {
             link.status.connected(idle_line(*last));
             return true;
         }
@@ -262,15 +258,16 @@ async fn send_tare(ws: &mut Socket) -> anyhow::Result<()> {
         .context("could not tare the scale")
 }
 
-/// Reads the scale for one brew, tared first if `tare`. `Ok(true)` once the
-/// shot is reported or the grinder stops waiting, `Ok(false)` when the
-/// server is gone; either way the connection is closed. An error when the
-/// connection fails.
+/// Reads the scale for `brew`, tared first if `tare`. `Ok(true)` once the
+/// shot is reported or the grinder stops waiting for it, `Ok(false)` when
+/// the server is gone; either way the connection is closed. An error when
+/// the connection fails. A new brew that starts meanwhile takes its place.
 async fn watch(
     link: &Link,
     cfg: &Config,
     mut ws: Socket,
     brews: &mut GrinderBrews,
+    brew: &mut Brew,
     tare: bool,
     last: &mut Option<Shot>,
 ) -> anyhow::Result<bool> {
@@ -285,11 +282,12 @@ async fn watch(
     link.status.watching(settling());
     let ended = loop {
         let text = tokio::select! {
-            pressed = brews.next() => {
-                if !pressed {
+            next = brews.next() => {
+                let Some(next) = next else {
                     break false;
-                }
+                };
                 // Pressed again: a new brew.
+                *brew = next;
                 send_tare(&mut ws).await?;
                 detector = Detector::after_tare().expecting(recipe_weight(link));
                 link.status.watching(settling());
@@ -315,7 +313,7 @@ async fn watch(
             }
             FromScale::Other => continue,
         };
-        if !link.grinder_waiting() {
+        if !link.waits_for(*brew) {
             // Typed on the phone, aborted or timed out.
             break true;
         }
@@ -325,6 +323,7 @@ async fn watch(
             Progress::Flowing { grams } => link.status.watching(flowing(grams)),
             Progress::Done(shot) => {
                 link.report(
+                    *brew,
                     shot.time,
                     Some((shot.grams, "weighed by the scale".to_owned())),
                 );
@@ -628,7 +627,8 @@ mod tests {
         knob_press(&l);
         wait_for("the tare", || fake.tared.load(Ordering::SeqCst)).await;
         // Someone typed the shot on the phone first.
-        l.report(Duration::from_secs(25), Some((38.0, "typed".into())));
+        let brew = l.waiting_brew().unwrap();
+        l.report(brew, Duration::from_secs(25), Some((38.0, "typed".into())));
         wait_for("the connection to close", || {
             fake.open.load(Ordering::SeqCst) == 0
         })
@@ -668,7 +668,8 @@ mod tests {
         wait_for("a second attempt", || accepts.load(Ordering::SeqCst) >= 2).await;
 
         // Once the grinder stops waiting, it stops trying.
-        l.report(Duration::from_secs(25), Some((38.0, "typed".into())));
+        let brew = l.waiting_brew().unwrap();
+        l.report(brew, Duration::from_secs(25), Some((38.0, "typed".into())));
         wait_for("idle", || l.status.snapshot().health == Health::Connected).await;
         let tries = accepts.load(Ordering::SeqCst);
         tokio::time::sleep(MIN_BACKOFF + Duration::from_millis(500)).await;

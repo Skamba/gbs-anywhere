@@ -4,8 +4,8 @@
 //!
 //! An integration is a long-running task. It gets a [`Link`] to the machine
 //! emulation, which tells it when the grinder is waiting for a shot
-//! ([`Link::grinder_brews`]) and takes the measured numbers
-//! ([`Link::report`]), and a [`Status`] to tell people how it is doing (shown
+//! ([`Link::grinder_brews`], one [`Brew`] at a time) and takes the measured
+//! numbers for that brew ([`Link::report`]), and a [`Status`] to tell people how it is doing (shown
 //! in the app and in `GET /api/state`). Everything in between, protocols and
 //! logins and reconnects, is the integration's own business.
 //!
@@ -41,20 +41,22 @@
 //!   [`Kind::create`] checks required fields and numbers for both; check
 //!   anything else when building the config.
 //! * `run.rs`: in `run`, loop forever: connect, set the status, wait for
-//!   [`Link::grinder_brews`], measure, call [`Link::report`]; on failure set
-//!   [`Status::error`] and back off with [`Backoff`].
+//!   the next [`Brew`] from [`Link::grinder_brews`], measure while
+//!   [`Link::waits_for`] that brew, call [`Link::report`] with it; on failure
+//!   set [`Status::error`] and back off with [`Backoff::retry`].
 //!   Status lines are English. Give each one a key with [`Detail::keyed`]
 //!   (`<id>.<state>`, e.g. `la_marzocco.last_coffee`) and its numbers with
 //!   [`Detail::var`], and the app can show it in the person's language
 //!   (`integ.detail.<key>` in `web/strings/<lang>.json`); a line without a
 //!   key, or one the catalog lacks, is shown in English. Errors stay English.
 //! * Then list it here: `pub mod <id>;`, its `KIND` in [`KINDS`], and its
-//!   args in [`CliArgs`] and [`CliArgs::configured`].
+//!   args in [`CliArgs`] and [`CliArgs::configured`]. `cargo test` checks
+//!   that each kind's flags turn it on.
 //!
 //! [`Link::report`] applies the rules every integration must follow: a shot
 //! only counts while the grinder is waiting after a knob press (on an E65/E80
-//! GbS: after a Grind-by-Sync grind), and a missing weight falls back to the
-//! recipe weight the grinder sent. Keep vendor code free of those so all
+//! GbS: after a Grind-by-Sync grind), only for the brew it was measured in,
+//! and a missing weight falls back to the recipe weight the grinder sent. Keep vendor code free of those so all
 //! integrations behave the same.
 
 mod kind;
@@ -71,7 +73,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::protocol::machine::EventRecord;
+use crate::protocol::machine::{EventRecord, Machine};
 use crate::protocol::{MachineError, MachineEvent, Phase, ShotResult};
 use crate::server::Server;
 
@@ -124,54 +126,84 @@ pub struct Link {
     pub status: Status,
 }
 
+/// One brew the grinder asked for (a knob press, or an E65/E80
+/// Grind-by-Sync grind), named by the moment it started. An integration
+/// measures and reports against it, so a shot is only ever reported for the
+/// brew it was measured in, never for the next one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Brew {
+    /// `Phase::Running.since`, which is also the `at` of its `ShotStarted`.
+    started: Instant,
+}
+
 /// What happened to a reported shot.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReportOutcome {
     /// Shown to the grinder with this weight (grams) and where it came from.
     Reported { grams: f64, source: String },
     /// The grinder was not waiting: no knob press (or E65/E80 grind), or
-    /// already answered.
+    /// this brew was already answered, aborted or timed out.
     NotWaiting,
+    /// The brew is over and the grinder waits for a newer one, which this
+    /// shot is not.
+    BrewOver,
     /// The machine refused it (e.g. someone typed a result a moment earlier).
     Refused(MachineError),
 }
 
+/// The brew the grinder is waiting for, if any.
+fn waiting_brew(m: &mut Machine, now: Instant) -> Option<Brew> {
+    match m.phase(now) {
+        Phase::Running {
+            since,
+            requested_by_grinder: true,
+        } => Some(Brew { started: since }),
+        _ => None,
+    }
+}
+
 impl Link {
-    /// Whether the grinder asked for a brew and is waiting for the result.
-    pub fn grinder_waiting(&self) -> bool {
-        self.server.with(|m, now| {
-            matches!(
-                m.phase(now),
-                Phase::Running {
-                    requested_by_grinder: true,
-                    ..
-                }
-            )
-        })
+    /// The brew the grinder asked for and is waiting on, if any.
+    pub fn waiting_brew(&self) -> Option<Brew> {
+        self.server.with(waiting_brew)
     }
 
-    /// The moments the grinder asks for a brew (knob presses, or E65/E80
-    /// Grind-by-Sync grinds), from now on.
+    /// Whether the grinder still waits for the result of `brew`.
+    pub fn waits_for(&self, brew: Brew) -> bool {
+        self.waiting_brew() == Some(brew)
+    }
+
+    /// The brews the grinder asks for (knob presses, or E65/E80
+    /// Grind-by-Sync grinds): first the one it is waiting on already, if
+    /// any, then each new one.
     pub fn grinder_brews(&self) -> GrinderBrews {
-        GrinderBrews(self.server.subscribe())
+        // Subscribed first, so a brew that starts in between is not missed.
+        let events = self.server.subscribe();
+        GrinderBrews {
+            events,
+            server: self.server.clone(),
+            pending: self.waiting_brew(),
+            last: None,
+        }
     }
 
-    /// Reports a measured shot: `time` as the machine ran it, `weight` in
-    /// grams with a label saying where it came from (`None` when the
-    /// integration has no weight: the grinder's recipe weight is used).
+    /// Reports a shot measured during `brew`: `time` as the machine ran it,
+    /// `weight` in grams with a label saying where it came from (`None` when
+    /// the integration has no weight: the grinder's recipe weight is used).
     /// Applies the rules and logs the outcome under this integration's name.
-    pub fn report(&self, time: Duration, weight: Option<(f64, String)>) -> ReportOutcome {
+    pub fn report(
+        &self,
+        brew: Brew,
+        time: Duration,
+        weight: Option<(f64, String)>,
+    ) -> ReportOutcome {
         let title = self.status.title();
         let secs = time.as_secs_f64();
         let outcome = self.server.with(|m, now| {
-            if !matches!(
-                m.phase(now),
-                Phase::Running {
-                    requested_by_grinder: true,
-                    ..
-                }
-            ) {
-                return ReportOutcome::NotWaiting;
+            match waiting_brew(m, now) {
+                Some(b) if b == brew => {}
+                Some(_) => return ReportOutcome::BrewOver,
+                None => return ReportOutcome::NotWaiting,
             }
             let (grams, source) = match weight {
                 Some((g, source)) if g.is_finite() && g > 0.0 => (g, source),
@@ -199,6 +231,10 @@ impl Link {
                 "{title}: {secs:.1} s shot seen but grinder not waiting (press the knob after \
                  grinding; an E65/E80 waits after a Grind-by-Sync grind)"
             ),
+            ReportOutcome::BrewOver => tracing::info!(
+                "{title}: {secs:.1} s shot belongs to a brew that is over, not reported for the \
+                 next one"
+            ),
             ReportOutcome::Refused(e) => {
                 tracing::warn!("{title}: {secs:.1} s shot not reported: {e}");
             }
@@ -207,30 +243,63 @@ impl Link {
     }
 }
 
-/// The grinder's brew requests as they happen. See [`Link::grinder_brews`].
-pub struct GrinderBrews(broadcast::Receiver<EventRecord>);
+/// The grinder's brews as they start. See [`Link::grinder_brews`].
+pub struct GrinderBrews {
+    events: broadcast::Receiver<EventRecord>,
+    server: Arc<Server>,
+    /// The brew already waiting when this was made.
+    pending: Option<Brew>,
+    /// The last brew handed out; only newer ones follow.
+    last: Option<Brew>,
+}
 
 impl GrinderBrews {
-    /// Waits for the next grinder-requested brew. `false` once the server is
-    /// gone.
-    pub async fn next(&mut self) -> bool {
+    /// Waits for the next brew the grinder is waiting on. Each brew comes
+    /// once, and brews that are over by the time they would come (answered,
+    /// aborted, timed out) are skipped. `None` once the server is gone.
+    pub async fn next(&mut self) -> Option<Brew> {
+        if let Some(brew) = self.pending.take()
+            && self.take(brew)
+        {
+            return Some(brew);
+        }
         loop {
-            match self.0.recv().await {
-                Ok(rec)
-                    if matches!(
-                        rec.event,
+            let brew = match self.events.recv().await {
+                Ok(EventRecord {
+                    at,
+                    event:
                         MachineEvent::ShotStarted {
                             requested_by_grinder: true,
                             ..
-                        }
-                    ) =>
-                {
-                    return true;
+                        },
+                    ..
+                }) => Brew { started: at },
+                Ok(_) => continue,
+                // Missed some: the brew waiting now, if any, is the one.
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    match self.server.with(waiting_brew) {
+                        Some(brew) => brew,
+                        None => continue,
+                    }
                 }
-                Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return false,
+                Err(broadcast::error::RecvError::Closed) => return None,
+            };
+            if self.take(brew) {
+                return Some(brew);
             }
         }
+    }
+
+    /// Whether `brew` is newer than the last one handed out and still
+    /// waited for; if so, it is the last one now.
+    fn take(&mut self, brew: Brew) -> bool {
+        if self.last.is_some_and(|last| brew <= last)
+            || self.server.with(waiting_brew) != Some(brew)
+        {
+            return false;
+        }
+        self.last = Some(brew);
+        true
     }
 }
 
@@ -507,6 +576,12 @@ impl Backoff {
         self.next = (d * 2).min(self.max);
         d
     }
+
+    /// Logs `<title>: retrying in N s`, then waits as [`Backoff::wait`] does.
+    pub async fn retry(&mut self, title: &str) -> Duration {
+        tracing::info!("{title}: retrying in {} s", self.peek().as_secs());
+        self.wait().await
+    }
 }
 
 #[cfg(test)]
@@ -521,27 +596,38 @@ mod tests {
         }
     }
 
+    /// A knob press `after` from now (later than any earlier one), and the
+    /// brew it starts.
+    fn knob_press(l: &Link, after: Duration) -> Brew {
+        let at = Instant::now() + after;
+        l.server.with(|m, _| m.on_start_request(at, Some(9)));
+        l.waiting_brew().expect("the grinder waits")
+    }
+
     #[test]
     fn report_only_counts_while_the_grinder_waits() {
         let l = link();
         let t = Duration::from_millis(25_100);
+        let none = Brew {
+            started: Instant::now(),
+        };
         assert_eq!(
-            l.report(t, Some((38.1, "scale".into()))),
+            l.report(none, t, Some((38.1, "scale".into()))),
             ReportOutcome::NotWaiting
         );
-        assert!(!l.grinder_waiting());
+        assert_eq!(l.waiting_brew(), None);
 
         // A manual start is not a grinder request.
         l.server.with(|m, now| m.start_shot(now)).unwrap();
-        assert_eq!(l.report(t, None), ReportOutcome::NotWaiting);
+        assert_eq!(l.waiting_brew(), None);
+        assert_eq!(l.report(none, t, None), ReportOutcome::NotWaiting);
         l.server.with(|m, now| m.abort(now)).unwrap();
 
         // Knob press: measured weight wins.
-        let later = Instant::now() + Duration::from_secs(30);
-        l.server.with(|m, _| m.on_start_request(later, Some(9)));
-        assert!(l.grinder_waiting());
+        let brew = knob_press(&l, Duration::from_secs(30));
+        assert!(l.waits_for(brew));
         assert_eq!(
-            l.report(t, Some((38.1, "scale".into()))),
+            l.report(brew, t, Some((38.1, "scale".into()))),
             ReportOutcome::Reported {
                 grams: 38.1,
                 source: "scale".into()
@@ -551,34 +637,89 @@ mod tests {
         assert_eq!(snap.reports, 1);
         assert_eq!(snap.last_report.unwrap().time_ms, 25_100);
         // Answered: the grinder is no longer waiting.
-        assert_eq!(l.report(t, None), ReportOutcome::NotWaiting);
-        assert!(!l.grinder_waiting());
+        assert_eq!(l.report(brew, t, None), ReportOutcome::NotWaiting);
+        assert!(!l.waits_for(brew));
+    }
+
+    #[test]
+    fn a_shot_is_only_reported_for_its_own_brew() {
+        let l = link();
+        let t = Duration::from_secs(25);
+        let first = knob_press(&l, Duration::from_secs(30));
+        l.server.with(|m, now| m.abort(now)).unwrap();
+        let second = knob_press(&l, Duration::from_secs(60));
+        assert_ne!(first, second);
+        assert!(!l.waits_for(first) && l.waits_for(second));
+        // The first brew's shot is not the second's.
+        assert_eq!(
+            l.report(first, t, Some((38.0, "scale".into()))),
+            ReportOutcome::BrewOver
+        );
+        assert_eq!(l.status.snapshot().reports, 0);
+        assert!(matches!(
+            l.report(second, t, Some((38.0, "scale".into()))),
+            ReportOutcome::Reported { .. }
+        ));
     }
 
     #[test]
     fn report_falls_back_to_the_recipe_weight() {
         let l = link();
-        let later = Instant::now() + Duration::from_secs(30);
-        l.server.with(|m, _| m.on_start_request(later, Some(9)));
+        let brew = knob_press(&l, Duration::from_secs(30));
         // No weight and no recipe weight: refused rather than sending 0 g.
         assert_eq!(
-            l.report(Duration::from_secs(30), None),
+            l.report(brew, Duration::from_secs(30), None),
             ReportOutcome::Refused(MachineError::NoWeight)
         );
 
         let l = link();
         let grind = GrindResult::parse(br#"{"SYNC_BEVERAGE_WEIGHT": 38}"#).unwrap();
         l.server.with(|m, now| m.on_grind_result(now, grind));
-        let later = Instant::now() + Duration::from_secs(30);
-        l.server.with(|m, _| m.on_start_request(later, Some(9)));
+        let brew = knob_press(&l, Duration::from_secs(30));
         // An unusable weight also falls back.
         assert_eq!(
-            l.report(Duration::from_secs(30), Some((0.0, "scale".into()))),
+            l.report(brew, Duration::from_secs(30), Some((0.0, "scale".into()))),
             ReportOutcome::Reported {
                 grams: 38.0,
                 source: "grinder recipe weight".into()
             }
         );
+    }
+
+    /// The next brew, or `None` when none comes within a moment.
+    async fn next_soon(brews: &mut GrinderBrews) -> Option<Brew> {
+        tokio::time::timeout(Duration::from_millis(50), brews.next())
+            .await
+            .ok()
+            .flatten()
+    }
+
+    #[tokio::test]
+    async fn brews_come_once_and_only_while_waited_for() {
+        let l = link();
+        let mut brews = l.grinder_brews();
+        // A brew that is over before anyone looks is skipped.
+        knob_press(&l, Duration::from_secs(30));
+        l.server.with(|m, now| m.abort(now)).unwrap();
+        let second = knob_press(&l, Duration::from_secs(60));
+        assert_eq!(next_soon(&mut brews).await, Some(second));
+        assert_eq!(next_soon(&mut brews).await, None, "each brew once");
+
+        // Subscribed while a brew waits (pressed during a login): that one
+        // first. Its start event may have come in too; it is still one brew.
+        let mut late = l.grinder_brews();
+        assert_eq!(late.pending, Some(second));
+        let mut raced = l.grinder_brews();
+        raced.pending = None;
+        let ended = l.report(second, Duration::from_secs(25), Some((38.0, "x".into())));
+        assert!(matches!(ended, ReportOutcome::Reported { .. }));
+        let third = knob_press(&l, Duration::from_secs(90));
+        raced.pending = Some(third);
+        assert_eq!(next_soon(&mut raced).await, Some(third));
+        assert_eq!(next_soon(&mut raced).await, None);
+        // `late` saw the second brew end: it skips to the third.
+        assert_eq!(next_soon(&mut late).await, Some(third));
+        assert_eq!(next_soon(&mut late).await, None);
     }
 
     #[test]
@@ -629,6 +770,71 @@ mod tests {
         assert_eq!(json["detail"], "boom");
         assert_eq!(json["detail_key"], serde_json::Value::Null);
         assert_eq!(json["detail_vars"], serde_json::json!({}));
+    }
+
+    /// The flags as the binary takes them.
+    #[derive(clap::Parser)]
+    struct Cli {
+        #[command(flatten)]
+        integrations: CliArgs,
+    }
+
+    /// The kinds `argv` turns on.
+    fn configured(argv: &[String]) -> std::collections::BTreeSet<&'static str> {
+        use clap::Parser;
+        let cli = Cli::try_parse_from(argv).unwrap_or_else(|e| panic!("{argv:?}: {e}"));
+        let on = cli.integrations.configured();
+        on.iter().map(|(kind, _)| kind.id).collect()
+    }
+
+    /// Registering one takes four lines here; a missed `CliArgs::configured`
+    /// line would ignore its flags without a word.
+    #[test]
+    fn every_integration_has_flags_that_turn_it_on() {
+        use clap::CommandFactory;
+        let cmd = Cli::command();
+        let kinds: std::collections::BTreeSet<&str> = KINDS.iter().map(|k| k.id).collect();
+        // Each `#[group(id = "<id>")]`; clap adds one for each struct, too.
+        let groups: Vec<_> = cmd
+            .get_groups()
+            .filter(|g| !["Cli", "CliArgs"].contains(&g.get_id().as_str()))
+            .collect();
+        let ids: std::collections::BTreeSet<&str> =
+            groups.iter().map(|g| g.get_id().as_str()).collect();
+        assert_eq!(ids, kinds, "one flag group for each kind in KINDS");
+        for arg in cmd.get_arguments() {
+            assert!(
+                groups
+                    .iter()
+                    .any(|g| g.get_args().any(|a| a == arg.get_id())),
+                "--{} is in no integration's group",
+                arg.get_id()
+            );
+        }
+
+        // Set in the environment (`LM_USERNAME`, say), not by the flags.
+        let ambient = configured(&["gbs-anywhere".to_owned()]);
+        for group in groups {
+            let id = group.get_id().as_str();
+            let mut argv = vec!["gbs-anywhere".to_owned()];
+            for arg_id in group.get_args() {
+                let arg = cmd.get_arguments().find(|a| a.get_id() == arg_id).unwrap();
+                argv.push(format!("--{}", arg.get_long().expect("a long flag")));
+                if arg.get_action().takes_values() {
+                    // Valid as text and as a number.
+                    argv.push("1".to_owned());
+                }
+            }
+            let on = configured(&argv);
+            assert!(
+                on.contains(id),
+                "{argv:?} does not turn on {id}: is it in CliArgs::configured?"
+            );
+            assert!(
+                on.iter().all(|k| *k == id || ambient.contains(k)),
+                "{argv:?} turns on {on:?}"
+            );
+        }
     }
 
     #[test]

@@ -430,19 +430,48 @@ fn saved_list(entries: &[Entry]) -> Vec<SavedIntegration> {
     entries.iter().filter_map(|e| e.saved.clone()).collect()
 }
 
+/// Runs the integration, and watches how its task ends: returning marks it
+/// stopped, a panic as failing (and goes to the log, which the app shows).
+/// Stopping it with the returned handle, as a removal or a settings change
+/// does, is not a failure.
 fn spawn(server: &Arc<Server>, integration: Box<dyn Integration>, status: Status) -> AbortHandle {
-    // Integrations that speak TLS share rustls; make sure a provider is set
-    // before the first one connects (reqwest leaves it to the application).
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let link = Link {
         server: server.clone(),
         status: status.clone(),
     };
+    let task = tokio::spawn(async move { integration.run(link).await });
+    let handle = task.abort_handle();
     tokio::spawn(async move {
-        integration.run(link).await;
-        status.stopped();
-    })
-    .abort_handle()
+        match task.await {
+            Ok(()) => status.stopped(),
+            Err(e) if e.is_cancelled() => {}
+            Err(e) => {
+                let why = e
+                    .try_into_panic()
+                    .map(|p| panic_text(p.as_ref()))
+                    .unwrap_or_default();
+                tracing::error!("{}: stopped by an internal error: {why}", status.title());
+                status.error(format!("stopped by an internal error: {why}"));
+            }
+        }
+    });
+    handle
+}
+
+/// Longest panic message kept for the card and the log.
+const MAX_PANIC_CHARS: usize = 200;
+
+/// A panic's message, cut to [`MAX_PANIC_CHARS`].
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    let text = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message");
+    match text.char_indices().nth(MAX_PANIC_CHARS) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -504,6 +533,81 @@ mod tests {
         ],
         build: |_| Ok(Box::new(Idle)),
     };
+
+    struct Panics;
+    impl Integration for Panics {
+        fn run(self: Box<Self>, link: Link) -> BoxFuture {
+            Box::pin(async move {
+                link.status.connected("about to fail");
+                tokio::task::yield_now().await;
+                panic!("{}", "a bug ".repeat(100));
+            })
+        }
+    }
+
+    struct Ends;
+    impl Integration for Ends {
+        fn run(self: Box<Self>, _: Link) -> BoxFuture {
+            Box::pin(async {})
+        }
+    }
+
+    async fn wait_for_health(status: &Status, health: Health) {
+        for _ in 0..100 {
+            if status.snapshot().health == health {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("still {:?}", status.snapshot().health);
+    }
+
+    #[tokio::test]
+    async fn a_panic_shows_as_a_failure_and_a_stop_does_not() {
+        let x = Server::new(MachineConfig::default());
+        let status = Status::new("bug", "bug", "Test bug");
+        spawn(&x, Box::new(Panics), status.clone());
+        wait_for_health(&status, Health::Failing).await;
+        let error = status.snapshot().last_error.unwrap();
+        assert!(
+            error.starts_with("stopped by an internal error: a bug a bug"),
+            "{error}"
+        );
+        assert!(error.chars().count() < MAX_PANIC_CHARS + 50, "kept short");
+
+        // Stopped on purpose (removed, or its settings changed): as it was.
+        let status = Status::new("idle", "idle", "Test idle");
+        let handle = spawn(&x, Box::new(Idle), status.clone());
+        wait_for_health(&status, Health::Connected).await;
+        handle.abort();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let snap = status.snapshot();
+        assert_eq!((snap.health, snap.last_error), (Health::Connected, None));
+
+        // Returning is stopping.
+        let status = Status::new("ends", "ends", "Test ends");
+        spawn(&x, Box::new(Ends), status.clone());
+        wait_for_health(&status, Health::Stopped).await;
+
+        // The app's list shows it too.
+        static BUG: Kind = Kind {
+            id: "bug",
+            title: "Test bug",
+            summary: "",
+            icon: "",
+            fields: &[],
+            build: |_| Ok(Box::new(Panics)),
+        };
+        let m = x.integrations();
+        m.start_cli(&x, &BUG, &Settings::new()).unwrap();
+        for _ in 0..100 {
+            if m.list()[0].status.health == Health::Failing {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(m.list()[0].status.health, Health::Failing);
+    }
 
     fn host(h: &str) -> Settings {
         Settings::new().with("host", Some(h))

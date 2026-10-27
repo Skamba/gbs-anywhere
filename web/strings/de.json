@@ -435,6 +435,8 @@
   "integ.detail.la_marzocco.logging_in": "Meldet sich an",
   "integ.detail.la_marzocco.last_coffee": "Letzter Kaffee {age}: {time}\u00a0s, {weight}\u00a0g",
   "integ.detail.la_marzocco.last_coffee_no_weight": "Letzter Kaffee {age}: {time}\u00a0s",
+  "integ.detail.la_marzocco.last_coffee_undated": "Letzter Kaffee: {time}\u00a0s, {weight}\u00a0g",
+  "integ.detail.la_marzocco.last_coffee_undated_no_weight": "Letzter Kaffee: {time}\u00a0s",
   "integ.detail.la_marzocco.no_coffee": "Kein Kaffee in den letzten 7 Tagen",
   "integ.detail.la_marzocco.watching": "Mühle wartet · sucht alle {every}\u00a0s nach dem neuen Kaffee",
   "integ.detail.half_decent.connecting": "Verbindet mit {host}",

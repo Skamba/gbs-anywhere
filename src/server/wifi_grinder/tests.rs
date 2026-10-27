@@ -693,8 +693,7 @@ fn only_a_grinder_that_does_not_answer_is_unreachable() {
 
 #[tokio::test]
 async fn a_closed_port_is_unreachable() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let refused = reqwest::Client::new()
+    let refused = crate::http::client()
         .post("http://127.0.0.1:1/")
         .send()
         .await

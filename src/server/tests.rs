@@ -20,7 +20,6 @@ async fn start() -> String {
 
 /// Like [`start`], also returning the server.
 async fn start_server() -> (String, Arc<Server>) {
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let config = MachineConfig {
         // Long enough for a few polls below, short enough to keep tests fast.
         finishing_hold: Duration::from_millis(300),
@@ -58,7 +57,7 @@ struct Grinder {
 impl Grinder {
     fn new(base: &str) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: crate::http::client(),
             base: base.to_owned(),
             model: GrinderModel::default(),
             accepted: None,
@@ -88,7 +87,7 @@ impl Grinder {
 
 /// Sends a control API request and returns the status code and JSON body.
 async fn call(method: reqwest::Method, url: String, body: Option<Value>) -> (u16, Value) {
-    let mut req = reqwest::Client::new().request(method, url);
+    let mut req = crate::http::client().request(method, url);
     if let Some(body) = body {
         req = req.json(&body);
     }
@@ -224,7 +223,11 @@ async fn a_weight_sent_as_volume_ml_still_counts() {
 #[tokio::test]
 async fn the_app_comes_in_one_response() {
     let base = start().await;
-    let res = reqwest::get(format!("{base}/")).await.unwrap();
+    let res = crate::http::client()
+        .get(format!("{base}/"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
     let kind = res.headers()[reqwest::header::CONTENT_TYPE]
         .to_str()
@@ -243,7 +246,11 @@ async fn browser_icon_requests_are_not_grinder_traffic() {
         "/apple-touch-icon.png",
         "/apple-touch-icon-precomposed.png",
     ] {
-        let res = reqwest::get(format!("{base}{path}")).await.unwrap();
+        let res = crate::http::client()
+            .get(format!("{base}{path}"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(res.status(), 404, "{path}");
     }
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
@@ -255,7 +262,11 @@ async fn browser_icon_requests_are_not_grinder_traffic() {
 async fn other_devices_looking_for_their_kind_are_not_grinder_traffic() {
     let base = start().await;
     // Smart-home discovery on port 80, e.g. for Shelly devices.
-    let res = reqwest::get(format!("{base}/shelly")).await.unwrap();
+    let res = crate::http::client()
+        .get(format!("{base}/shelly"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "answered like any unknown request");
     assert_eq!(res.text().await.unwrap(), "{}");
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
@@ -267,11 +278,19 @@ async fn other_devices_looking_for_their_kind_are_not_grinder_traffic() {
     let mut grinder = Grinder::new(&base);
     grinder.poll().await;
     for path in ["/api/v2/something-new", "/api/v2/"] {
-        let res = reqwest::get(format!("{base}{path}")).await.unwrap();
+        let res = crate::http::client()
+            .get(format!("{base}{path}"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(res.text().await.unwrap(), "{}");
     }
     // Not the grinder's: only starts like its paths.
-    reqwest::get(format!("{base}/api/v2x")).await.unwrap();
+    crate::http::client()
+        .get(format!("{base}/api/v2x"))
+        .send()
+        .await
+        .unwrap();
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
     assert_eq!(state["grinder"]["requests"], 3);
     assert_eq!(state["grinder"]["polls"], 1, "only the poll is a poll");
@@ -418,7 +437,7 @@ async fn control_api_rejects_what_it_cannot_do() {
 
     // A body or query it can't read: malformed, of the wrong shape, or not
     // said to be JSON.
-    let http = reqwest::Client::new();
+    let http = crate::http::client();
     let result = format!("{base}/api/shot/result");
     for req in [
         http.post(&result)
@@ -675,7 +694,9 @@ async fn the_log_is_kept_for_the_app() {
     assert_eq!(after, 0);
     assert_eq!(before["capacity"], 1000);
 
-    let mut stream = reqwest::get(format!("{base}/api/log/stream?after={after}"))
+    let mut stream = crate::http::client()
+        .get(format!("{base}/api/log/stream?after={after}"))
+        .send()
         .await
         .unwrap();
     assert_eq!(
@@ -726,7 +747,7 @@ async fn the_log_is_kept_for_the_app() {
 
     // A browser reconnecting says what it saw last, and gets what it missed;
     // that wins over the query of the URL it reconnects to.
-    let mut again = reqwest::Client::new()
+    let mut again = crate::http::client()
         .get(format!("{base}/api/log/stream?after=0"))
         .header("last-event-id", first.seq.to_string())
         .send()
@@ -1054,7 +1075,7 @@ async fn integrations_are_edited_and_moved_into_the_app() {
 #[tokio::test]
 async fn web_pages_cannot_act_as_the_grinder() {
     let base = start().await;
-    let http = reqwest::Client::new();
+    let http = crate::http::client();
     // A page on another site, posting a start request as a CORS simple
     // request (no preflight), and reading a poll reply.
     let res = http
@@ -1113,7 +1134,7 @@ async fn web_pages_cannot_act_as_the_grinder() {
 #[tokio::test]
 async fn the_app_answers_home_names_only_and_refuses_other_sites() {
     let base = start().await;
-    let http = reqwest::Client::new();
+    let http = crate::http::client();
     let get_state = |host: &'static str| {
         http.get(format!("{base}/api/state"))
             .header("host", host)
@@ -1262,7 +1283,7 @@ async fn browser_headers_can_be_let_through_to_the_grinder_routes() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     spawn_server(listener, app, addr, &state);
-    let res = reqwest::Client::new()
+    let res = crate::http::client()
         .get(format!("http://{addr}{PATH_MAKO}"))
         .header("origin", "null")
         .send()
@@ -1273,7 +1294,6 @@ async fn browser_headers_can_be_let_through_to_the_grinder_routes() {
 
 #[tokio::test]
 async fn stopping_ends_the_live_streams_and_the_server() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let state = Server::with_log(
         MachineConfig::default(),
         Arc::new(LogBook::new(logbook::CAPACITY)),
@@ -1299,7 +1319,11 @@ async fn stopping_ends_the_live_streams_and_the_server() {
     for path in ["/api/events/stream", "/api/log/stream"] {
         let mut res = None;
         for _ in 0..250 {
-            if let Ok(r) = reqwest::get(format!("{base}{path}")).await {
+            if let Ok(r) = crate::http::client()
+                .get(format!("{base}{path}"))
+                .send()
+                .await
+            {
                 res = Some(r);
                 break;
             }
@@ -1326,5 +1350,11 @@ async fn stopping_ends_the_live_streams_and_the_server() {
         asked.elapsed() < STOP_GRACE,
         "without waiting out the grace"
     );
-    assert!(reqwest::get(format!("{base}/api/state")).await.is_err());
+    assert!(
+        crate::http::client()
+            .get(format!("{base}/api/state"))
+            .send()
+            .await
+            .is_err()
+    );
 }
