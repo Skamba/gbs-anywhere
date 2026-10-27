@@ -246,7 +246,7 @@ pub struct Thing {
 
 impl CloudClient {
     pub fn new(cfg: &Config) -> anyhow::Result<Self> {
-        let http = reqwest::Client::builder()
+        let http = crate::http::builder()
             .timeout(HTTP_TIMEOUT)
             .build()
             .context("http client")?;

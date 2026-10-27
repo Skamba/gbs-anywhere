@@ -539,14 +539,13 @@ impl WifiGrinder {
     /// is only read here, and loaded and saved again once that link has
     /// ended (see [`PairingLock`]).
     pub fn new(cfg: WifiConfig, lock: PairingLock) -> anyhow::Result<Self> {
-        let _ = rustls::crypto::ring::default_provider().install_default();
         // Taken before the read: a link that ends in between may have saved.
         let holding = lock.clone().try_lock_owned().ok();
         let (pairing, spare_id) = Pairing::open(&cfg)?;
         if holding.is_some() {
             pairing.save(cfg.pairing_file.as_deref())?;
         }
-        let http = reqwest::Client::builder()
+        let http = crate::http::builder()
             // The grinder's certificate is self-signed and names no host, so it
             // cannot be checked. Requests only go to the configured address,
             // never on to wherever a reply points.

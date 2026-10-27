@@ -431,9 +431,6 @@ fn saved_list(entries: &[Entry]) -> Vec<SavedIntegration> {
 }
 
 fn spawn(server: &Arc<Server>, integration: Box<dyn Integration>, status: Status) -> AbortHandle {
-    // Integrations that speak TLS share rustls; make sure a provider is set
-    // before the first one connects (reqwest leaves it to the application).
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let link = Link {
         server: server.clone(),
         status: status.clone(),

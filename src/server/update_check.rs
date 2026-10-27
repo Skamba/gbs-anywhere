@@ -65,8 +65,7 @@ impl Server {
     /// Starts the task that looks for newer releases while the check is on
     /// (see [`Server::set_update_check`]).
     pub fn start_update_check(self: &Arc<Self>, cfg: UpdateConfig) {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let http = match reqwest::Client::builder()
+        let http = match crate::http::builder()
             .user_agent(format!("gbs-anywhere/{}", crate::version()))
             .timeout(cfg.timeout)
             // Only an answer from this address counts. If the repository is
@@ -491,7 +490,7 @@ mod tests {
             r#"{"tag_name":"nightly"}"#.to_owned(),
         )));
         let url = fake(reply, Arc::default()).await;
-        let http = reqwest::Client::new();
+        let http = crate::http::client();
         let e = latest_release(&http, &url).await.unwrap_err();
         assert!(e.to_string().contains("not vX.Y.Z"), "{e}");
     }
@@ -503,7 +502,7 @@ mod tests {
             r#"{"tag_name":"vv1.2.3"}"#.to_owned(),
         )));
         let url = fake(reply.clone(), Arc::default()).await;
-        let http = reqwest::Client::new();
+        let http = crate::http::client();
         assert!(latest_release(&http, &url).await.is_err());
         *reply.lock().unwrap() = (StatusCode::OK, r#"{"tag_name":"v1.2.3"}"#.to_owned());
         assert_eq!(latest_release(&http, &url).await.unwrap(), "1.2.3");

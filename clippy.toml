@@ -1,0 +1,5 @@
+disallowed-methods = [
+    { path = "reqwest::Client::new", reason = "use crate::http::client(), which installs the TLS crypto provider first" },
+    { path = "reqwest::Client::builder", reason = "use crate::http::builder(), which installs the TLS crypto provider first" },
+    { path = "reqwest::get", reason = "use crate::http::client().get(...), which installs the TLS crypto provider first" },
+]
