@@ -299,16 +299,44 @@
   }
   const reducedMotion = () => !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
+  /** A request to the API. One that fails throws an Error with the
+   *  server's `code`, its English sentence (`server`) and the HTTP
+   *  `status`; errorText() words it. Two codes are the page's own:
+   *  `request_failed` when no answer came (the server restarts, the WiFi
+   *  dropped), `request_status` for an answer without the API's error
+   *  body. */
   async function api(path, opts) {
     const init = Object.assign({ cache: "no-store" }, opts || {});
     if (init.body) init.headers = { "content-type": "application/json" };
-    const r = await fetch(path, init);
+    let r;
+    try { r = await fetch(path, init); }
+    catch (_) { throw apiError("request_failed", "", 0); }
     let body = null;
     try { body = await r.json(); } catch (_) {}
     if (!r.ok) {
-      throw new Error(body && body.error ? sentence(body.error) : t("common.requestFailed", { status: String(r.status) }));
+      const ok = !!body && typeof body === "object";
+      const code = ok && typeof body.code === "string" ? body.code : "request_status";
+      throw apiError(code, ok && typeof body.error === "string" ? body.error : "", r.status);
     }
     return body == null ? {} : body;
+  }
+  function apiError(code, server, status) {
+    const e = new Error(server ? sentence(server) : code);
+    e.code = code; e.server = server; e.status = status;
+    return e;
+  }
+  /** What went wrong with a request, in the person's language: the words
+   *  for its code (`error.<code>`, or `error.<code>.<variant>` where the
+   *  page knows which field it sent), which may show the server's English
+   *  sentence as {error}; else the server's sentence. A test in
+   *  control_api.rs checks that every code the server sends has its
+   *  words. */
+  function errorText(err, variant) {
+    const code = err && err.code;
+    const keys = !code ? [] : variant ? ["error." + code + "." + variant, "error." + code] : ["error." + code];
+    const key = keys.find(hasText);
+    if (key) return t(key, { error: err.server ? sentence(err.server) : "", status: String(err.status || "") });
+    return (err && err.message) || t("error.request_failed");
   }
 
   // --- App state ---------------------------------------------------------------
@@ -1173,7 +1201,7 @@
       await tick();
     } catch (err) {
       busy = false;
-      setHint(t("start.form.notSent", { error: err.message }), true);
+      setHint(t("start.form.notSent", { error: errorText(err) }), true);
     }
   });
   for (const b of document.querySelectorAll("[data-abort]")) {
@@ -1190,7 +1218,7 @@
               await api("/api/shot/abort", { method: "POST" });
               closeSheet();
               tick();
-            } catch (err) { sheetError(t("start.abort.failed", { error: err.message })); btn.disabled = false; }
+            } catch (err) { sheetError(t("start.abort.failed", { error: errorText(err) })); btn.disabled = false; }
           } },
         ],
         returnTo: b,
@@ -1511,7 +1539,7 @@
             closeSheet();
             await tick();
             startEdit(((S && S.integrations) || []).find((x) => x.id === i.id) || Object.assign({}, i, view));
-          } catch (err) { sheetError(err.message); btn.disabled = false; }
+          } catch (err) { sheetError(errorText(err)); btn.disabled = false; }
         } },
       ],
     });
@@ -1544,7 +1572,7 @@
             closeSheet();
             invalidateIntegrations();
             await tick();
-          } catch (err) { sheetError(t("integ.delete.failed", { error: err.message })); btn.disabled = false; }
+          } catch (err) { sheetError(t("integ.delete.failed", { error: errorText(err) })); btn.disabled = false; }
         } },
       ],
       focus: input,
@@ -1593,7 +1621,7 @@
     let saved;
     try { saved = await api("/api/integrations/" + encodeURIComponent(i.id) + "/settings"); }
     catch (err) {
-      return openSheet({ title: t("integ.edit.cant", { title: i.title }), body: [el("p", { class: "body-text", text: err.message })], actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }] });
+      return openSheet({ title: t("integ.edit.cant", { title: i.title }), body: [el("p", { class: "body-text", text: errorText(err) })], actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }] });
     }
     const values = saved.settings || {};
     const secrets = new Set(saved.secrets_set || []);
@@ -1611,7 +1639,7 @@
         await api("/api/integrations/" + encodeURIComponent(i.id), { method: "PUT", body: JSON.stringify({ settings: formValues(fields) }) });
         stopEdit();
         await tick();
-      } catch (err) { setText(error, err.message); error.hidden = false; save.disabled = false; }
+      } catch (err) { setText(error, errorText(err)); error.hidden = false; save.disabled = false; }
     });
     editing = i.id; editForm = form;
     invalidateIntegrations();
@@ -1665,7 +1693,7 @@
       openAdd(false);
       await tick();
     } catch (err) {
-      setText($("add-error"), err.message); $("add-error").hidden = false;
+      setText($("add-error"), errorText(err)); $("add-error").hidden = false;
     } finally { $("add-submit").disabled = false; }
   });
 
@@ -1819,7 +1847,7 @@
         saved = true;
       }
     } catch (x) {
-      if (seq === win.seq) windowNote(t("common.notSaved", { error: x.message }), true);
+      if (seq === win.seq) windowNote(t("common.notSaved", { error: errorText(x) }), true);
     } finally {
       // A newer value waits for its own save.
       if (win.pending === value) win.pending = null;
@@ -1993,7 +2021,7 @@
       tick();
       return true;
     } catch (x) {
-      setText($("set-update-error"), t("common.notSaved", { error: x.message })); $("set-update-error").hidden = false;
+      setText($("set-update-error"), t("common.notSaved", { error: errorText(x) })); $("set-update-error").hidden = false;
       return false;
     } finally {
       updateSaving = false;
@@ -2020,7 +2048,7 @@
     renderStatus();
     if (!open && refocus) focusKebab("grinder");
   }
-  function hostError(x) { setText($("g-host-error"), t("common.notSaved", { error: x.message })); $("g-host-error").hidden = false; }
+  function hostError(x) { setText($("g-host-error"), t("common.notSaved", { error: errorText(x, "host") })); $("g-host-error").hidden = false; }
   $("g-host-cancel").addEventListener("click", () => hostEditor(false, true));
   /** Saves the grinder's address on the server (the grinder card's form and
    *  setup step 1; null for the start address); the server says what it
@@ -2099,7 +2127,7 @@
       histState = "ok";
     } catch (e) {
       // Tried again shortly (see refresh).
-      histState = "failed"; histError = e.message;
+      histState = "failed"; histError = errorText(e);
     }
     histLoading = false;
     renderHistory();
@@ -3554,8 +3582,8 @@
       await tick();
     } catch (x) {
       wz.pair.acceptBusy = false;
-      wz.pair.acceptError = x.message;
-      setupSay(x.message);
+      wz.pair.acceptError = errorText(x);
+      setupSay(wz.pair.acceptError);
     } finally { renderSetup(); }
   }
 
@@ -3576,7 +3604,7 @@
       wz.pair.editHost = false; wz.pair.hostValue = null;
       await tick();
     } catch (x) {
-      wz.pair.hostError = x.message; wz.focus = "wz-host"; setupSay(x.message);
+      wz.pair.hostError = errorText(x, "host"); wz.focus = "wz-host"; setupSay(wz.pair.hostError);
     } finally { wz.pair.hostBusy = false; renderAll(); }
   }
 
@@ -3593,7 +3621,7 @@
       wz.pair.idValue = "";
       await tick();
     } catch (x) {
-      wz.pair.idError = x.message; wz.focus = "wz-id"; setupSay(x.message);
+      wz.pair.idError = errorText(x); wz.focus = "wz-id"; setupSay(wz.pair.idError);
     } finally { wz.pair.idBusy = false; renderSetup(); }
   }
 

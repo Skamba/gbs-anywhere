@@ -964,10 +964,11 @@ mod tests {
         // ternaries the script picks its keys from. A key is never made by
         // adding to a prefix, except for the prefixes in DYNAMIC, whose
         // keys other tests check.
-        const DYNAMIC: [&str; 3] = [
+        const DYNAMIC: [&str; 4] = [
             "kind.",         // kindKey(): integration texts, integration_texts_are_german
             "integ.detail.", // integDetail(): the same
             "history.kind.", // kindLabel(): the_page_knows_every_shot_kind
+            "error.",        // errorText(): the_page_words_every_error_code
         ];
         let de = catalog("de");
         let groups: BTreeSet<&str> = en
@@ -1264,6 +1265,151 @@ mod tests {
         }
         let stale: Vec<_> = rows.keys().filter(|k| !codes.contains(**k)).collect();
         assert!(stale.is_empty(), "not a cause: {stale:?}");
+    }
+
+    /// Every `code` an error reply can carry: the codes of the error types,
+    /// and the literal ones in `error(<status>, "<code>", …)` anywhere in
+    /// `src/` (read from the source, so a new one can't be left out).
+    fn error_codes() -> BTreeSet<String> {
+        use crate::integration::ChangeError;
+        use crate::protocol::MachineError;
+        use crate::server::SettingsError;
+        use crate::server::wifi_grinder::PairingIdRefusal;
+        let machine = [
+            MachineError::NotRunning,
+            MachineError::AlreadyRunning,
+            MachineError::NoWeight,
+        ];
+        let settings = [
+            SettingsError::Save(String::new()),
+            SettingsError::Grinder(String::new()),
+        ];
+        let change = [
+            ChangeError::Invalid(String::new()),
+            ChangeError::NotFound,
+            ChangeError::CommandLine,
+            ChangeError::InApp,
+            ChangeError::NotPersistent,
+            ChangeError::Save(String::new()),
+        ];
+        let pairing = [
+            PairingIdRefusal::NoLink,
+            PairingIdRefusal::NotNeeded,
+            PairingIdRefusal::NotAsking,
+            PairingIdRefusal::NotAccepting,
+            PairingIdRefusal::Busy,
+        ];
+        // No wildcards: a new error has to be named here, next to its list.
+        for e in &machine {
+            match e {
+                MachineError::NotRunning
+                | MachineError::AlreadyRunning
+                | MachineError::NoWeight => {}
+            }
+        }
+        for e in &settings {
+            match e {
+                SettingsError::Save(_) | SettingsError::Grinder(_) => {}
+            }
+        }
+        for e in &change {
+            match e {
+                ChangeError::Invalid(_)
+                | ChangeError::NotFound
+                | ChangeError::CommandLine
+                | ChangeError::InApp
+                | ChangeError::NotPersistent
+                | ChangeError::Save(_) => {}
+            }
+        }
+        for e in pairing {
+            match e {
+                PairingIdRefusal::NoLink
+                | PairingIdRefusal::NotNeeded
+                | PairingIdRefusal::NotAsking
+                | PairingIdRefusal::NotAccepting
+                | PairingIdRefusal::Busy => {}
+            }
+        }
+        let mut codes: BTreeSet<String> = machine
+            .iter()
+            .map(MachineError::code)
+            .chain(settings.iter().map(SettingsError::code))
+            .chain(change.iter().map(ChangeError::code))
+            .chain(pairing.iter().map(PairingIdRefusal::code))
+            .map(str::to_owned)
+            .collect();
+        let mut dirs = vec![Path::new(env!("CARGO_MANIFEST_DIR")).join("src")];
+        let mut literal = BTreeSet::new();
+        while let Some(dir) = dirs.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    dirs.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|e| e != "rs") {
+                    continue;
+                }
+                let source = std::fs::read_to_string(&path).unwrap();
+                for (i, _) in source.match_indices("error(") {
+                    let before = source[..i].chars().next_back();
+                    let line = &source[source[..i].rfind('\n').map_or(0, |n| n + 1)..i];
+                    if before.is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.')
+                        || line.trim_start().starts_with("//")
+                    {
+                        continue;
+                    }
+                    // The status, then the code as a literal.
+                    let args = &source[i + "error(".len()..];
+                    let Some((_, rest)) = args.split_once(',') else {
+                        continue;
+                    };
+                    let Some(rest) = rest.trim_start().strip_prefix('"') else {
+                        continue;
+                    };
+                    let code = &rest[..rest.find('"').unwrap()];
+                    let snake = code.contains('_')
+                        && code.chars().all(|c| c.is_ascii_lowercase() || c == '_');
+                    assert!(snake, "{}: error code {code:?}", path.display());
+                    literal.insert(code.to_owned());
+                }
+            }
+        }
+        for code in [
+            "request_invalid",
+            "request_host_refused",
+            "settings_invalid",
+        ] {
+            assert!(literal.contains(code), "{code} was found in the source");
+        }
+        codes.extend(literal);
+        codes
+    }
+
+    #[test]
+    fn the_page_words_every_error_code() {
+        // The page's own: no answer came, or one without the API's body.
+        let page = ["request_failed", "request_status"];
+        for code in page {
+            assert!(PAGE_JS.contains(&format!("\"{code}\"")), "{code} in app.js");
+        }
+        let mut codes = error_codes();
+        codes.extend(page.map(str::to_owned));
+        let en = catalog("en");
+        let missing: Vec<_> = codes
+            .iter()
+            .filter(|c| !en.contains_key(format!("error.{c}").as_str()))
+            .collect();
+        assert!(missing.is_empty(), "codes without words: {missing:?}");
+        // And none for a code that is gone; `error.<code>.<field>` words
+        // one for a field the page sent.
+        let stale: Vec<_> = en
+            .keys()
+            .filter_map(|k| k.strip_prefix("error."))
+            .filter(|rest| !codes.contains(rest.split('.').next().unwrap()))
+            .collect();
+        assert!(stale.is_empty(), "words for no code: {stale:?}");
     }
 
     #[test]
