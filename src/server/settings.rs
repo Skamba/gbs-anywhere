@@ -18,12 +18,10 @@ use std::time::Duration;
 use anyhow::Context;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
-use tokio::task::AbortHandle;
 
 use crate::integration::Settings;
-use crate::protocol::AbortCause;
 use crate::server::private_file::{make_private, save_private};
-use crate::server::wifi_grinder::{PairingLock, grinder_address};
+use crate::server::wifi_grinder::grinder_address;
 use crate::server::{Server, WifiConfig, WifiGrinder};
 
 /// The shot window unless set (`--shot-window-s`).
@@ -328,17 +326,12 @@ impl SettingsError {
     }
 }
 
-/// The settings as they are now, and the E65/E80 link they started.
+/// The settings as they are now.
 #[derive(Default)]
 pub(super) struct Live {
     startup: Startup,
     app: AppSettings,
     file: Option<Arc<SettingsFile>>,
-    link: Option<RunningLink>,
-}
-
-struct RunningLink {
-    task: AbortHandle,
 }
 
 /// The settings as read from the file, keeping only values the app could
@@ -530,12 +523,12 @@ impl Live {
         out.into()
     }
 
-    /// The link for `host`, ready to run; loads (or makes) the pairing.
-    fn prepare_link(&self, host: &str, lock: PairingLock) -> anyhow::Result<WifiGrinder> {
+    /// The link for `host`, ready to start; loads (or makes) the pairing.
+    fn prepare_link(&self, server: &Server, host: &str) -> anyhow::Result<WifiGrinder> {
         let mut cfg = WifiConfig::from_host(host)?;
         cfg.pairing_file = self.startup.pairing_file.clone();
         cfg.pairing_id = self.startup.pairing_id;
-        WifiGrinder::new(cfg, lock)
+        server.wifi_link(cfg)
     }
 }
 
@@ -574,12 +567,13 @@ impl Server {
             }
         }
         if let (Some(host), from) = now.grinder_host {
-            let lock = self.pairing_lock.clone();
-            let link = live.prepare_link(&host, lock).with_context(|| match from {
+            let link = live.prepare_link(self, &host).with_context(|| match from {
                 SettingSource::App => "the grinder address set in the app".to_owned(),
                 _ => "--grinder".to_owned(),
             })?;
-            self.run_link(&mut live, link);
+            // Under the settings lock, as every start and stop from here, so
+            // they apply in the order the changes came.
+            self.start_wifi_link(link);
         }
         Ok(())
     }
@@ -628,7 +622,7 @@ impl Server {
             // The old link still runs here, and keeps the pairing file until
             // its task has ended (see `PairingLock`).
             Some(host) if relink => Some(
-                live.prepare_link(host, self.pairing_lock.clone())
+                live.prepare_link(self, host)
                     .map_err(|e| SettingsError::Grinder(format!("{e:#}")))?,
             ),
             _ => None,
@@ -654,9 +648,9 @@ impl Server {
             tracing::info!("settings: grinder address is the start setting again");
         }
         if relink {
-            self.stop_link(&mut live);
+            self.stop_wifi_link();
             match link {
-                Some(link) => self.run_link(&mut live, link),
+                Some(link) => self.start_wifi_link(link),
                 None if *host_from == SettingSource::App => tracing::info!(
                     "grinder: address removed in the app (instead of --grinder), link stopped"
                 ),
@@ -664,44 +658,6 @@ impl Server {
             }
         }
         Ok(live.json())
-    }
-
-    fn run_link(self: &Arc<Self>, live: &mut Live, link: WifiGrinder) {
-        if live.startup.pairing_file.is_none() {
-            tracing::warn!(
-                "no --config or --grinder-pairing-file: the pairing lasts until restart"
-            );
-        }
-        tracing::info!("grinder: pairing over Local WiFi with {}", link.base_url());
-        // Taken here, under the settings lock, rather than in the task: an
-        // older link that is still finishing a step can then never take over
-        // again, so only this one reports and gets the pairing IDs typed in
-        // the app.
-        let (owner, ids, accept) = self.attach_wifi();
-        // Shown until the link reports for itself, so the app never sees an
-        // address without a link.
-        self.set_wifi(owner, link.connecting());
-        let task = tokio::spawn(link.run(self.clone(), owner, ids, accept)).abort_handle();
-        live.link = Some(RunningLink { task });
-    }
-
-    /// Stops the running link. A shot it was waiting for (a brew job) can no
-    /// longer reach the grinder, so that brew ends; a knob press of an E64 WS
-    /// on the same server goes on.
-    fn stop_link(&self, live: &mut Live) {
-        let Some(old) = live.link.take() else {
-            return;
-        };
-        // The task ends at its next await; if it is in the middle of a step
-        // right now, what it still reports is ignored once detached, and the
-        // next link waits for it to end before it touches the pairing file.
-        old.task.abort();
-        self.detach_wifi();
-        self.with(|m, now| {
-            if m.brewing_for_brew_job(now) {
-                let _ = m.give_up(now, AbortCause::GrinderAddressChanged);
-            }
-        });
     }
 
     fn live(&self) -> MutexGuard<'_, Live> {

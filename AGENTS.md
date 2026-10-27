@@ -16,21 +16,24 @@ file is for agents changing the code.
   reads the machine's replies (`GrinderModel`, used in tests).
 - `src/server/`: axum. `grinder_api.rs` is what the E64 WS calls
   (`/api/v2/*`); `wifi_grinder.rs` pairs with an E65/E80 GbS and turns its
-  brew jobs into shots of the same machine; `control_api.rs` is the JSON API
-  for people and `page.rs` builds the app page. `browser.rs` keeps web pages out: the app answers
-  only to home-network host names, refuses writes from other sites, and the
+  brew jobs into shots of the same machine, with its parts in
+  `wifi_grinder/` (`pair.rs` the pairing, `jobs.rs` the brew jobs,
+  `slot.rs` the one place that starts and stops the link);
+  `control_api.rs` is the JSON API for people and `page.rs` builds the app
+  page. `browser.rs` keeps web pages out: the app answers only to
+  home-network host names, refuses writes from other sites, and the
   grinder API refuses requests with browser headers. Every control route
   gets these checks through `route_layer`, so a new route needs nothing
   extra. `mod.rs` builds the server and its listeners. Around them:
-  `settings.rs` holds the settings people
-  change in the app (shot window, grinder address, which restarts the
-  E65/E80 link, update check) and is the only writer of the settings file;
-  `history.rs` records the shots from the machine's events; `logbook.rs`
-  keeps the last log lines for the app (a `tracing` layer next to the
-  console output); `update_check.rs` looks for a newer release;
-  `private_file.rs` writes the files only their owner may read (settings,
-  history, pairing, transcript); `utc.rs` formats times. `tests.rs` and `wifi_grinder/tests.rs` hold the end-to-end
-  tests.
+  `settings.rs` holds the settings people change in the app (shot window,
+  grinder address, which restarts the E65/E80 link, update check) and is
+  the only writer of the settings file; `history.rs` records the shots
+  from the machine's events; `logbook.rs` keeps the last log lines for the
+  app (a `tracing` layer next to the console output); `update_check.rs`
+  looks for a newer release; `private_file.rs` writes the files only their
+  owner may read (settings, history, pairing, transcript); `utc.rs` formats
+  times. `tests.rs` and `wifi_grinder/tests.rs` (by topic in
+  `wifi_grinder/tests/`) hold the end-to-end tests.
 - `src/integration/`: optional integrations that report shots by themselves,
   one folder each (see [Integrations](#integrations)). `mod.rs` has the
   shared rules (`Link`), `kind.rs` the setup forms and `manager.rs` the

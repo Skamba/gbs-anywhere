@@ -46,7 +46,7 @@ use axum::extract::connect_info::Connected;
 use axum::serve::IncomingStream;
 pub use browser::AllowedHosts;
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 
 pub use control_api::{ShotInput, control_router, patch_ready, state_json};
 pub use grinder_api::grinder_router;
@@ -65,7 +65,7 @@ pub struct Server {
     transcript: Option<grinder_api::Transcript>,
     integrations: Integrations,
     icons_dir: OnceLock<PathBuf>,
-    /// The shot window and grinder address, and the E65/E80 link.
+    /// The shot window and grinder address.
     settings: Mutex<settings::Live>,
     /// Held by the E65/E80 link that may write the pairing file.
     pairing_lock: wifi_grinder::PairingLock,
@@ -84,14 +84,8 @@ struct Inner {
     machine: Machine,
     published: u64,
     grinder: GrinderLink,
-    /// Pairing IDs for the E65/E80 link, while one runs.
-    wifi_ids: Option<mpsc::Sender<u32>>,
-    /// "I accepted on the grinder" from the app, for the E65/E80 link while
-    /// one is waiting for it.
-    wifi_accept: Option<mpsc::Sender<()>>,
-    /// The E65/E80 link that may report its state: a replaced one may still
-    /// be finishing a step.
-    wifi_owner: u64,
+    /// The E65/E80 link, while one runs.
+    wifi: wifi_grinder::WifiSlot,
 }
 
 /// What we know about the grinder from its requests (or, for an E65/E80
@@ -127,9 +121,7 @@ impl Server {
                 machine: Machine::new(config),
                 published: 0,
                 grinder: GrinderLink::default(),
-                wifi_ids: None,
-                wifi_accept: None,
-                wifi_owner: 0,
+                wifi: wifi_grinder::WifiSlot::default(),
             }),
             events: broadcast::channel(256).0,
             transcript: None,
@@ -177,15 +169,6 @@ impl Server {
     /// Runs `f` on the machine and publishes any events it produced.
     pub fn with<R>(&self, f: impl FnOnce(&mut Machine, Instant) -> R) -> R {
         self.apply(&mut self.lock(), f)
-    }
-
-    /// Like [`Server::with`], for the E65/E80 link `owner`: `None`, and the
-    /// machine untouched, once that link was replaced. Its task may still
-    /// be finishing a step when it is stopped, and must not start or end a
-    /// brew after that.
-    fn with_wifi<R>(&self, owner: u64, f: impl FnOnce(&mut Machine, Instant) -> R) -> Option<R> {
-        let mut inner = self.lock();
-        (inner.wifi_owner == owner).then(|| self.apply(&mut inner, f))
     }
 
     fn apply<R>(&self, inner: &mut Inner, f: impl FnOnce(&mut Machine, Instant) -> R) -> R {
@@ -246,98 +229,6 @@ impl Server {
     /// grinder; a poll makes the app show the grinder as connected.
     fn note_request(&self, peer: Option<SocketAddr>, poll: bool) {
         self.lock().grinder.note(peer, poll);
-    }
-
-    /// A new E65/E80 link starts: it takes the pairing IDs typed in the app
-    /// and the "I accepted" confirmations from now on. Returns its owner
-    /// number for [`Server::set_wifi`] and where those arrive.
-    fn attach_wifi(&self) -> (u64, mpsc::Receiver<u32>, mpsc::Receiver<()>) {
-        // Room for one each: only the latest typed ID, and the latest
-        // confirmation, matter.
-        let (tx, rx) = mpsc::channel(1);
-        let (atx, arx) = mpsc::channel(1);
-        let mut inner = self.lock();
-        inner.wifi_owner += 1;
-        inner.wifi_ids = Some(tx);
-        inner.wifi_accept = Some(atx);
-        (inner.wifi_owner, rx, arx)
-    }
-
-    /// The E65/E80 link stopped: forget what it said. What an E64 WS told
-    /// (its address, request counts) stays; the last poll goes, so the
-    /// grinder no longer shows as connected unless an E64 WS polls.
-    fn detach_wifi(&self) {
-        let mut inner = self.lock();
-        inner.wifi_owner += 1;
-        inner.wifi_ids = None;
-        inner.wifi_accept = None;
-        inner.grinder.wifi = None;
-        inner.grinder.last_poll = None;
-    }
-
-    /// The link's state, unless that link was replaced meanwhile. The time
-    /// it entered its state carries over while the state stays the same
-    /// (`state_age_ms`).
-    fn set_wifi(&self, owner: u64, mut link: WifiLink) {
-        let mut inner = self.lock();
-        if inner.wifi_owner == owner {
-            link.state_since = match &inner.grinder.wifi {
-                Some(old) if old.state == link.state => old.state_since,
-                _ => None,
-            }
-            .or_else(|| Some(Instant::now()));
-            inner.grinder.wifi = Some(link);
-        }
-    }
-
-    /// A poll of an E65/E80 grinder went through.
-    fn note_wifi_poll(&self, owner: u64, peer: Option<SocketAddr>) {
-        let mut inner = self.lock();
-        if inner.wifi_owner == owner {
-            inner.grinder.note(peer, true);
-        }
-    }
-
-    /// Hands the pairing ID an E65/E80 grinder shows to its link, for when
-    /// gbs-anywhere lost it. Taken only while the link asks for one; the link
-    /// checks it with the grinder before keeping it.
-    pub fn use_grinder_pairing_id(&self, id: u32) -> Result<(), PairingIdRefusal> {
-        let (tx, asks, paired) = {
-            let inner = self.lock();
-            let wifi = inner.grinder.wifi.as_ref();
-            let asks = wifi.is_some_and(|w| w.phase == Some(WifiPhase::Asking));
-            let paired = wifi.is_some_and(|w| w.pairing_id.is_some());
-            (inner.wifi_ids.clone(), asks, paired)
-        };
-        let tx = tx.ok_or(PairingIdRefusal::NoLink)?;
-        if !asks {
-            return Err(if paired {
-                PairingIdRefusal::NotNeeded
-            } else {
-                PairingIdRefusal::NotAsking
-            });
-        }
-        tx.try_send(id).map_err(|_| PairingIdRefusal::Busy)
-    }
-
-    /// The person confirmed they accepted gbs-anywhere on the grinder, so the
-    /// E65/E80 link waits a moment, then checks the pairing as confirmed.
-    /// Taken only while the link waits for it.
-    pub fn grinder_accepted(&self) -> Result<(), PairingIdRefusal> {
-        let (tx, awaiting) = {
-            let inner = self.lock();
-            let awaiting = inner
-                .grinder
-                .wifi
-                .as_ref()
-                .is_some_and(|w| w.phase == Some(WifiPhase::Accepting));
-            (inner.wifi_accept.clone(), awaiting)
-        };
-        let tx = tx.ok_or(PairingIdRefusal::NoLink)?;
-        if !awaiting {
-            return Err(PairingIdRefusal::NotAccepting);
-        }
-        tx.try_send(()).map_err(|_| PairingIdRefusal::Busy)
     }
 
     async fn write_transcript(&self, line: &str) {
