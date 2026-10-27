@@ -23,6 +23,7 @@ use axum::response::Response;
 
 use crate::server::Conn;
 use crate::server::control_api::error;
+use crate::server::logbook::printable;
 
 /// Names home networks give their devices, besides IP addresses, `localhost`
 /// and names without a dot. None of them resolves in public DNS, except that
@@ -120,14 +121,14 @@ pub fn from_browser(headers: &HeaderMap) -> bool {
     headers.contains_key(header::ORIGIN) || headers.contains_key("sec-fetch-site")
 }
 
-/// How many different refusals of one kind to one device the log tells
+/// How many different requests of one kind from one device the log tells
 /// apart.
 const TOLD_APART: usize = 64;
 
-/// How many devices the log tells apart for each kind of refusal.
+/// How many devices the log tells apart for each kind of request.
 const DEVICES: usize = 64;
 
-/// The refusals the log has told, so that it tells each once.
+/// What the log has told, so that it tells each once.
 #[derive(Default)]
 struct Told {
     /// By kind, then by device. Requests from an unknown address (a router
@@ -138,14 +139,14 @@ struct Told {
 #[derive(Default)]
 struct Devices {
     seen: HashMap<Option<IpAddr>, Seen>,
-    /// The log said that refusals to further devices go to the debug log.
+    /// The log said that requests from further devices go to the debug log.
     full: bool,
 }
 
 #[derive(Default)]
 struct Seen {
     what: HashSet<String>,
-    /// The log said that further refusals to this device go to the debug
+    /// The log said that further requests from this device go to the debug
     /// log.
     full: bool,
 }
@@ -162,8 +163,8 @@ impl Told {
             Entry::Vacant(_) => {
                 if !std::mem::replace(&mut devices.full, true) {
                     tracing::warn!(
-                        "refused requests ({kind}) from more than {DEVICES} devices; those from \
-                         further devices go to the debug log only"
+                        "{kind}: requests from more than {DEVICES} devices; those from further \
+                         devices go to the debug log only"
                     );
                 }
                 return false;
@@ -179,24 +180,24 @@ impl Told {
         if !std::mem::replace(&mut seen.full, true) {
             let from = peer.map_or_else(|| "an unknown address".to_owned(), |ip| ip.to_string());
             tracing::warn!(
-                "more than {TOLD_APART} different refused requests ({kind}) from {from}; further \
-                 ones from it go to the debug log only"
+                "{kind}: more than {TOLD_APART} different requests from {from}; further ones \
+                 from it go to the debug log only"
             );
         }
         false
     }
 }
 
-/// Whether `what` is refused to the device at `peer` for the first time, so
-/// the log says so once, however often a page tries. Each kind (`host`,
-/// `site`, `grinder`) tells up to [`TOLD_APART`] apart for each device, so a
-/// page on one device can't hide what is refused to another, and a page that
-/// fills one kind can't hide another, such as a real grinder's refusal. Up
-/// to [`DEVICES`] devices are told apart per kind, which keeps the memory
-/// small. Past either limit, the log says once that the rest go to the debug
-/// log. A device is an IP address: behind a reverse proxy, every device
-/// counts as the proxy.
-pub fn first_refusal(kind: &'static str, peer: Option<IpAddr>, what: &str) -> bool {
+/// Whether the device at `peer` sends `what` (a request of `kind`, such as a
+/// refused one) for the first time, so the log says so once, however often
+/// a page or a device tries. Each kind (say, [`REFUSED_HOST`]) tells up to
+/// [`TOLD_APART`] apart for each device, so a page on one device can't hide
+/// what another sends, and a page that fills one kind can't hide another,
+/// such as a real grinder's refusal. Up to [`DEVICES`] devices are told
+/// apart per kind, which keeps the memory small. Past either limit, the log
+/// says once that the rest go to the debug log. A device is an IP address:
+/// behind a reverse proxy, every device counts as the proxy.
+pub fn tell_once(kind: &'static str, peer: Option<IpAddr>, what: &str) -> bool {
     static TOLD: OnceLock<Mutex<Told>> = OnceLock::new();
     TOLD.get_or_init(Mutex::default)
         .lock()
@@ -204,10 +205,17 @@ pub fn first_refusal(kind: &'static str, peer: Option<IpAddr>, what: &str) -> bo
         .first(kind, peer, what)
 }
 
-/// Text from a request, cut short for the log.
-fn short(text: &str) -> String {
-    text.chars().take(64).collect()
+/// Text from a request, cut short and made printable for the log.
+pub fn short(text: &str) -> String {
+    printable(text, 64)
 }
+
+/// Kinds of what [`tell_once`] tells once, as the log names them.
+pub const REFUSED_HOST: &str = "refused host names";
+pub const REFUSED_SITE: &str = "refused requests from other sites";
+pub const REFUSED_GRINDER: &str = "refused requests on the grinder's routes";
+pub const UNKNOWN_GRINDER: &str = "unknown requests on the grinder's routes";
+pub const UNPARSABLE_GRINDER: &str = "unparsable writes on the grinder's routes";
 
 /// For the app's routes: a host name of the home network, and for writes, no
 /// other site.
@@ -228,7 +236,7 @@ pub async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) 
         && (host.is_empty() || !hosts.allows(&host))
     {
         let host = short(&host);
-        if first_refusal("host", peer, &host) {
+        if tell_once(REFUSED_HOST, peer, &host) {
             tracing::warn!(
                 "refused requests for {host:?}: not a name on the home network. --allow-host \
                  lets the app answer to more names, but a web page can also cause this \
@@ -255,7 +263,7 @@ pub async fn guard(State(hosts): State<AllowedHosts>, req: Request, next: Next) 
             .extensions()
             .get::<MatchedPath>()
             .map_or_else(|| path.clone(), |m| m.as_str().to_owned());
-        if first_refusal("site", peer, &format!("{method} {route}")) {
+        if tell_once(REFUSED_SITE, peer, &format!("{method} {route}")) {
             tracing::warn!("refused {method} {path} requested by another site");
         } else {
             tracing::debug!("refused {method} {path} requested by another site");
@@ -305,7 +313,7 @@ mod tests {
             told.kinds["site"].seen[&LAPTOP]
                 .what
                 .iter()
-                .all(|w| w.len() <= 64)
+                .all(|w| w.chars().count() <= 65)
         );
     }
 

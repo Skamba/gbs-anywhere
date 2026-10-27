@@ -273,9 +273,63 @@ async fn other_devices_looking_for_their_kind_are_not_grinder_traffic() {
     // Not the grinder's: only starts like its paths.
     reqwest::get(format!("{base}/api/v2x")).await.unwrap();
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
-    assert_eq!(state["grinder"]["requests"], 3);
+    assert_eq!(state["grinder"]["requests"], 1, "only the grinder's own");
     assert_eq!(state["grinder"]["polls"], 1, "only the poll is a poll");
     assert_ne!(state["grinder"]["peer"], Value::Null);
+}
+
+#[tokio::test]
+async fn only_the_grinders_own_requests_say_where_it_is() {
+    use tracing_subscriber::layer::SubscriberExt;
+    let (base, x) = start_server().await;
+    // The log as the binary keeps it, for this test's thread (and so its
+    // server) only.
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::registry().with(LogLayer::new(x.log().clone())),
+    );
+    let http = reqwest::Client::new();
+    // Any device can send these, a web page's plain read included.
+    let unknown = format!("/api/v2/routes-test-{}", uuid::Uuid::new_v4().simple());
+    let long = format!("/api/v2/routes-test-{}", "y".repeat(10_000));
+    for _ in 0..3 {
+        for path in [&unknown, &long] {
+            let res = http.get(format!("{base}{path}")).send().await.unwrap();
+            assert_eq!(res.text().await.unwrap(), "{}");
+        }
+        for path in [PATH_BREWRATIO, PATH_SCRIPTS_EXECUTE] {
+            let res = http.post(format!("{base}{path}")).body("nope").send();
+            assert_eq!(res.await.unwrap().status(), 200, "answered as before");
+        }
+    }
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["grinder"]["peer"], Value::Null);
+    assert_eq!(state["grinder"]["requests"], 0);
+    assert_eq!(state["grinder"]["last_poll_age_ms"], Value::Null);
+
+    // Each is told once per device, in one short line.
+    let (lines, _) = x.log().after(0);
+    let told = |what: &str| -> Vec<String> {
+        lines
+            .iter()
+            .filter(|l| l.text.contains(what))
+            .map(|l| l.text.clone())
+            .collect()
+    };
+    let unknown_told = told("unknown grinder request");
+    assert_eq!(unknown_told.len(), 2, "{unknown_told:#?}");
+    assert!(
+        unknown_told.iter().all(|l| l.len() < 300),
+        "{unknown_told:#?}"
+    );
+    let unparsable = told("unparsable grinder write");
+    assert_eq!(unparsable.len(), 2, "{unparsable:#?}");
+    assert_eq!(lines.len(), 4, "nothing else: {lines:#?}");
+
+    let mut grinder = Grinder::new(&base);
+    grinder.poll().await;
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_ne!(state["grinder"]["peer"], Value::Null);
+    assert_eq!(state["grinder"]["requests"], 1);
 }
 
 #[tokio::test]

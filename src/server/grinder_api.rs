@@ -14,7 +14,9 @@ use axum::routing::any;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 
-use crate::server::browser::{first_refusal, from_browser};
+use crate::server::browser::{
+    REFUSED_GRINDER, UNKNOWN_GRINDER, UNPARSABLE_GRINDER, from_browser, short, tell_once,
+};
 use crate::server::{Conn, Server};
 
 /// The grinder's writes are a few dozen bytes; anything much bigger is not
@@ -31,11 +33,13 @@ struct AcceptBrowsers(bool);
 
 /// Every path goes through one handler so nothing the grinder sends is
 /// missed; unknown requests are answered with `{}`. An unknown request under
-/// `/api/v2/` is logged and counts as the grinder (a newer firmware may ask
+/// `/api/v2/` is logged, once per device and path (a newer firmware may ask
 /// for more); anything else comes from other devices on the network looking
-/// for their own kind, so it is logged at debug level only. Requests with a
-/// browser's headers, and bodies far bigger than the grinder's, are refused,
-/// so a web page cannot act as the grinder.
+/// for their own kind, so it is logged at debug level only. Only the
+/// grinder's own requests count as the grinder (its address, its polls):
+/// any device can send the others. Requests with a browser's headers, and
+/// bodies far bigger than the grinder's, are refused, so a web page cannot
+/// act as the grinder.
 pub fn grinder_router(state: Arc<Server>, accept_browsers: bool) -> axum::Router {
     axum::Router::new()
         .fallback(any(handle))
@@ -65,9 +69,10 @@ async fn handle(
     let refuse = async |code: StatusCode, why: &str, hint: Option<&str>| {
         match hint {
             Some(hint)
-                if grinder_path(uri.path()) && first_refusal("grinder", Some(peer.ip()), why) =>
+                if grinder_path(uri.path()) && tell_once(REFUSED_GRINDER, Some(peer.ip()), why) =>
             {
-                tracing::warn!("{peer}: refused {method} {uri}: {why}. {hint}");
+                let (method, path) = (short(method.as_str()), short(uri.path()));
+                tracing::warn!("{peer}: refused {method} {path}: {why}. {hint}");
             }
             _ => tracing::debug!("{peer} {method} {uri}: refused, {why}"),
         }
@@ -108,10 +113,15 @@ async fn handle(
     };
     let req = GrinderRequest::classify(method.as_str(), uri.path(), &body);
     let poll = matches!(req, GrinderRequest::PollMako);
-    let grinder = match &req {
-        GrinderRequest::Other { path, .. } => grinder_path(path),
-        _ => true,
-    };
+    // Only what the grinder asks tells where it is; anything on the network
+    // can send an unknown or broken request.
+    let grinder = matches!(
+        req,
+        GrinderRequest::Identity
+            | GrinderRequest::PollMako
+            | GrinderRequest::GrindResult(_)
+            | GrinderRequest::StartBrew(_)
+    );
     if grinder {
         x.note_request(Some(peer), poll);
     }
@@ -133,31 +143,37 @@ async fn handle(
             x.with(|m, now| m.on_start_request(now, s.script_id));
             json!({})
         }
+        // Told once per device and path, however often it comes.
         GrinderRequest::Malformed { path, error } => {
-            tracing::warn!("unparsable grinder write to {path}: {error}");
+            let path = short(path);
+            if tell_once(UNPARSABLE_GRINDER, Some(peer.ip()), &path) {
+                tracing::warn!("{peer}: unparsable grinder write to {path}: {error}");
+            } else {
+                tracing::debug!("{peer}: unparsable grinder write to {path}: {error}");
+            }
             json!({})
         }
         GrinderRequest::Other { method, path } => {
-            if grinder {
-                tracing::info!("unhandled grinder request {method} {path}");
+            let request = format!("{} {}", short(method), short(path));
+            if !grinder_path(path) {
+                tracing::debug!("{peer}: not a grinder request: {request}");
+            } else if tell_once(UNKNOWN_GRINDER, Some(peer.ip()), &request) {
+                tracing::info!("{peer}: unknown grinder request {request}, answered with {{}}");
             } else {
-                tracing::debug!("not a grinder request: {method} {path}");
+                tracing::debug!("{peer}: unknown grinder request {request}");
             }
             json!({})
         }
     };
 
     let text = reply.to_string();
-    // A grind and a start are logged as the machine's events (see
-    // `print_events`), so their raw requests are only for debugging.
-    let described = matches!(
-        req,
-        GrinderRequest::GrindResult(_) | GrinderRequest::StartBrew(_)
-    );
-    if poll || !grinder || described {
-        tracing::debug!("{peer} {method} {uri} -> {text}");
+    // Polls come every 2 s; a grind and a start are logged as the machine's
+    // events (see `print_events`), the rest above. Only the identity request
+    // is left, which the grinder sends when it connects.
+    if matches!(req, GrinderRequest::Identity) {
+        tracing::info!("{peer} {method} {} -> {text}", short(uri.path()));
     } else {
-        tracing::info!("{peer} {method} {uri} -> {text}");
+        tracing::debug!("{peer} {method} {uri} -> {text}");
     }
     let mut line = format!("{} {peer} {method} {uri}", unix_time());
     if !body.is_empty() {
