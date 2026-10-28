@@ -230,8 +230,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # build-release.sh builds cargo-deb into target/tools; pull requests
-      # keep it, per version and architecture. Releases build it afresh.
+      # build-release.sh builds cargo-deb into target/tools. A pull request
+      # builds it once and keeps it for its later pushes, per version and
+      # architecture (a pull request's cache is its own, and this job doesn't
+      # run on main to share one). Releases build it afresh.
       - name: cargo-deb version
         if: github.event_name == 'pull_request'
         run: echo "CARGO_DEB=$(sed -n 's/^CARGO_DEB=//p' packaging/build-release.sh)" >> "$GITHUB_ENV"

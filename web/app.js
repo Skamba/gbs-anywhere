@@ -2754,6 +2754,9 @@
     // focus goes back to the same head, field or answer (see patch).
     const sig = JSON.stringify([lang, wz.kind, at, cards, states, wz.open, F ? F.sig(at) : null]);
     if (sig !== wz.sig) {
+      // A new setup starts from new cards: the old ones may still hold
+      // what was typed into a setup closed before, which this one doesn't know.
+      if (!wz.sig) { repatch($("wz-bars")); repatch($("wz-steps")); }
       wz.sig = sig;
       patch($("wz-bars"), sig, () => steps.map((n) => el("span", { class: "wz-bar " + F.card(n, at) })));
       patch($("wz-steps"), sig, () => [
