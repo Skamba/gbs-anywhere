@@ -16,7 +16,7 @@ use super::{EXTRACTION_STATUS_USER_ABORT, MAX_EXTRACTION_TIME_MS, MakoState};
 /// The grinder's internal brew state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum BrewState {
+pub(crate) enum BrewState {
     Idle = 0,
     /// The machine brews without the grinder having asked (flush/manual shot).
     Flushing = 1,
@@ -36,7 +36,7 @@ pub enum BrewState {
 /// Something the grinder would do in reaction to a mako reply.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum GrinderEvent {
+pub(crate) enum GrinderEvent {
     /// The brew state changed.
     BrewState { from: BrewState, to: BrewState },
     /// A shot result was accepted and handed to the dial-in algorithm.
@@ -47,7 +47,7 @@ pub enum GrinderEvent {
 
 /// Replays mako replies through the grinder's brew logic.
 #[derive(Debug, Clone)]
-pub struct GrinderModel {
+pub(crate) struct GrinderModel {
     status: i64,
     extraction_status: i64,
     brew_state: BrewState,
@@ -64,19 +64,19 @@ impl Default for GrinderModel {
 }
 
 impl GrinderModel {
-    pub fn brew_state(&self) -> BrewState {
+    pub(crate) fn brew_state(&self) -> BrewState {
         self.brew_state
     }
 
     /// The knob press after a grind.
-    pub fn request_start(&mut self) -> Vec<GrinderEvent> {
+    pub(crate) fn request_start(&mut self) -> Vec<GrinderEvent> {
         let mut out = Vec::new();
         self.set(BrewState::Starting, &mut out);
         out
     }
 
     /// Feeds one mako reply.
-    pub fn observe(&mut self, s: &MakoState) -> Vec<GrinderEvent> {
+    pub(crate) fn observe(&mut self, s: &MakoState) -> Vec<GrinderEvent> {
         self.observe_raw(
             s.status.code(),
             s.extraction_status,
@@ -87,7 +87,7 @@ impl GrinderModel {
 
     /// Feeds one mako reply given as raw values (status codes the typed enum
     /// cannot hold are allowed; the grinder ignores them).
-    pub fn observe_raw(
+    pub(crate) fn observe_raw(
         &mut self,
         status: i64,
         extraction_status: i64,

@@ -12,7 +12,7 @@ use super::{
 /// Serialized as its integer code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(into = "i64", try_from = "i64")]
-pub enum MachineStatus {
+pub(crate) enum MachineStatus {
     Off = 0,
     On = 1,
     Eco = 2,
@@ -26,7 +26,7 @@ pub enum MachineStatus {
 }
 
 impl MachineStatus {
-    pub const ALL: [MachineStatus; 7] = [
+    pub(crate) const ALL: [MachineStatus; 7] = [
         Self::Off,
         Self::On,
         Self::Eco,
@@ -36,25 +36,12 @@ impl MachineStatus {
         Self::Fault,
     ];
 
-    pub fn code(self) -> i64 {
+    pub(crate) fn code(self) -> i64 {
         self as i64
     }
 
-    pub fn from_code(code: i64) -> Option<Self> {
+    pub(crate) fn from_code(code: i64) -> Option<Self> {
         Self::ALL.into_iter().find(|s| s.code() == code)
-    }
-
-    /// The grinder's own name for the state.
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Off => "OFF",
-            Self::On => "ON",
-            Self::Eco => "ECO",
-            Self::ActiveServing => "ACTIVE SERVING",
-            Self::ActiveFinishing => "ACTIVE FINISHING",
-            Self::Testing => "TESTING",
-            Self::Fault => "FAULT",
-        }
     }
 }
 
@@ -77,31 +64,31 @@ impl TryFrom<i64> for MachineStatus {
 /// can parse a partial reply.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
-pub struct MakoState {
+pub(crate) struct MakoState {
     /// Measured shot time. The value the dial-in algorithm consumes.
     #[serde(rename = "REAL_EXTRACTION_TIME_MS")]
-    pub real_extraction_time_ms: u32,
+    pub(crate) real_extraction_time_ms: u32,
     /// Pump flow-meter volume, reported to the grinder as the brew volume.
     #[serde(rename = "PU_SENS_FLOW_METER_VOLUME")]
-    pub flow_meter_volume_ml: f64,
+    pub(crate) flow_meter_volume_ml: f64,
     #[serde(rename = "BG_SET_TEMP")]
-    pub bg_set_temp: f64,
+    pub(crate) bg_set_temp: f64,
     #[serde(rename = "BG_SENS_TEMP")]
-    pub bg_sens_temp: f64,
+    pub(crate) bg_sens_temp: f64,
     /// `1` means full; anything else blocks grinding ("tank is empty").
     #[serde(rename = "TANK_LEVEL")]
-    pub tank_level: i64,
+    pub(crate) tank_level: i64,
     /// Name of the running machine script. Stored by the grinder, not acted on.
     #[serde(rename = "script")]
-    pub script: String,
+    pub(crate) script: String,
     /// Machine timestamp. Stored by the grinder, not acted on; format unknown.
     #[serde(rename = "TIMESTAMP")]
-    pub timestamp: String,
+    pub(crate) timestamp: String,
     /// Extraction phase. Only `2` (user abort) is special to the grinder.
     #[serde(rename = "MA_EXTRACTION_STATUS")]
-    pub extraction_status: i64,
+    pub(crate) extraction_status: i64,
     #[serde(rename = "MA_STATUS")]
-    pub status: MachineStatus,
+    pub(crate) status: MachineStatus,
 }
 
 impl Default for MakoState {
@@ -123,18 +110,18 @@ impl Default for MakoState {
 
 impl MakoState {
     /// Heated enough for the grinder to allow grinding.
-    pub fn is_ready_heated(&self) -> bool {
+    pub(crate) fn is_ready_heated(&self) -> bool {
         self.bg_sens_temp > self.bg_set_temp - HEATED_TOLERANCE_C
     }
 
     /// Tank full, as the grinder sees it.
-    pub fn is_tank_full(&self) -> bool {
+    pub(crate) fn is_tank_full(&self) -> bool {
         self.tank_level == TANK_LEVEL_FULL
     }
 
     /// Why the grinder would refuse to grind with this reply, or `None` if it
     /// allows it (for a connected machine).
-    pub fn grind_blocked(&self) -> Option<GrindBlocked> {
+    pub(crate) fn grind_blocked(&self) -> Option<GrindBlocked> {
         use MachineStatus::*;
         match self.status {
             On | ActiveFinishing if !self.is_ready_heated() => Some(GrindBlocked::MachineWarmingUp),
@@ -153,7 +140,7 @@ impl MakoState {
 /// `grinder.grind_blocked` in `GET /api/state`), with its on-screen text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum GrindBlocked {
+pub(crate) enum GrindBlocked {
     ShotRunning,
     MachineInStandby,
     MachineInEco,
@@ -164,7 +151,21 @@ pub enum GrindBlocked {
 }
 
 impl GrindBlocked {
-    pub fn grinder_message(self) -> &'static str {
+    /// Every cause, one entry per variant, for the tests that check the
+    /// page words each.
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 7] = [
+        Self::ShotRunning,
+        Self::MachineInStandby,
+        Self::MachineInEco,
+        Self::MachineTesting,
+        Self::MachineFaulty,
+        Self::MachineWarmingUp,
+        Self::MachineTankEmpty,
+    ];
+
+    /// What the grinder shows on its screen, in English.
+    pub(crate) fn grinder_message(self) -> &'static str {
         match self {
             Self::MachineInStandby => "Xenia is in standby. Please wake it up.",
             Self::MachineInEco => "Xenia is in ECO state. Please wake it up.",
@@ -186,27 +187,27 @@ impl GrindBlocked {
 #[serde(default)]
 pub struct MachineIdentity {
     #[serde(rename = "MA_TYPE")]
-    pub machine_type: i64,
+    pub(crate) machine_type: i64,
     #[serde(rename = "MA_SUBTYPE")]
-    pub machine_subtype: i64,
+    pub(crate) machine_subtype: i64,
     #[serde(rename = "MA_SN")]
     pub serial: String,
     #[serde(rename = "FW_VERSION_MAJOR")]
-    pub fw_major: i64,
+    pub(crate) fw_major: i64,
     #[serde(rename = "FW_VERSION_MINOR")]
-    pub fw_minor: i64,
+    pub(crate) fw_minor: i64,
     #[serde(rename = "ESP_FW_MAJOR")]
-    pub esp_fw_major: i64,
+    pub(crate) esp_fw_major: i64,
     #[serde(rename = "ESP_FW_MINOR")]
-    pub esp_fw_minor: i64,
+    pub(crate) esp_fw_minor: i64,
     #[serde(rename = "MA_MAX_AMPERE")]
-    pub max_ampere: i64,
+    pub(crate) max_ampere: i64,
     #[serde(rename = "MA_FIX_WATER_SUPPLY")]
-    pub fix_water_supply: i64,
+    pub(crate) fix_water_supply: i64,
     #[serde(rename = "BLE")]
-    pub ble: i64,
+    pub(crate) ble: i64,
     #[serde(rename = "MA_DELAY")]
-    pub delay: i64,
+    pub(crate) delay: i64,
 }
 
 impl Default for MachineIdentity {
@@ -237,11 +238,11 @@ pub struct GrindResult {
     /// numbers and strings are accepted and kept as text.
     pub filter: Option<String>,
     /// The whole body, for anything not modelled yet.
-    pub raw: Value,
+    pub(crate) raw: Value,
 }
 
 impl GrindResult {
-    pub fn parse(body: &[u8]) -> Result<Self, serde_json::Error> {
+    pub(crate) fn parse(body: &[u8]) -> Result<Self, serde_json::Error> {
         let raw: Value = serde_json::from_slice(body)?;
         Ok(Self {
             target_weight_g: raw.get("SYNC_BEVERAGE_WEIGHT").and_then(number_like),
@@ -253,13 +254,13 @@ impl GrindResult {
 
 /// Body of `POST /api/v2/scripts/execute`: `{"ID": 9}` to start a brew.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct StartBrew {
-    pub script_id: Option<i64>,
-    pub raw: Value,
+pub(crate) struct StartBrew {
+    pub(crate) script_id: Option<i64>,
+    pub(crate) raw: Value,
 }
 
 impl StartBrew {
-    pub fn parse(body: &[u8]) -> Result<Self, serde_json::Error> {
+    pub(crate) fn parse(body: &[u8]) -> Result<Self, serde_json::Error> {
         let raw: Value = serde_json::from_slice(body)?;
         Ok(Self {
             script_id: raw.get("ID").and_then(number_like).map(|n| n as i64),
@@ -271,7 +272,7 @@ impl StartBrew {
 /// A request from the grinder, classified by method and path.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum GrinderRequest {
+pub(crate) enum GrinderRequest {
     /// `GET /api/v2/machine`.
     Identity,
     /// `GET /api/v2/mako`.
@@ -287,7 +288,7 @@ pub enum GrinderRequest {
 }
 
 impl GrinderRequest {
-    pub fn classify(method: &str, path: &str, body: &[u8]) -> Self {
+    pub(crate) fn classify(method: &str, path: &str, body: &[u8]) -> Self {
         let p = path.trim_end_matches('/');
         let malformed = |e: serde_json::Error| Self::Malformed {
             path: p.to_owned(),

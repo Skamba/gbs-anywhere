@@ -16,7 +16,7 @@ use crate::server::settings::{SavedIntegration, SettingsFile};
 /// Where an integration came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Source {
+pub(crate) enum Source {
     /// Flags or environment variables; only those can turn it off.
     CommandLine,
     /// Added in the app; can be removed there.
@@ -25,30 +25,30 @@ pub enum Source {
 
 /// An integration as the API shows it.
 #[derive(Debug, Clone, Serialize)]
-pub struct View {
+pub(crate) struct View {
     #[serde(flatten)]
-    pub status: StatusSnapshot,
-    pub source: Source,
+    pub(crate) status: StatusSnapshot,
+    pub(crate) source: Source,
     /// Set on the command line and can be moved into the app (there is a
     /// settings file to keep it in).
-    pub adoptable: bool,
+    pub(crate) adoptable: bool,
     /// Moved into the app from the command line: deleting it lets its flags
     /// start it again at the next start.
-    pub from_command_line: bool,
+    pub(crate) from_command_line: bool,
 }
 
 /// The settings of an integration added in the app, as the app may see them
 /// to edit it: no passwords, only which of them are set.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct FormView {
-    pub kind: String,
-    pub settings: BTreeMap<String, String>,
-    pub secrets_set: Vec<String>,
+pub(crate) struct FormView {
+    pub(crate) kind: String,
+    pub(crate) settings: BTreeMap<String, String>,
+    pub(crate) secrets_set: Vec<String>,
 }
 
 /// Why a change failed. Nothing changed in any case.
 #[derive(Debug, PartialEq)]
-pub enum ChangeError {
+pub(crate) enum ChangeError {
     /// The settings do not work for this integration.
     Invalid(String),
     NotFound,
@@ -83,7 +83,7 @@ impl std::error::Error for ChangeError {}
 
 impl ChangeError {
     /// As a fixed code, for `code` in the API's errors.
-    pub fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::Invalid(_) => "integration_settings_invalid",
             Self::NotFound => "integration_not_found",
@@ -123,17 +123,17 @@ pub struct Integrations {
 }
 
 impl Integrations {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    pub fn list(&self) -> Vec<View> {
+    pub(crate) fn list(&self) -> Vec<View> {
         let persistent = self.persistent();
         self.lock().iter().map(|e| view(e, persistent)).collect()
     }
 
     /// Whether integrations added in the app survive a restart.
-    pub fn persistent(&self) -> bool {
+    pub(crate) fn persistent(&self) -> bool {
         self.file.get().is_some()
     }
 
@@ -170,7 +170,7 @@ impl Integrations {
 
     /// Adds one from the app: checks the settings, saves them and starts it.
     /// Returns its id.
-    pub fn add(
+    pub(crate) fn add(
         &self,
         server: &Arc<Server>,
         kind: &'static Kind,
@@ -206,7 +206,7 @@ impl Integrations {
     }
 
     /// Stops and forgets one that was added in the app.
-    pub fn remove(&self, id: &str) -> Result<(), ChangeError> {
+    pub(crate) fn remove(&self, id: &str) -> Result<(), ChangeError> {
         let mut entries = self.lock();
         let i = entries
             .iter()
@@ -228,7 +228,7 @@ impl Integrations {
     }
 
     /// The settings of one added in the app, for editing: passwords left out.
-    pub fn form(&self, id: &str) -> Result<FormView, ChangeError> {
+    pub(crate) fn form(&self, id: &str) -> Result<FormView, ChangeError> {
         let entries = self.lock();
         let entry = entries
             .iter()
@@ -253,7 +253,7 @@ impl Integrations {
 
     /// Changes the settings of one added in the app and restarts it. A
     /// password left out or empty keeps its saved value.
-    pub fn update(
+    pub(crate) fn update(
         &self,
         server: &Arc<Server>,
         id: &str,
@@ -300,7 +300,7 @@ impl Integrations {
     /// saved as an app entry with the same id, marked as moved. While that
     /// entry is in the settings file, the flags are ignored. It keeps
     /// running as it is.
-    pub fn adopt(&self, id: &str) -> Result<View, ChangeError> {
+    pub(crate) fn adopt(&self, id: &str) -> Result<View, ChangeError> {
         if !self.persistent() {
             return Err(ChangeError::NotPersistent);
         }
@@ -430,19 +430,48 @@ fn saved_list(entries: &[Entry]) -> Vec<SavedIntegration> {
     entries.iter().filter_map(|e| e.saved.clone()).collect()
 }
 
+/// Runs the integration, and watches how its task ends: returning marks it
+/// stopped, a panic as failing (and goes to the log, which the app shows).
+/// Stopping it with the returned handle, as a removal or a settings change
+/// does, is not a failure.
 fn spawn(server: &Arc<Server>, integration: Box<dyn Integration>, status: Status) -> AbortHandle {
-    // Integrations that speak TLS share rustls; make sure a provider is set
-    // before the first one connects (reqwest leaves it to the application).
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let link = Link {
         server: server.clone(),
         status: status.clone(),
     };
+    let task = tokio::spawn(async move { integration.run(link).await });
+    let handle = task.abort_handle();
     tokio::spawn(async move {
-        integration.run(link).await;
-        status.stopped();
-    })
-    .abort_handle()
+        match task.await {
+            Ok(()) => status.stopped(),
+            Err(e) if e.is_cancelled() => {}
+            Err(e) => {
+                let why = e
+                    .try_into_panic()
+                    .map(|p| panic_text(p.as_ref()))
+                    .unwrap_or_default();
+                tracing::error!("{}: stopped by an internal error: {why}", status.title());
+                status.error(format!("stopped by an internal error: {why}"));
+            }
+        }
+    });
+    handle
+}
+
+/// Longest panic message kept for the card and the log.
+const MAX_PANIC_CHARS: usize = 200;
+
+/// A panic's message, cut to [`MAX_PANIC_CHARS`].
+fn panic_text(payload: &(dyn std::any::Any + Send)) -> String {
+    let text = payload
+        .downcast_ref::<&str>()
+        .copied()
+        .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+        .unwrap_or("no message");
+    match text.char_indices().nth(MAX_PANIC_CHARS) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_owned(),
+    }
 }
 
 #[cfg(test)]
@@ -450,7 +479,7 @@ mod tests {
     use super::*;
     use crate::integration::{BoxFuture, Field, Health, Input};
     use crate::protocol::MachineConfig;
-    use std::path::PathBuf;
+    use crate::test_support::temp_dir;
 
     struct Idle;
     impl Integration for Idle {
@@ -505,6 +534,81 @@ mod tests {
         build: |_| Ok(Box::new(Idle)),
     };
 
+    struct Panics;
+    impl Integration for Panics {
+        fn run(self: Box<Self>, link: Link) -> BoxFuture {
+            Box::pin(async move {
+                link.status.connected("about to fail");
+                tokio::task::yield_now().await;
+                panic!("{}", "a bug ".repeat(100));
+            })
+        }
+    }
+
+    struct Ends;
+    impl Integration for Ends {
+        fn run(self: Box<Self>, _: Link) -> BoxFuture {
+            Box::pin(async {})
+        }
+    }
+
+    async fn wait_for_health(status: &Status, health: Health) {
+        for _ in 0..100 {
+            if status.snapshot().health == health {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!("still {:?}", status.snapshot().health);
+    }
+
+    #[tokio::test]
+    async fn a_panic_shows_as_a_failure_and_a_stop_does_not() {
+        let x = Server::new(MachineConfig::default());
+        let status = Status::new("bug", "bug", "Test bug");
+        spawn(&x, Box::new(Panics), status.clone());
+        wait_for_health(&status, Health::Failing).await;
+        let error = status.snapshot().last_error.unwrap();
+        assert!(
+            error.starts_with("stopped by an internal error: a bug a bug"),
+            "{error}"
+        );
+        assert!(error.chars().count() < MAX_PANIC_CHARS + 50, "kept short");
+
+        // Stopped on purpose (removed, or its settings changed): as it was.
+        let status = Status::new("idle", "idle", "Test idle");
+        let handle = spawn(&x, Box::new(Idle), status.clone());
+        wait_for_health(&status, Health::Connected).await;
+        handle.abort();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let snap = status.snapshot();
+        assert_eq!((snap.health, snap.last_error), (Health::Connected, None));
+
+        // Returning is stopping.
+        let status = Status::new("ends", "ends", "Test ends");
+        spawn(&x, Box::new(Ends), status.clone());
+        wait_for_health(&status, Health::Stopped).await;
+
+        // The app's list shows it too.
+        static BUG: Kind = Kind {
+            id: "bug",
+            title: "Test bug",
+            summary: "",
+            icon: "",
+            fields: &[],
+            build: |_| Ok(Box::new(Panics)),
+        };
+        let m = x.integrations();
+        m.start_cli(&x, &BUG, &Settings::new()).unwrap();
+        for _ in 0..100 {
+            if m.list()[0].status.health == Health::Failing {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert_eq!(m.list()[0].status.health, Health::Failing);
+    }
+
     fn host(h: &str) -> Settings {
         Settings::new().with("host", Some(h))
     }
@@ -521,13 +625,6 @@ mod tests {
             .into_iter()
             .map(|v| v.status.id)
             .collect()
-    }
-
-    fn temp_file(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("gbs-anywhere-test-{name}-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("settings.json")
     }
 
     fn open(path: &std::path::Path) -> Arc<SettingsFile> {
@@ -563,7 +660,7 @@ mod tests {
 
     #[tokio::test]
     async fn the_settings_file_keeps_app_entries() {
-        let path = temp_file("keep");
+        let path = temp_dir("keep").join("settings.json");
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
         m.start_cli(&x, &SCALE, &host("cli")).unwrap();
@@ -604,7 +701,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_save_changes_nothing() {
-        let path = temp_file("fail");
+        let path = temp_dir("fail").join("settings.json");
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
         m.start_cli(&x, &SCALE, &host("cli")).unwrap();
@@ -635,7 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn edit_keeps_the_saved_password() {
-        let path = temp_file("edit");
+        let path = temp_dir("edit").join("settings.json");
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
         m.load(&x, open(&path), &[&CLOUD]).unwrap();
@@ -679,7 +776,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_command_line_one_moves_into_the_app() {
-        let path = temp_file("adopt");
+        let path = temp_dir("adopt").join("settings.json");
         let x = Server::new(MachineConfig::default());
         let m = x.integrations();
         let cli = login("me@example.com", "secret");

@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 use std::fmt::Write as _;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use serde::Serialize;
 use tokio::sync::broadcast;
@@ -17,19 +17,24 @@ use tracing::{Event, Level, Subscriber};
 use tracing_subscriber::layer::{Context, Layer};
 
 /// Lines kept.
-pub const CAPACITY: usize = 1000;
+pub(crate) const CAPACITY: usize = 1000;
 
 /// One log line as the app gets it.
 #[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct LogLine {
+pub(crate) struct LogLine {
     /// Counts up from 1 for every line since the start.
-    pub seq: u64,
+    pub(crate) seq: u64,
     /// UTC, RFC 3339 with milliseconds.
-    pub at: String,
+    pub(crate) at: String,
+    /// When, on a clock that does not jump: the API says how long ago as
+    /// `age_ms`, which a phone can place on its own clock when the server's
+    /// is not set.
+    #[serde(skip)]
+    pub(crate) logged: Instant,
     /// `error`, `warn` or `info`, lower case like the API's other codes.
-    pub level: &'static str,
+    pub(crate) level: &'static str,
     /// The message as printed, without colour codes.
-    pub text: String,
+    pub(crate) text: String,
 }
 
 /// The last lines, and a feed of new ones.
@@ -45,7 +50,7 @@ struct Lines {
 }
 
 impl LogBook {
-    pub fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         Self {
             lines: Mutex::new(Lines {
                 kept: VecDeque::with_capacity(capacity),
@@ -62,17 +67,18 @@ impl LogBook {
         GLOBAL.clone()
     }
 
-    pub fn capacity(&self) -> usize {
+    pub(crate) fn capacity(&self) -> usize {
         self.capacity
     }
 
     /// Adds a line; the oldest goes once the book is full.
-    pub fn push(&self, level: Level, text: &str) -> LogLine {
+    pub(crate) fn push(&self, level: Level, text: &str) -> LogLine {
         let mut lines = self.lock();
         lines.seq += 1;
         let line = LogLine {
             seq: lines.seq,
             at: super::utc::with_millis(SystemTime::now()),
+            logged: Instant::now(),
             level: level_name(level),
             text: shorten(strip_ansi(text)),
         };
@@ -87,7 +93,7 @@ impl LogBook {
     }
 
     /// Lines with `seq > after`, oldest first, and the newest `seq`.
-    pub fn after(&self, after: u64) -> (Vec<LogLine>, u64) {
+    pub(crate) fn after(&self, after: u64) -> (Vec<LogLine>, u64) {
         let lines = self.lock();
         let newer = lines
             .kept
@@ -99,13 +105,14 @@ impl LogBook {
     }
 
     /// New lines as they are added.
-    pub fn subscribe(&self) -> broadcast::Receiver<LogLine> {
+    #[cfg(test)]
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<LogLine> {
         self.live.subscribe()
     }
 
     /// New lines as they are added, and the newest `seq` so far: every line
     /// after it comes through the receiver.
-    pub fn subscribe_at(&self) -> (broadcast::Receiver<LogLine>, u64) {
+    pub(crate) fn subscribe_at(&self) -> (broadcast::Receiver<LogLine>, u64) {
         let lines = self.lock();
         (self.live.subscribe(), lines.seq)
     }
@@ -139,6 +146,25 @@ fn shorten(mut text: String) -> String {
         text.push('…');
     }
     text
+}
+
+/// `text` from a request or a peer, for a log line: control characters
+/// (line breaks, escapes) escaped, so it can't make a line of its own or
+/// colour the console, and cut to `max` characters, marking the cut.
+pub(crate) fn printable(text: &str, max: usize) -> String {
+    let mut out = String::new();
+    for (i, c) in text.chars().enumerate() {
+        if i == max {
+            out.push('…');
+            break;
+        }
+        if c.is_control() {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Removes terminal escape sequences (colours), in case a message has them.
@@ -261,6 +287,20 @@ mod tests {
         assert_eq!(strip_ansi("\u{1b}[2mgrey\u{1b}[0m plain"), "grey plain");
         assert_eq!(strip_ansi("\u{1b}[1;31mred\u{1b}[m"), "red");
         assert_eq!(strip_ansi("ä 😀"), "ä 😀");
+    }
+
+    #[test]
+    fn text_from_peers_stays_on_one_line() {
+        assert_eq!(
+            printable("GET /a\nINFO forged\r\u{1b}[31m", 64),
+            "GET /a\\nINFO forged\\r\\u{1b}[31m"
+        );
+        assert_eq!(printable("ä 😀", 64), "ä 😀");
+        assert_eq!(
+            printable(&"x".repeat(100), 10),
+            format!("{}…", "x".repeat(10))
+        );
+        assert_eq!(printable("exactly", 7), "exactly");
     }
 
     #[test]

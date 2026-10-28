@@ -191,8 +191,9 @@ source). gbs-anywhere talks to the grinder on port 30001 over HTTPS.
    With the address already set
    (with **Change IP address** in the ⋮ menu of the grinder card under
    **Status**, or when starting gbs-anywhere), System status says the
-   grinder is not set up: tap **Set up grinder ›** there, or **Set up** on
-   the grinder card under Status.
+   grinder is not set up, or that it is pairing once the grinder shows a
+   Pairing Code: tap **Set up grinder ›** there, or **Set up** on the
+   grinder card under Status.
 3. **Set up grinder** takes you through five steps with the grinder's own
    menu names: enable Local WiFi, start pairing under **Configuration**,
    compare the **Pairing Code** in the app with the grinder's and accept
@@ -355,20 +356,22 @@ ready to copy into a bug report.
 ## Options
 
 Extra flags go after the image name (Docker), in `GBS_ANYWHERE_ARGS` (Debian
-package) or after `--` (cargo):
+package) or after `--` (cargo). A flag given again wins over the one before
+(lists such as `--allow-host` add up instead), so `--control 0.0.0.0:8787`
+there turns on the control address the image and the package turn off:
 
 | flag | default | what |
 |---|---|---|
-| `--shot-window-s <s>` | 180 | give up on a shot with no numbers after this long (up to 3600; 0 waits forever); **Time to pull the shot** set in the app wins; `--brew-timeout-s`, its name until 0.2.1, still works |
+| `--shot-window-s <s>` | 180 | give up on a shot with no numbers after this long (30 to 3600, as in the app; 0 waits forever); **Time to pull the shot** set in the app wins; `--brew-timeout-s`, its name until 0.2.1, still works |
 | `--config <file>` | off (Docker: `/data/gbs-anywhere.json`, package: `/var/lib/gbs-anywhere/gbs-anywhere.json`) | settings file for what is set up in the app (integrations, settings, integrations moved from the command line); the shot history (`history.json`) is kept next to it; also `CONFIG_FILE` |
 | `--icons <dir>` | off | serve `<integration id>.svg/.png` from here instead of the built-in glyphs; also `ICONS_DIR` |
-| `-l, --log <file>` | off | append every E64 WS request and the reply to a file |
+| `-l, --log <file>` | off | append every E64 WS request and the reply to a file, readable by its owner only; past 4 MiB it moves to `<file>.1` (replacing the one there) and starts over |
 | `-p, --ports <list>` | 80 | ports to serve on, comma-separated; the E64 WS polls port 80 |
 | `-b, --bind <addr>` | `0.0.0.0` | address to serve those ports on |
 | `--control <addr>` | `127.0.0.1:8787` (Docker and package: `off`) | a second address for the app and its API, besides the ports above; `off` turns it off |
 | `--no-stdin` | off (Docker and package: on) | no console prompt, for running as a service |
 | `--allow-host <names>` | off | also open the app by these host names, each in full (e.g. `gbs.tail1234.ts.net`), comma-separated; `*` alone allows any name, even that of a web page that re-points its own name to this address; the IP address and home-network names always work; also `ALLOW_HOST` |
-| `--finishing-hold-s <s>` | 6 | how long the machine shows a shot as finishing before it is ready again (up to 3600); keep it at least one E64 WS poll |
+| `--finishing-hold-s <s>` | 6 | how long the machine shows a shot as finishing before it is ready again, 3 to 60: the E64 WS polls every 2 s and takes the shot only from a poll that sees it finish, and the next shot waits for it |
 | `--serial <sn>` | built in | the machine serial number the E64 WS is shown |
 | `--accept-browser-headers` | off | let requests with browser headers reach the E64 WS's routes; only if the log says your E64 WS was refused (then please report it) |
 | `--grinder <host>` | off | pair with this E65/E80 GbS over its Local WiFi; also `GRINDER_HOST`; an address set in the app wins |
@@ -387,11 +390,22 @@ Without Docker you can also type the shot into the console: `30 36` means
 
 Scripts and other front ends can use the app's JSON API on the same port,
 e.g. `POST /api/shot/result` with `{"time_s":30,"weight_g":36}`, or follow
-`GET /api/events/stream`. All routes are listed in
+`GET /api/events/stream` (reconnected with `Last-Event-ID`, it first sends
+the events missed meanwhile; event numbers start over when gbs-anywhere
+restarts, which `server.boot_id` in `/api/state` tells). All routes are listed in
 [`src/server/control_api.rs`](src/server/control_api.rs).
 `GET /api/state` comes in groups (`shot`, `grinder`, `machine`,
 `integrations`, `settings`, `update`, `server`), and an error replies
 `{"error":"<sentence>","code":"<code>"}`, with a fixed `code` to match on.
+The same goes for the rest: match on the codes (`code`, `cause`, `kind`,
+`state`, `phase`, and `problem_cause` for an E65/E80 link's last problem);
+`reason`, `detail`, `problem` and `error` are English words for people.
+Lengths and ages are measured on the server, so they hold when its clock
+is not set: each event and log line says how long ago it happened
+(`age_ms`), a running shot how long it has run (`shot.phase_age_ms`), and
+`shot_reported`, `shot_aborted` and the history how long a brew ran
+(`running_ms`). `shot_reported` and the history also name the
+integration that reported a shot (`integration_id`).
 Coming from 0.2.1, whose names were different, the
 [changelog](CHANGELOG.md#changed-breaking) lists what was renamed.
 

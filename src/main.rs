@@ -26,16 +26,24 @@ use std::time::Duration;
 use clap::Parser;
 use gbs_anywhere::integration;
 use gbs_anywhere::protocol::machine::EventRecord;
-use gbs_anywhere::protocol::{MachineConfig, MachineEvent, ShotResult};
+use gbs_anywhere::protocol::{
+    E64_POLL_INTERVAL, MAX_FINISHING_HOLD, MIN_FINISHING_HOLD, MachineConfig, MachineEvent,
+    ShotResult,
+};
+use gbs_anywhere::server::settings::{self, MAX_SHOT_WINDOW_S, MIN_SHOT_WINDOW_S};
 use gbs_anywhere::server::{self, LogBook, ServeConfig, Server, SettingsFile, Startup};
 use serde_json::{Map, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
+// A flag given again wins over the one before, so flags added after the
+// image name (Docker) or in `GBS_ANYWHERE_ARGS` (the Debian package) can
+// change those the launcher passes (`--control off`). Lists add up.
 #[derive(Parser)]
 #[command(
     name = "gbs-anywhere",
     version = gbs_anywhere::version(),
-    about = "Grind-by-Sync for the Mahlkönig E64 WS and E65/E80 GbS with any espresso machine"
+    about = "Grind-by-Sync for the Mahlkönig E64 WS and E65/E80 GbS with any espresso machine",
+    args_override_self = true
 )]
 struct Args {
     /// Grinder-facing ports. The grinder talks to port 80.
@@ -47,21 +55,29 @@ struct Args {
     bind: IpAddr,
 
     /// Control API address (JSON + event stream for an app). `off` disables.
-    #[arg(long, default_value = "127.0.0.1:8787")]
-    control: String,
+    // In full, so clap leaves it to `control_address` to say "off".
+    #[arg(
+        long,
+        default_value = "127.0.0.1:8787",
+        value_name = "ADDR|off",
+        value_parser = control_address
+    )]
+    control: ::std::option::Option<SocketAddr>,
 
     /// Append every E64 WS request and our reply to this file.
     #[arg(short, long)]
     log: Option<PathBuf>,
 
-    /// Seconds to show ACTIVE FINISHING before going back to ON (>= 1 poll).
-    #[arg(long, default_value_t = 6.0, value_parser = up_to_an_hour)]
+    /// Seconds to show ACTIVE FINISHING before going back to ON: 3 to 60, so
+    /// the E64 WS, polling every 2 s, sees it.
+    #[arg(long, default_value_t = 6.0, value_name = "S", value_parser = finishing_hold)]
     finishing_hold_s: f64,
 
     /// The shot window: abort a shot after this many seconds without a
-    /// reported result; 0 waits forever [default: 180]. A shot window set in
-    /// the app wins. Also taken as --brew-timeout-s, its name in 0.2.1.
-    #[arg(long, value_parser = up_to_an_hour, value_name = "S", alias = "brew-timeout-s")]
+    /// reported result, 30 to 3600; 0 waits forever [default: 180]. A shot
+    /// window set in the app wins. Also taken as --brew-timeout-s, its name
+    /// in 0.2.1.
+    #[arg(long, value_parser = shot_window, value_name = "S", alias = "brew-timeout-s")]
     shot_window_s: Option<f64>,
 
     /// Serial number to report (MA_SN).
@@ -169,17 +185,13 @@ async fn main() -> anyhow::Result<()> {
         }
         x.set_icons_dir(dir.clone());
     }
-    let control = match args.control.as_str() {
-        "off" | "" => None,
-        s => Some(s.parse::<SocketAddr>()?),
-    };
     let cfg = ServeConfig {
         grinder: args
             .ports
             .iter()
             .map(|p| SocketAddr::new(args.bind, *p))
             .collect(),
-        control,
+        control: args.control,
         app_on_grinder_ports: !args.no_app,
         allowed_hosts: server::AllowedHosts::new(args.allow_host.clone()),
         accept_browser_headers: args.accept_browser_headers,
@@ -319,6 +331,7 @@ fn describe(rec: &EventRecord) -> String {
         MachineEvent::ShotReported {
             result,
             in_grinder_range,
+            ..
         } => format!(
             "[{}] showing shot to grinder: {:.1} s, {:.1} g{}",
             rec.seq,
@@ -381,19 +394,58 @@ fn handle_line(x: &Server, line: &str) -> String {
                 .next()
                 .and_then(|g| g.replace(',', ".").parse::<f64>().ok())
                 .unwrap_or(0.0);
-            let shot = ShotResult::from_grams(time, grams);
+            let shot = ShotResult::new(time, grams);
             result_msg(x.with(|m, now| m.report_shot(now, shot)))
         }
     }
 }
 
-/// Parses a flag in seconds, from 0 to an hour.
-fn up_to_an_hour(s: &str) -> Result<f64, String> {
-    let secs: f64 = s.parse().map_err(|_| format!("`{s}` is not a number"))?;
-    if (0.0..=3600.0).contains(&secs) {
+/// A flag's number of seconds.
+fn seconds(s: &str) -> Result<f64, String> {
+    s.parse()
+        .ok()
+        .filter(|secs: &f64| secs.is_finite())
+        .ok_or_else(|| format!("`{s}` is not a number"))
+}
+
+/// Parses `--finishing-hold-s`: long enough for the E64 WS to see the shot
+/// finish in one of its polls, short enough not to hold up the next shot.
+fn finishing_hold(s: &str) -> Result<f64, String> {
+    let secs = seconds(s)?;
+    let (min, max) = (
+        MIN_FINISHING_HOLD.as_secs_f64(),
+        MAX_FINISHING_HOLD.as_secs_f64(),
+    );
+    if (min..=max).contains(&secs) {
         Ok(secs)
     } else {
-        Err("must be between 0 and 3600 seconds".to_owned())
+        Err(format!(
+            "must be between {min} and {max} seconds: the E64 WS polls every {} s and takes a \
+             shot only from a poll that sees it finish",
+            E64_POLL_INTERVAL.as_secs_f64()
+        ))
+    }
+}
+
+/// Parses `--shot-window-s`: the shot windows the app can set too.
+fn shot_window(s: &str) -> Result<f64, String> {
+    let secs = seconds(s)?;
+    if settings::shot_window_ok(secs) {
+        Ok(secs)
+    } else {
+        Err(format!(
+            "must be 0 (no limit) or between {MIN_SHOT_WINDOW_S} and {MAX_SHOT_WINDOW_S} seconds"
+        ))
+    }
+}
+
+/// Parses `--control`: an address with its port, or `off`.
+fn control_address(s: &str) -> Result<Option<SocketAddr>, String> {
+    match s.trim() {
+        "off" | "" => Ok(None),
+        addr => addr.parse().map(Some).map_err(|_| {
+            format!("`{addr}` is not an IP address with a port, such as 127.0.0.1:8787, or `off`")
+        }),
     }
 }
 
@@ -443,14 +495,19 @@ mod tests {
     #[test]
     fn second_flags_reject_what_would_not_fit() {
         let parse = |flag: &str, value: &str| Args::try_parse_from(["gbs-anywhere", flag, value]);
+        let hold = |value: &str| parse("--finishing-hold-s", value).map(|a| a.finishing_hold_s);
+        let window = |value: &str| parse("--shot-window-s", value).map(|a| a.shot_window_s);
+        assert_eq!(hold("3").unwrap(), 3.0);
+        assert_eq!(hold("60").unwrap(), 60.0);
         assert_eq!(
-            parse("--finishing-hold-s", "2.5").unwrap().finishing_hold_s,
-            2.5
+            Args::try_parse_from(["gbs-anywhere"])
+                .unwrap()
+                .finishing_hold_s,
+            6.0
         );
-        assert_eq!(
-            parse("--shot-window-s", "0").unwrap().shot_window_s,
-            Some(0.0)
-        );
+        for ok in [0.0, 30.0, 150.6, 3600.0] {
+            assert_eq!(window(&ok.to_string()).unwrap(), Some(ok));
+        }
         assert_eq!(
             parse("--brew-timeout-s", "90").unwrap().shot_window_s,
             Some(90.0),
@@ -459,9 +516,112 @@ mod tests {
         let none = Args::try_parse_from(["gbs-anywhere"]).unwrap();
         assert_eq!(none.shot_window_s, None, "the default is not a flag");
         for bad in ["-1", "3601", "1e20", "NaN", "inf", "soon"] {
-            assert!(parse("--finishing-hold-s", bad).is_err(), "{bad}");
-            assert!(parse("--shot-window-s", bad).is_err(), "{bad}");
+            assert!(hold(bad).is_err(), "{bad}");
+            assert!(window(bad).is_err(), "{bad}");
         }
+        // Shorter than a poll and a margin, or holding up the next shot.
+        for bad in ["0", "0.5", "2", "2.5", "60.1", "3600"] {
+            let Err(e) = hold(bad) else {
+                panic!("{bad} was taken");
+            };
+            assert!(e.to_string().contains("between 3 and 60"), "{bad}: {e}");
+        }
+        // As in the app: a limit shorter than 30 s ends shots before they
+        // are pulled.
+        for bad in ["0.4", "1", "29", "29.9"] {
+            let Err(e) = window(bad) else {
+                panic!("{bad} was taken");
+            };
+            assert!(e.to_string().contains("between 30 and 3600"), "{bad}: {e}");
+        }
+    }
+
+    #[test]
+    fn the_control_address_is_checked_with_its_flag() {
+        let parse = |args: &[&str]| Args::try_parse_from(args).map(|a| a.control);
+        assert_eq!(
+            parse(&["gbs-anywhere"]).unwrap(),
+            Some("127.0.0.1:8787".parse().unwrap())
+        );
+        assert_eq!(parse(&["gbs-anywhere", "--control", "off"]).unwrap(), None);
+        assert_eq!(
+            parse(&["gbs-anywhere", "--control", "[::1]:8787"]).unwrap(),
+            Some("[::1]:8787".parse().unwrap())
+        );
+        for bad in ["localhost:8787", "8787", "0.0.0.0"] {
+            let Err(e) = parse(&["gbs-anywhere", "--control", bad]) else {
+                panic!("{bad} was taken");
+            };
+            let e = e.to_string();
+            assert!(e.contains("--control") && e.contains(bad), "{bad}: {e}");
+        }
+    }
+
+    /// The flags a launcher passes before the person's: the words after the
+    /// binary in `line`, up to the first `$` variable.
+    fn launcher_flags(line: &str) -> Vec<String> {
+        line.split_whitespace()
+            .skip(1)
+            .take_while(|w| !w.starts_with('$'))
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn the_image_and_the_package_pass_the_same_flags() {
+        let docker = include_str!("../Dockerfile")
+            .lines()
+            .find_map(|l| l.strip_prefix("ENTRYPOINT "))
+            .expect("the Dockerfile's ENTRYPOINT");
+        let docker: Vec<String> = serde_json::from_str(docker).expect("ENTRYPOINT [...]");
+        let service = include_str!("../packaging/deb/gbs-anywhere.service")
+            .lines()
+            .find_map(|l| l.strip_prefix("ExecStart="))
+            .expect("the unit's ExecStart");
+        assert!(service.ends_with(" $GBS_ANYWHERE_ARGS"), "{service}");
+        assert_eq!(
+            docker[1..],
+            launcher_flags(service),
+            "{docker:?} vs {service}"
+        );
+
+        // The person's flags come after those and win.
+        let mut args = vec!["gbs-anywhere".to_owned()];
+        args.extend(docker[1..].iter().cloned());
+        let launched = Args::try_parse_from(&args).unwrap();
+        assert_eq!(launched.control, None);
+        assert!(launched.no_stdin);
+        args.extend(
+            [
+                "--control",
+                "0.0.0.0:8787",
+                "--no-stdin",
+                "-p",
+                "8080",
+                "-p",
+                "8081",
+            ]
+            .map(str::to_owned),
+        );
+        let changed = Args::try_parse_from(&args).unwrap();
+        assert_eq!(changed.control, Some("0.0.0.0:8787".parse().unwrap()));
+        assert!(changed.no_stdin);
+        assert_eq!(changed.ports, [8080, 8081], "lists add up, as before");
+    }
+
+    #[test]
+    fn a_list_given_again_adds_up() {
+        let parse = |args: &[&str]| Args::try_parse_from(args).unwrap();
+        let hosts = parse(&[
+            "gbs-anywhere",
+            "--allow-host",
+            "a.example,b.example",
+            "--allow-host",
+            "c.example",
+        ]);
+        assert_eq!(hosts.allow_host, ["a.example", "b.example", "c.example"]);
+        let ports = parse(&["gbs-anywhere", "-p", "80,8080"]);
+        assert_eq!(ports.ports, [80, 8080]);
     }
 
     #[test]

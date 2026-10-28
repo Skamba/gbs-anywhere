@@ -16,15 +16,15 @@
 //! * [`shot`]: finds the shot in the readings.
 //! * [`run`]: the task.
 
-pub mod config;
-pub mod run;
-pub mod shot;
+pub(crate) mod config;
+pub(crate) mod run;
+pub(crate) mod shot;
 
 use crate::integration::{Integration, Kind, Settings};
 
 const TITLE: &str = "Half Decent Scale";
 
-pub static KIND: Kind = Kind {
+pub(crate) static KIND: Kind = Kind {
     id: "half_decent",
     title: TITLE,
     summary: "Time from first drops to flow stop and the weight in the cup, \

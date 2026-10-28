@@ -44,13 +44,22 @@ its settings.
 After the knob press (on an E65/E80 GbS: after the Grind-by-Sync grind)
 gbs-anywhere asks the cloud for new coffees every 3 s (the check interval,
 `--lm-poll-s`; lower reports sooner but sends more requests).
-The first coffee logged after the knob press is the shot: its extraction time
-and its weight go to the grinder. Without a scale reading it uses the recipe
-weight the grinder sent. The log says which.
+Its first look notes what the log already holds; the first coffee logged
+after that is the shot: its extraction time and its weight go to the grinder.
+Without a scale reading it uses the recipe weight the grinder sent. The log
+says which.
 
 - **Only while the grinder waits for the shot,** after a knob press (on an
   E65/E80 GbS: after the Grind-by-Sync grind). Coffees made at other times
-  are never reported.
+  are never reported, and a coffee already in the log at a knob press never
+  counts for it. One the machine uploads only after the next knob press
+  (the shot was typed in the app or timed out first) can still count for
+  that next one.
+- **Rather missed than wrong.** If the cloud can't be reached at the knob
+  press, the first look that works counts as the first; a shot already
+  logged by then is not reported, so type it in the app. Coffees are told
+  apart by the cloud's own times, so the computer's clock doesn't matter
+  for that.
 - **A few seconds late.** The machine uploads the coffee when the shot ends;
   expect the grinder to react some seconds after the pump stops.
 - **Flushes don't count.** The cloud logs flushes separately, and coffees it
@@ -58,7 +67,11 @@ weight the grinder sent. The log says which.
 - **Same account as the app.** gbs-anywhere registers itself as one more
   installation of the La Marzocco Home app (derived from your credentials,
   nothing else is stored). The app keeps working alongside it.
-- The cloud login retries by itself with backoff.
+- **Retries by itself.** After a connection problem it tries again within
+  5 s to 5 min. A refused login, or a machine it can't pick (none on the
+  account, the serial number not on it, or more than one and no serial
+  number), is tried again within minutes at first and then after an hour,
+  or at once when its settings are changed in the app.
 
 ## Official logo
 

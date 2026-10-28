@@ -9,7 +9,7 @@
 ## Checklist
 
 - [ ] One change per pull request (split unrelated changes)
-- [ ] `cargo fmt --check`, `cargo clippy --all-targets` and `cargo test` pass
+- [ ] `cargo fmt --check`, `cargo clippy --all-targets`, `cargo doc --no-deps` and `cargo test` pass
 - [ ] README.md updated for changes to behaviour, flags or the API
 - [ ] A line under `## [Unreleased]` in CHANGELOG.md for user-visible changes
 - [ ] No IP addresses, serial numbers or logs from real devices

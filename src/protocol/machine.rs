@@ -26,37 +26,54 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::{
+    EXTRACTION_STATUS_BREWING, EXTRACTION_STATUS_FINISHED, EXTRACTION_STATUS_IDLE,
     EXTRACTION_STATUS_USER_ABORT, GrindResult, MAX_EXTRACTION_TIME_MS, MAX_OFF_TARGET_MS,
     MIN_EXTRACTION_TIME_MS, MachineIdentity, MachineStatus, MakoState,
 };
 
-/// Tunables. The extraction-status values for a normal shot are a best guess;
-/// only `2` (user abort) has a known meaning to the grinder.
-#[derive(Debug, Clone, Serialize)]
+/// Tunables, shown as `machine.config` in `GET /api/state`.
+#[derive(Debug, Clone)]
 pub struct MachineConfig {
     pub identity: MachineIdentity,
     /// How long `ACTIVE FINISHING` is shown before going back to `ON`. The
-    /// grinder polls about every 2 s, so this must span at least one poll.
-    #[serde(rename = "finishing_hold_s", serialize_with = "as_secs_f64")]
+    /// E64 WS takes the result only from a poll that sees it, so this is
+    /// [`MIN_FINISHING_HOLD`] to [`MAX_FINISHING_HOLD`] (`--finishing-hold-s`
+    /// checks it).
+    ///
+    /// [`MIN_FINISHING_HOLD`]: super::MIN_FINISHING_HOLD
+    /// [`MAX_FINISHING_HOLD`]: super::MAX_FINISHING_HOLD
     pub finishing_hold: Duration,
     /// The shot window: a shot with no reported result is aborted after this
     /// long. `None` for no limit, sent as 0 as in the settings.
-    #[serde(rename = "shot_window_s", serialize_with = "as_secs")]
     pub shot_window: Option<Duration>,
-    /// Enter `ACTIVE SERVING` as soon as the grinder asks to start. The grinder
-    /// gives up after 3 unanswered requests, so leave this on.
-    pub serve_on_start_request: bool,
-    pub extraction_status_idle: i64,
-    pub extraction_status_brewing: i64,
-    pub extraction_status_finished: i64,
 }
 
-fn as_secs_f64<S: serde::Serializer>(d: &Duration, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_f64(d.as_secs_f64())
-}
-
-fn as_secs<S: serde::Serializer>(d: &Option<Duration>, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_u64(d.map_or(0, |d| d.as_secs()))
+impl Serialize for MachineConfig {
+    /// With the fixed values next to the tunables, as the API has always
+    /// shown them: the machine serves a start request at once, and the
+    /// extraction status it sends.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Shown<'a> {
+            identity: &'a MachineIdentity,
+            finishing_hold_s: f64,
+            shot_window_s: u64,
+            serve_on_start_request: bool,
+            extraction_status_idle: i64,
+            extraction_status_brewing: i64,
+            extraction_status_finished: i64,
+        }
+        Shown {
+            identity: &self.identity,
+            finishing_hold_s: self.finishing_hold.as_secs_f64(),
+            shot_window_s: self.shot_window.map_or(0, |d| d.as_secs()),
+            serve_on_start_request: true,
+            extraction_status_idle: EXTRACTION_STATUS_IDLE,
+            extraction_status_brewing: EXTRACTION_STATUS_BREWING,
+            extraction_status_finished: EXTRACTION_STATUS_FINISHED,
+        }
+        .serialize(s)
+    }
 }
 
 impl Default for MachineConfig {
@@ -65,10 +82,6 @@ impl Default for MachineConfig {
             identity: MachineIdentity::default(),
             finishing_hold: Duration::from_secs(6),
             shot_window: Some(Duration::from_secs(180)),
-            serve_on_start_request: true,
-            extraction_status_idle: 0,
-            extraction_status_brewing: 1,
-            extraction_status_finished: 1,
         }
     }
 }
@@ -85,41 +98,37 @@ pub struct ShotResult {
 impl ShotResult {
     /// Longest shot time a person can enter. Well past the grinder's 80 s, so
     /// a slow shot still reaches it (and is skipped there); more is a typo.
-    pub const MAX_TIME: Duration = Duration::from_secs(600);
+    pub(crate) const MAX_TIME: Duration = Duration::from_secs(600);
 
     /// A typed shot time in seconds, or `None` unless it is a number from 0
-    /// to [`Self::MAX_TIME`].
+    /// to `Self::MAX_TIME`.
     pub fn time_from_secs(s: f64) -> Option<Duration> {
         (0.0..=Self::MAX_TIME.as_secs_f64())
             .contains(&s)
             .then(|| Duration::from_secs_f64(s))
     }
 
+    /// From what a person reads off a timer and a scale.
     pub fn new(time: Duration, weight_g: f64) -> Self {
         Self {
             time_ms: u32::try_from(time.as_millis()).unwrap_or(u32::MAX),
             weight_g,
         }
     }
-
-    /// From what a person reads off a timer and a scale.
-    pub fn from_grams(time: Duration, beverage_g: f64) -> Self {
-        Self::new(time, beverage_g)
-    }
 }
 
 /// The shot times the grinder adjusts from: over `min_ms`, up to `max_ms`
 /// (`grinder_range` in `GET /api/state`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct GrinderRange {
-    pub min_ms: u32,
-    pub max_ms: u32,
+pub(crate) struct GrinderRange {
+    pub(crate) min_ms: u32,
+    pub(crate) max_ms: u32,
 }
 
 impl GrinderRange {
     /// The E64 WS's: over 10 s ([`MIN_EXTRACTION_TIME_MS`]), up to 80 s
     /// ([`MAX_EXTRACTION_TIME_MS`]).
-    pub const E64: Self = Self {
+    pub(crate) const E64: Self = Self {
         min_ms: MIN_EXTRACTION_TIME_MS,
         max_ms: MAX_EXTRACTION_TIME_MS,
     };
@@ -127,7 +136,7 @@ impl GrinderRange {
     /// An E65/E80 GbS's, for a brew job that aims for `target_ms`: within
     /// 15 s of it ([`MAX_OFF_TARGET_MS`]), but never down to 10 s
     /// ([`MIN_EXTRACTION_TIME_MS`]).
-    pub fn around(target_ms: u32) -> Self {
+    pub(crate) fn around(target_ms: u32) -> Self {
         Self {
             min_ms: target_ms
                 .saturating_sub(MAX_OFF_TARGET_MS)
@@ -137,7 +146,7 @@ impl GrinderRange {
     }
 
     /// Whether the grinder adjusts from a shot of `time_ms`.
-    pub fn contains(self, time_ms: u32) -> bool {
+    pub(crate) fn contains(self, time_ms: u32) -> bool {
         time_ms > self.min_ms && time_ms <= self.max_ms
     }
 }
@@ -145,7 +154,7 @@ impl GrinderRange {
 /// Where the machine is in a shot (`shot` in `GET /api/state`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(tag = "phase", rename_all = "snake_case")]
-pub enum Phase {
+pub(crate) enum Phase {
     Ready,
     Running {
         #[serde(skip)]
@@ -186,30 +195,45 @@ pub enum MachineEvent {
     ShotReported {
         result: ShotResult,
         /// Whether the grinder adjusts from its time
-        /// ([`Machine::grinder_range`]); `None` when that is not known.
+        /// (`Machine::grinder_range`); `None` when that is not known.
         in_grinder_range: Option<bool>,
+        /// How long the brew ran until the result came, on the machine's
+        /// clock (not the shot's own `time_ms`).
+        running_ms: u64,
+        /// The integration that reported it (its `id`); `None` when it was
+        /// typed in the app or sent through the API.
+        integration_id: Option<String>,
     },
     /// The shot ended without a result; the grinder skips it. Made with
-    /// [`MachineEvent::shot_aborted`].
+    /// `MachineEvent::shot_aborted`.
     ShotAborted {
-        /// Why, in English words ([`AbortCause::text`]), as apps from before
+        /// Why, in English words (`AbortCause::text`), as apps from before
         /// `cause` read it.
         reason: &'static str,
         /// Why, as a fixed code for apps to match on.
         cause: AbortCause,
+        /// How long the brew ran until it ended, on the machine's clock.
+        running_ms: u64,
     },
     /// The shot is over and the machine back to `ON`.
     ShotFinished,
 }
 
 impl MachineEvent {
-    /// The event for a brew that ended for `cause`, with its words as `reason`.
-    pub fn shot_aborted(cause: AbortCause) -> Self {
+    /// The event for a brew that ended for `cause` after running for
+    /// `running`, with its words as `reason`.
+    pub(crate) fn shot_aborted(cause: AbortCause, running: Duration) -> Self {
         Self::ShotAborted {
             reason: cause.text(),
             cause,
+            running_ms: millis(running),
         }
     }
+}
+
+/// `d` in whole milliseconds, as the API's `_ms` numbers are.
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Why a brew ended without a result, as a fixed code (`cause` next to the
@@ -247,7 +271,7 @@ pub enum AbortCause {
 
 impl AbortCause {
     /// Every cause, one entry per variant.
-    pub const ALL: [Self; 8] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::ShotAbortedByUser,
         Self::GrinderShotReplaced,
         Self::GrinderAddressChanged,
@@ -259,7 +283,7 @@ impl AbortCause {
     ];
 
     /// In English words, for logs and the `reason` next to `cause`.
-    pub fn text(self) -> &'static str {
+    pub(crate) fn text(self) -> &'static str {
         match self {
             Self::ShotAbortedByUser => "aborted by user",
             Self::GrinderShotReplaced => "a newer Grind-by-Sync grind replaced it",
@@ -274,7 +298,7 @@ impl AbortCause {
 
     /// Whether someone chose to end the brew (aborted), rather than it
     /// failing (an error).
-    pub fn on_purpose(self) -> bool {
+    pub(crate) fn on_purpose(self) -> bool {
         match self {
             Self::ShotAbortedByUser => true,
             Self::GrinderShotReplaced => true,
@@ -293,7 +317,7 @@ impl AbortCause {
 pub struct EventRecord {
     pub seq: u64,
     #[serde(skip)]
-    pub at: Instant,
+    pub(crate) at: Instant,
     #[serde(flatten)]
     pub event: MachineEvent,
 }
@@ -322,7 +346,7 @@ impl std::fmt::Display for MachineError {
 
 impl MachineError {
     /// As a fixed code, for `code` in the API's errors.
-    pub fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::NotRunning => "shot_not_running",
             Self::AlreadyRunning => "shot_already_running",
@@ -341,10 +365,10 @@ pub struct Machine {
     config: MachineConfig,
     /// Values served while `Ready` (status, temperatures, tank, script, ...).
     /// Change them to test the grind gate.
-    pub ready: MakoState,
+    pub(crate) ready: MakoState,
     /// Raw keys merged over every mako reply, for experiments the typed model
     /// cannot express (odd status codes, extra fields). Empty normally.
-    pub overrides: Map<String, Value>,
+    pub(crate) overrides: Map<String, Value>,
     phase: Phase,
     /// The brew running (or last run) came from an E65/E80 brew job.
     brew_job: bool,
@@ -357,7 +381,7 @@ pub struct Machine {
 }
 
 impl Machine {
-    pub fn new(config: MachineConfig) -> Self {
+    pub(crate) fn new(config: MachineConfig) -> Self {
         Self {
             config,
             ready: MakoState::default(),
@@ -372,31 +396,31 @@ impl Machine {
         }
     }
 
-    pub fn config(&self) -> &MachineConfig {
+    pub(crate) fn config(&self) -> &MachineConfig {
         &self.config
     }
 
     /// Changes the shot window: how long a shot waits for its result. A shot
     /// already running keeps its start and ends once the new limit has
     /// passed.
-    pub fn set_shot_window(&mut self, limit: Option<Duration>) {
+    pub(crate) fn set_shot_window(&mut self, limit: Option<Duration>) {
         self.config.shot_window = limit;
     }
 
-    pub fn identity(&self) -> &MachineIdentity {
+    pub(crate) fn identity(&self) -> &MachineIdentity {
         &self.config.identity
     }
 
-    pub fn phase(&mut self, now: Instant) -> Phase {
+    pub(crate) fn phase(&mut self, now: Instant) -> Phase {
         self.tick(now);
         self.phase
     }
 
-    pub fn last_shot(&self) -> Option<ShotResult> {
+    pub(crate) fn last_shot(&self) -> Option<ShotResult> {
         self.last_shot
     }
 
-    pub fn last_grind(&self) -> Option<&GrindResult> {
+    pub(crate) fn last_grind(&self) -> Option<&GrindResult> {
         self.last_grind.as_ref()
     }
 
@@ -404,34 +428,36 @@ impl Machine {
     /// request: the E64 WS's after a knob press, and within 15 s of the
     /// target time (over 10 s) after an E65/E80 brew job. `None` before the
     /// first request, and after a brew job without a target time.
-    pub fn grinder_range(&self) -> Option<GrinderRange> {
+    pub(crate) fn grinder_range(&self) -> Option<GrinderRange> {
         self.range
     }
 
     /// The target weight of the last grind's recipe, if the grinder sent one.
-    pub fn recipe_weight_g(&self) -> Option<f64> {
+    pub(crate) fn recipe_weight_g(&self) -> Option<f64> {
         let g = self.last_grind.as_ref()?.target_weight_g?;
         (g.is_finite() && g > 0.0).then_some(g)
     }
 
     /// Events with `seq > after`, oldest first (the last few hundred are kept).
-    pub fn events_after(&self, after: u64) -> impl Iterator<Item = &EventRecord> {
+    pub(crate) fn events_after(&self, after: u64) -> impl Iterator<Item = &EventRecord> {
         self.events.iter().filter(move |e| e.seq > after)
     }
 
-    pub fn last_seq(&self) -> u64 {
+    pub(crate) fn last_seq(&self) -> u64 {
         self.seq
     }
 
     /// `POST /api/v2/brewratio` from the grinder.
-    pub fn on_grind_result(&mut self, now: Instant, result: GrindResult) {
+    pub(crate) fn on_grind_result(&mut self, now: Instant, result: GrindResult) {
         self.last_grind = Some(result.clone());
         self.push(now, MachineEvent::GrinderGrindFinished { result });
     }
 
-    /// `POST /api/v2/scripts/execute` from the grinder. Repeats while already
-    /// brewing are the grinder's retries and are ignored.
-    pub fn on_start_request(&mut self, now: Instant, script_id: Option<i64>) {
+    /// `POST /api/v2/scripts/execute` from the grinder: the brew starts at
+    /// once, since the grinder re-sends the request only a few times before
+    /// it gives up on a machine that does not enter `ACTIVE SERVING`.
+    /// Repeats while already brewing are those retries and are ignored.
+    pub(crate) fn on_start_request(&mut self, now: Instant, script_id: Option<i64>) {
         self.tick(now);
         if matches!(self.phase, Phase::Running { .. }) {
             return;
@@ -444,15 +470,13 @@ impl Machine {
                 target_time_ms: None,
             },
         );
-        if self.config.serve_on_start_request {
-            self.begin(now, true);
-        }
+        self.begin(now, true);
     }
 
     /// A brew job from an E65/E80 grinder: like a grind result followed by a
     /// knob press, and sent as the same two events. Only taken while
     /// `Ready`; returns whether the shot started.
-    pub fn on_brew_job(
+    pub(crate) fn on_brew_job(
         &mut self,
         now: Instant,
         result: GrindResult,
@@ -479,7 +503,7 @@ impl Machine {
 
     /// Whether a brew is running for an E65/E80 brew job (not for an E64 WS
     /// knob press or by hand).
-    pub fn brewing_for_brew_job(&mut self, now: Instant) -> bool {
+    pub(crate) fn brewing_for_brew_job(&mut self, now: Instant) -> bool {
         matches!(self.phase(now), Phase::Running { .. }) && self.brew_job
     }
 
@@ -498,10 +522,21 @@ impl Machine {
     /// weight of 0 (none given) becomes the recipe weight; with no recipe
     /// weight either, the result is refused.
     pub fn report_shot(&mut self, now: Instant, result: ShotResult) -> Result<(), MachineError> {
+        self.report_shot_by(now, result, None)
+    }
+
+    /// [`Machine::report_shot`] for the integration `integration_id`, which
+    /// its event names.
+    pub(crate) fn report_shot_by(
+        &mut self,
+        now: Instant,
+        result: ShotResult,
+        integration_id: Option<&str>,
+    ) -> Result<(), MachineError> {
         self.tick(now);
-        if !matches!(self.phase, Phase::Running { .. }) {
+        let Phase::Running { since, .. } = self.phase else {
             return Err(MachineError::NotRunning);
-        }
+        };
         // Never send 0 g: without a weight, use the recipe's.
         let result = if result.weight_g.is_finite() && result.weight_g > 0.0 {
             result
@@ -523,6 +558,8 @@ impl Machine {
             MachineEvent::ShotReported {
                 result,
                 in_grinder_range: self.range.map(|r| r.contains(result.time_ms)),
+                running_ms: millis(now.saturating_duration_since(since)),
+                integration_id: integration_id.map(str::to_owned),
             },
         );
         Ok(())
@@ -531,17 +568,12 @@ impl Machine {
     /// Ends the brew as a user abort (`MA_EXTRACTION_STATUS = 2`): the grinder
     /// skips the result.
     pub fn abort(&mut self, now: Instant) -> Result<(), MachineError> {
-        self.tick(now);
-        let Phase::Running { since, .. } = self.phase else {
-            return Err(MachineError::NotRunning);
-        };
-        self.abort_shot(now, since, AbortCause::ShotAbortedByUser);
-        Ok(())
+        self.give_up(now, AbortCause::ShotAbortedByUser)
     }
 
     /// Ends the brew for `cause` (say, the grinder stopped waiting for it),
     /// like [`Machine::abort`] but with that cause in the event.
-    pub fn give_up(&mut self, now: Instant, cause: AbortCause) -> Result<(), MachineError> {
+    pub(crate) fn give_up(&mut self, now: Instant, cause: AbortCause) -> Result<(), MachineError> {
         self.tick(now);
         let Phase::Running { since, .. } = self.phase else {
             return Err(MachineError::NotRunning);
@@ -552,7 +584,7 @@ impl Machine {
 
     /// Applies time-based transitions. Called by every other method; call it
     /// periodically too if you want events without polls.
-    pub fn tick(&mut self, now: Instant) {
+    pub(crate) fn tick(&mut self, now: Instant) {
         match self.phase {
             Phase::Running { since, .. } => {
                 if let Some(limit) = self.config.shot_window
@@ -570,12 +602,12 @@ impl Machine {
     }
 
     /// The typed reply to `GET /api/v2/mako` at `now` (without overrides).
-    pub fn mako(&mut self, now: Instant) -> MakoState {
+    pub(crate) fn mako(&mut self, now: Instant) -> MakoState {
         self.tick(now);
         let mut s = self.ready.clone();
         match self.phase {
             Phase::Ready => {
-                s.extraction_status = self.config.extraction_status_idle;
+                s.extraction_status = EXTRACTION_STATUS_IDLE;
                 if let Some(shot) = self.last_shot {
                     s.real_extraction_time_ms = shot.time_ms;
                     s.flow_meter_volume_ml = shot.weight_g;
@@ -583,7 +615,7 @@ impl Machine {
             }
             Phase::Running { since, .. } => {
                 s.status = MachineStatus::ActiveServing;
-                s.extraction_status = self.config.extraction_status_brewing;
+                s.extraction_status = EXTRACTION_STATUS_BREWING;
                 s.real_extraction_time_ms =
                     u32::try_from(now.saturating_duration_since(since).as_millis())
                         .unwrap_or(u32::MAX);
@@ -596,7 +628,7 @@ impl Machine {
                 s.extraction_status = if aborted {
                     EXTRACTION_STATUS_USER_ABORT
                 } else {
-                    self.config.extraction_status_finished
+                    EXTRACTION_STATUS_FINISHED
                 };
                 s.real_extraction_time_ms = result.time_ms;
                 s.flow_meter_volume_ml = result.weight_g;
@@ -606,7 +638,7 @@ impl Machine {
     }
 
     /// The JSON body for `GET /api/v2/mako` at `now`, overrides applied.
-    pub fn mako_json(&mut self, now: Instant) -> Value {
+    pub(crate) fn mako_json(&mut self, now: Instant) -> Value {
         let mut v = serde_json::to_value(self.mako(now)).unwrap_or(Value::Null);
         if let Value::Object(obj) = &mut v {
             for (k, val) in &self.overrides {
@@ -637,12 +669,13 @@ impl Machine {
     }
 
     fn abort_shot(&mut self, now: Instant, since: Instant, cause: AbortCause) {
+        let running = now.saturating_duration_since(since);
         self.phase = Phase::Finishing {
             until: now + self.config.finishing_hold,
-            result: ShotResult::new(now.saturating_duration_since(since), 0.0),
+            result: ShotResult::new(running, 0.0),
             aborted: true,
         };
-        self.push(now, MachineEvent::shot_aborted(cause));
+        self.push(now, MachineEvent::shot_aborted(cause, running));
     }
 
     fn push(&mut self, at: Instant, event: MachineEvent) {
@@ -796,13 +829,73 @@ mod tests {
 
         let t2 = t1 + Duration::from_secs(28);
         g.observe(&m.mako(t2));
-        m.report_shot(t2, ShotResult::from_grams(Duration::from_secs(30), 36.0))
+        m.report_shot(t2, ShotResult::new(Duration::from_secs(30), 36.0))
             .unwrap();
+        // How long the brew ran, from the request: on the machine's clock.
+        assert!(matches!(
+            m.events_after(0).last().map(|e| &e.event),
+            Some(MachineEvent::ShotReported {
+                running_ms: 30_000,
+                ..
+            })
+        ));
         assert_eq!(poll_until_ready(&mut m, &mut g, t2), Some(30_000));
         assert_eq!(
             m.mako(t2 + Duration::from_secs(60)).status,
             MachineStatus::On
         );
+    }
+
+    /// Runs a shot the grinder asked for, reports it, and polls like the
+    /// grinder: the first poll `phase` before the report, then `gaps` apart
+    /// (in turn, from the `first` one). Says whether the grinder took it.
+    fn taken(hold: Duration, phase: Duration, gaps: &[Duration], first: usize) -> bool {
+        let t0 = Instant::now();
+        let mut m = Machine::new(MachineConfig {
+            finishing_hold: hold,
+            ..MachineConfig::default()
+        });
+        let mut g = GrinderModel::default();
+        g.observe(&m.mako(t0));
+        g.request_start();
+        m.on_start_request(t0, Some(9));
+        g.observe(&m.mako(t0 + POLL));
+        let reported = t0 + Duration::from_secs(30);
+        let mut t = reported - phase;
+        g.observe(&m.mako(t));
+        m.report_shot(reported, ShotResult::new(Duration::from_secs(28), 36.0))
+            .unwrap();
+        for gap in gaps.iter().cycle().skip(first).take(20) {
+            t += *gap;
+            let accepted = g
+                .observe(&m.mako(t))
+                .iter()
+                .any(|e| matches!(e, GrinderEvent::ShotAccepted { .. }));
+            if accepted {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn a_shot_held_for_the_shortest_hold_is_always_taken() {
+        // About every 2 s, some polls late.
+        let gaps = [2000, 2400, 1600, 2900, 2000].map(Duration::from_millis);
+        let mut missed = 0;
+        for first in 0..gaps.len() {
+            for tenths in 0..20 {
+                let phase = Duration::from_millis(tenths * 100);
+                assert!(
+                    taken(crate::protocol::MIN_FINISHING_HOLD, phase, &gaps, first),
+                    "phase {phase:?}, from gap {first}"
+                );
+                if !taken(Duration::from_secs(1), phase, &gaps, first) {
+                    missed += 1;
+                }
+            }
+        }
+        assert!(missed > 0, "a hold shorter than a poll misses shots");
     }
 
     #[test]
@@ -812,7 +905,7 @@ mod tests {
         let mut m = Machine::new(MachineConfig::default());
         m.on_start_request(t0, Some(9));
         assert_eq!(
-            m.report_shot(t0, ShotResult::from_grams(time, 0.0)),
+            m.report_shot(t0, ShotResult::new(time, 0.0)),
             Err(MachineError::NoWeight),
             "no recipe weight to fall back on"
         );
@@ -825,12 +918,10 @@ mod tests {
         m.on_grind_result(t0, recipe);
         for none in [0.0, -1.0, f64::NAN] {
             let mut m = m.clone();
-            m.report_shot(t0, ShotResult::from_grams(time, none))
-                .unwrap();
+            m.report_shot(t0, ShotResult::new(time, none)).unwrap();
             assert_eq!(m.last_shot().unwrap().weight_g, 36.5, "{none}");
         }
-        m.report_shot(t0, ShotResult::from_grams(time, 38.0))
-            .unwrap();
+        m.report_shot(t0, ShotResult::new(time, 38.0)).unwrap();
         assert_eq!(m.last_shot().unwrap().weight_g, 38.0, "a weight is kept");
     }
 
@@ -871,6 +962,7 @@ mod tests {
             == MachineEvent::ShotAborted {
                 reason: "no result reported in time",
                 cause: AbortCause::ShotTimedOut,
+                running_ms: 181_000,
             }));
     }
 
@@ -888,6 +980,7 @@ mod tests {
                 "kind": "shot_aborted",
                 "reason": "aborted by user",
                 "cause": "shot_aborted_by_user",
+                "running_ms": 2_000,
             })
         );
         // Each cause has its own words: the history finds the cause of a shot
@@ -977,6 +1070,36 @@ mod tests {
         m.on_start_request(t0, Some(9));
         let much_later = t0 + Duration::from_secs(4 * 3600);
         assert!(matches!(m.phase(much_later), Phase::Running { .. }));
+    }
+
+    #[test]
+    fn the_config_shows_as_it_always_did() {
+        let config = MachineConfig {
+            finishing_hold: Duration::from_millis(6500),
+            ..MachineConfig::default()
+        };
+        let mut shown = serde_json::to_value(&config).unwrap();
+        assert_eq!(shown["identity"]["MA_SN"], "0000000000");
+        shown.as_object_mut().unwrap().remove("identity");
+        assert_eq!(
+            shown,
+            serde_json::json!({
+                "finishing_hold_s": 6.5,
+                "shot_window_s": 180,
+                "serve_on_start_request": true,
+                "extraction_status_idle": 0,
+                "extraction_status_brewing": 1,
+                "extraction_status_finished": 1,
+            })
+        );
+        let unlimited = MachineConfig {
+            shot_window: None,
+            ..config
+        };
+        assert_eq!(
+            serde_json::to_value(&unlimited).unwrap()["shot_window_s"],
+            0
+        );
     }
 
     #[test]

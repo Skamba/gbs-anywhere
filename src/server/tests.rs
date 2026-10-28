@@ -11,6 +11,7 @@ use crate::protocol::{
     AbortCause, BrewState, GrinderEvent, GrinderModel, MachineStatus, MakoState, PATH_BREWRATIO,
     PATH_MACHINE, PATH_MAKO, PATH_SCRIPTS_EXECUTE, START_BREW_SCRIPT_ID,
 };
+use crate::test_support::temp_dir;
 
 /// Serves both routers on one port, like the binary with the app on the
 /// grinder port.
@@ -20,7 +21,6 @@ async fn start() -> String {
 
 /// Like [`start`], also returning the server.
 async fn start_server() -> (String, Arc<Server>) {
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let config = MachineConfig {
         // Long enough for a few polls below, short enough to keep tests fast.
         finishing_hold: Duration::from_millis(300),
@@ -36,16 +36,6 @@ async fn start_server() -> (String, Arc<Server>) {
     (format!("http://{addr}"), state)
 }
 
-/// A directory of its own under the system's temp directory.
-fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!(
-        "gbs-anywhere-routes-{name}-{}",
-        uuid::Uuid::new_v4()
-    ));
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
-
 /// A client that polls and posts like the grinder and remembers which shot
 /// it accepted.
 struct Grinder {
@@ -58,7 +48,7 @@ struct Grinder {
 impl Grinder {
     fn new(base: &str) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: crate::http::client(),
             base: base.to_owned(),
             model: GrinderModel::default(),
             accepted: None,
@@ -88,7 +78,7 @@ impl Grinder {
 
 /// Sends a control API request and returns the status code and JSON body.
 async fn call(method: reqwest::Method, url: String, body: Option<Value>) -> (u16, Value) {
-    let mut req = reqwest::Client::new().request(method, url);
+    let mut req = crate::http::client().request(method, url);
     if let Some(body) = body {
         req = req.json(&body);
     }
@@ -96,10 +86,60 @@ async fn call(method: reqwest::Method, url: String, body: Option<Value>) -> (u16
     (res.status().as_u16(), res.json().await.unwrap())
 }
 
+/// One server-sent event.
+#[derive(Debug)]
+struct Sse {
+    event: String,
+    id: u64,
+    data: Value,
+}
+
+/// Opens a live stream at `url`, with `last_event_id` if given.
+async fn open_stream(url: String, last_event_id: Option<u64>) -> reqwest::Response {
+    let mut req = crate::http::client().get(url);
+    if let Some(id) = last_event_id {
+        req = req.header("last-event-id", id.to_string());
+    }
+    let res = req.send().await.unwrap();
+    assert_eq!(res.headers()["content-type"], "text/event-stream");
+    res
+}
+
+/// Reads events from `stream` until one has the id `last`.
+async fn read_until(stream: &mut reqwest::Response, last: u64) -> Vec<Sse> {
+    let mut text = String::new();
+    let mut events = Vec::new();
+    while events.last().is_none_or(|e: &Sse| e.id != last) {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), stream.chunk())
+            .await
+            .unwrap_or_else(|_| panic!("event {last} in time; got {events:?}"))
+            .unwrap()
+            .expect("the stream stays open");
+        text.push_str(&String::from_utf8_lossy(&chunk));
+        while let Some((block, rest)) = text.split_once("\n\n") {
+            let (mut event, mut id, mut data) = (None, None, None);
+            for line in block.lines() {
+                match line.split_once(": ") {
+                    Some(("event", v)) => event = Some(v.to_owned()),
+                    Some(("id", v)) => id = v.parse().ok(),
+                    Some(("data", v)) => data = serde_json::from_str(v).ok(),
+                    // Keep-alive comments.
+                    _ => {}
+                }
+            }
+            if let (Some(event), Some(id), Some(data)) = (event, id, data) {
+                events.push(Sse { event, id, data });
+            }
+            text = rest.to_owned();
+        }
+    }
+    events
+}
+
 /// Sends `request` exactly as written and returns the status of the reply,
 /// for requests no HTTP client would send.
 async fn raw_status(base: &str, request: &str) -> u16 {
-    use tokio::io::AsyncReadExt;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut conn = tokio::net::TcpStream::connect(base.trim_start_matches("http://"))
         .await
         .unwrap();
@@ -197,6 +237,8 @@ async fn grinder_accepts_a_shot_entered_in_the_app() {
         events[3]["result"],
         json!({ "time_ms": 30_000, "weight_g": 36.0 })
     );
+    // Typed in the app: no integration reported it.
+    assert_eq!(events[3]["integration_id"], Value::Null);
 }
 
 #[tokio::test]
@@ -224,7 +266,11 @@ async fn a_weight_sent_as_volume_ml_still_counts() {
 #[tokio::test]
 async fn the_app_comes_in_one_response() {
     let base = start().await;
-    let res = reqwest::get(format!("{base}/")).await.unwrap();
+    let res = crate::http::client()
+        .get(format!("{base}/"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200);
     let kind = res.headers()[reqwest::header::CONTENT_TYPE]
         .to_str()
@@ -232,7 +278,7 @@ async fn the_app_comes_in_one_response() {
     assert_eq!(kind, "text/html; charset=utf-8");
     assert_eq!(res.headers()["x-content-type-options"], "nosniff");
     assert_eq!(res.headers()["referrer-policy"], "no-referrer");
-    assert_eq!(res.text().await.unwrap(), control_api::page());
+    assert_eq!(res.text().await.unwrap(), page::page());
 }
 
 #[tokio::test]
@@ -243,7 +289,11 @@ async fn browser_icon_requests_are_not_grinder_traffic() {
         "/apple-touch-icon.png",
         "/apple-touch-icon-precomposed.png",
     ] {
-        let res = reqwest::get(format!("{base}{path}")).await.unwrap();
+        let res = crate::http::client()
+            .get(format!("{base}{path}"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(res.status(), 404, "{path}");
     }
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
@@ -255,7 +305,11 @@ async fn browser_icon_requests_are_not_grinder_traffic() {
 async fn other_devices_looking_for_their_kind_are_not_grinder_traffic() {
     let base = start().await;
     // Smart-home discovery on port 80, e.g. for Shelly devices.
-    let res = reqwest::get(format!("{base}/shelly")).await.unwrap();
+    let res = crate::http::client()
+        .get(format!("{base}/shelly"))
+        .send()
+        .await
+        .unwrap();
     assert_eq!(res.status(), 200, "answered like any unknown request");
     assert_eq!(res.text().await.unwrap(), "{}");
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
@@ -267,15 +321,77 @@ async fn other_devices_looking_for_their_kind_are_not_grinder_traffic() {
     let mut grinder = Grinder::new(&base);
     grinder.poll().await;
     for path in ["/api/v2/something-new", "/api/v2/"] {
-        let res = reqwest::get(format!("{base}{path}")).await.unwrap();
+        let res = crate::http::client()
+            .get(format!("{base}{path}"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(res.text().await.unwrap(), "{}");
     }
     // Not the grinder's: only starts like its paths.
-    reqwest::get(format!("{base}/api/v2x")).await.unwrap();
+    crate::http::client()
+        .get(format!("{base}/api/v2x"))
+        .send()
+        .await
+        .unwrap();
     let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
-    assert_eq!(state["grinder"]["requests"], 3);
+    assert_eq!(state["grinder"]["requests"], 1, "only the grinder's own");
     assert_eq!(state["grinder"]["polls"], 1, "only the poll is a poll");
     assert_ne!(state["grinder"]["peer"], Value::Null);
+}
+
+#[tokio::test]
+async fn only_the_grinders_own_requests_say_where_it_is() {
+    use tracing_subscriber::layer::SubscriberExt;
+    let (base, x) = start_server().await;
+    // The log as the binary keeps it, for this test's thread (and so its
+    // server) only.
+    let _log = tracing::subscriber::set_default(
+        tracing_subscriber::registry().with(LogLayer::new(x.log().clone())),
+    );
+    let http = crate::http::client();
+    // Any device can send these, a web page's plain read included.
+    let unknown = format!("/api/v2/routes-test-{}", uuid::Uuid::new_v4().simple());
+    let long = format!("/api/v2/routes-test-{}", "y".repeat(10_000));
+    for _ in 0..3 {
+        for path in [&unknown, &long] {
+            let res = http.get(format!("{base}{path}")).send().await.unwrap();
+            assert_eq!(res.text().await.unwrap(), "{}");
+        }
+        for path in [PATH_BREWRATIO, PATH_SCRIPTS_EXECUTE] {
+            let res = http.post(format!("{base}{path}")).body("nope").send();
+            assert_eq!(res.await.unwrap().status(), 200, "answered as before");
+        }
+    }
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["grinder"]["peer"], Value::Null);
+    assert_eq!(state["grinder"]["requests"], 0);
+    assert_eq!(state["grinder"]["last_poll_age_ms"], Value::Null);
+
+    // Each is told once per device, in one short line.
+    let (lines, _) = x.log().after(0);
+    let told = |what: &str| -> Vec<String> {
+        lines
+            .iter()
+            .filter(|l| l.text.contains(what))
+            .map(|l| l.text.clone())
+            .collect()
+    };
+    let unknown_told = told("unknown grinder request");
+    assert_eq!(unknown_told.len(), 2, "{unknown_told:#?}");
+    assert!(
+        unknown_told.iter().all(|l| l.len() < 300),
+        "{unknown_told:#?}"
+    );
+    let unparsable = told("unparsable grinder write");
+    assert_eq!(unparsable.len(), 2, "{unparsable:#?}");
+    assert_eq!(lines.len(), 4, "nothing else: {lines:#?}");
+
+    let mut grinder = Grinder::new(&base);
+    grinder.poll().await;
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_ne!(state["grinder"]["peer"], Value::Null);
+    assert_eq!(state["grinder"]["requests"], 1);
 }
 
 #[tokio::test]
@@ -306,8 +422,22 @@ async fn an_abort_says_why_over_the_api() {
     let base = start().await;
     let post = reqwest::Method::POST;
     call(post.clone(), format!("{base}/api/shot/start"), None).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    // How long it has run, for the app's timer.
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(state["shot"]["phase"], "running");
+    let running = state["shot"]["phase_age_ms"]
+        .as_u64()
+        .expect("phase_age_ms");
+    assert!((300..10_000).contains(&running), "running for {running} ms");
     let (code, _) = call(post, format!("{base}/api/shot/abort"), None).await;
     assert_eq!(code, 200);
+    let (_, state) = call(reqwest::Method::GET, format!("{base}/api/state"), None).await;
+    assert_eq!(
+        state["shot"]["phase_age_ms"],
+        Value::Null,
+        "only while running"
+    );
     let (_, events) = call(
         reqwest::Method::GET,
         format!("{base}/api/events?after=0"),
@@ -324,6 +454,82 @@ async fn an_abort_says_why_over_the_api() {
         (&aborted["cause"], &aborted["reason"]),
         (&json!("shot_aborted_by_user"), &json!("aborted by user"))
     );
+    let ran = aborted["running_ms"].as_u64().expect("running_ms");
+    assert!(ran >= running && ran < 10_000, "ran {ran} ms");
+}
+
+#[tokio::test]
+async fn the_event_stream_names_events_by_kind_and_resumes() {
+    let (base, x) = start_server().await;
+    let url = format!("{base}/api/events/stream");
+    let mut live = open_stream(url.clone(), None).await;
+    let post = reqwest::Method::POST;
+    call(post.clone(), format!("{base}/api/shot/start"), None).await;
+    call(post, format!("{base}/api/shot/abort"), None).await;
+    let events = read_until(&mut live, 2).await;
+    let got: Vec<_> = events.iter().map(|e| (e.event.as_str(), e.id)).collect();
+    assert_eq!(got, [("shot_started", 1), ("shot_aborted", 2)]);
+    for e in &events {
+        assert_eq!(e.data["kind"], e.event.as_str());
+        assert_eq!(e.data["seq"], e.id);
+        assert!(e.data["age_ms"].is_u64());
+    }
+    // After the finishing hold (no ticker runs here).
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    x.with(|m, now| m.tick(now));
+    assert_eq!(read_until(&mut live, 3).await[0].event, "shot_finished");
+
+    // A browser reconnecting says what it saw last and gets what it missed,
+    // which wins over the query of the URL it reconnects to.
+    let mut again = open_stream(format!("{url}?after=0"), Some(1)).await;
+    let ids: Vec<_> = read_until(&mut again, 3)
+        .await
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, [2, 3]);
+    let mut script = open_stream(format!("{url}?after=2"), None).await;
+    assert_eq!(read_until(&mut script, 3).await.len(), 1);
+    // An id from before a restart: all kept events.
+    let mut restarted = open_stream(url.clone(), Some(999)).await;
+    let ids: Vec<_> = read_until(&mut restarted, 3)
+        .await
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, [1, 2, 3]);
+
+    // A stream that falls behind the live feed reads the missed events
+    // back. Made at once, so the stream can't read any in between.
+    x.with(|m, now| {
+        for _ in 0..200 {
+            m.start_shot(now).unwrap();
+            m.abort(now).unwrap();
+        }
+    });
+    let last = x.with(|m, _| m.last_seq());
+    assert!(last > 3 + 256, "more than the live feed holds");
+    let ids: Vec<_> = read_until(&mut live, last)
+        .await
+        .iter()
+        .map(|e| e.id)
+        .collect();
+    assert_eq!(ids, (4..=last).collect::<Vec<_>>(), "none skipped");
+}
+
+#[tokio::test]
+async fn a_log_stream_that_falls_behind_reads_the_lines_back() {
+    let (base, x) = start_server().await;
+    let mut stream = open_stream(format!("{base}/api/log/stream"), None).await;
+    // At once, so the stream can't read any in between.
+    for n in 0..600 {
+        x.log()
+            .push(tracing::Level::INFO, &format!("routes test: line {n}"));
+    }
+    let lines = read_until(&mut stream, 600).await;
+    let ids: Vec<_> = lines.iter().map(|l| l.id).collect();
+    assert_eq!(ids, (1..=600).collect::<Vec<_>>(), "none skipped");
+    assert_eq!(lines[599].data["text"], "routes test: line 599");
 }
 
 #[tokio::test]
@@ -416,9 +622,9 @@ async fn control_api_rejects_what_it_cannot_do() {
     let reply = call(post.clone(), format!("{base}/api/machine"), patch).await;
     assert_eq!(code_of(reply), expect(400, "machine_patch_invalid"));
 
-    // A body or query it can't read: malformed, of the wrong shape, or not
-    // said to be JSON.
-    let http = reqwest::Client::new();
+    // A body, query or path it can't read: malformed, of the wrong shape,
+    // not said to be JSON, or not UTF-8.
+    let http = crate::http::client();
     let result = format!("{base}/api/shot/result");
     for req in [
         http.post(&result)
@@ -428,6 +634,9 @@ async fn control_api_rejects_what_it_cannot_do() {
         http.post(&result).body(r#"{"time_s":30}"#),
         http.get(format!("{base}/api/events?after=x")),
         http.get(format!("{base}/api/log?after=-1")),
+        http.get(format!("{base}/api/integrations/%FF/settings")),
+        http.delete(format!("{base}/api/integrations/%FF")),
+        http.get(format!("{base}/icons/%FF.svg")),
     ] {
         let res = req.send().await.unwrap();
         let status = res.status().as_u16();
@@ -436,6 +645,50 @@ async fn control_api_rejects_what_it_cannot_do() {
         assert_eq!(body["code"], "request_invalid", "{body}");
         assert!(body["error"].is_string());
     }
+}
+
+#[tokio::test]
+async fn a_broken_settings_or_pairing_file_stops_startup_and_says_which() {
+    let (_, x) = start_server().await;
+    let dir = temp_dir("broken");
+    let settings = dir.join("settings.json");
+    std::fs::write(&settings, "{\"integrations\": [").unwrap();
+    let Err(e) = SettingsFile::open(&settings) else {
+        panic!("a broken settings file was taken");
+    };
+    let e = format!("{e:#}");
+    assert!(
+        e.contains(&format!("{}: not a settings file", settings.display())),
+        "{e}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&settings).unwrap(),
+        "{\"integrations\": [",
+        "left as it was"
+    );
+
+    let pairing = dir.join("grinder-pairing.json");
+    std::fs::write(&pairing, "not json").unwrap();
+    let startup = Startup {
+        grinder_host: Some("127.0.0.1:65009".to_owned()),
+        pairing_file: Some(pairing.clone()),
+        ..Startup::default()
+    };
+    let Err(e) = x.start_settings(startup, None) else {
+        panic!("a broken pairing file was taken");
+    };
+    let e = format!("{e:#}");
+    assert!(e.starts_with("--grinder: "), "{e}");
+    assert!(
+        e.contains(&format!(
+            "{}: not a grinder pairing file (delete it to pair again)",
+            pairing.display()
+        )),
+        "{e}"
+    );
+    assert_eq!(std::fs::read_to_string(&pairing).unwrap(), "not json");
+    assert!(x.grinder_link().wifi.is_none(), "no link started");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
@@ -631,10 +884,13 @@ async fn a_new_grinder_address_ends_the_shot_it_waited_for() {
     let ended = || {
         x.with(|m, _| {
             m.events_after(0).any(|e| {
-                e.event
-                    == crate::protocol::MachineEvent::shot_aborted(
-                        AbortCause::GrinderAddressChanged,
-                    )
+                matches!(
+                    e.event,
+                    crate::protocol::MachineEvent::ShotAborted {
+                        cause: AbortCause::GrinderAddressChanged,
+                        ..
+                    }
+                )
             })
         })
     };
@@ -675,7 +931,9 @@ async fn the_log_is_kept_for_the_app() {
     assert_eq!(after, 0);
     assert_eq!(before["capacity"], 1000);
 
-    let mut stream = reqwest::get(format!("{base}/api/log/stream?after={after}"))
+    let mut stream = crate::http::client()
+        .get(format!("{base}/api/log/stream?after={after}"))
+        .send()
         .await
         .unwrap();
     assert_eq!(
@@ -686,6 +944,7 @@ async fn the_log_is_kept_for_the_app() {
     let first = x.log().push(tracing::Level::WARN, "routes test: first");
     x.log().push(tracing::Level::INFO, "routes test: second");
     x.log().push(tracing::Level::ERROR, "routes test: third");
+    tokio::time::sleep(Duration::from_millis(200)).await;
 
     let (code, body) = call(
         reqwest::Method::GET,
@@ -704,6 +963,9 @@ async fn the_log_is_kept_for_the_app() {
     assert_eq!(ours[0]["seq"], first.seq);
     assert_eq!(ours[0]["text"], "routes test: first");
     assert!(ours[0]["at"].as_str().unwrap().ends_with('Z'));
+    // How long ago, for an app whose clock is not the server's.
+    let age = ours[0]["age_ms"].as_u64().expect("age_ms");
+    assert!((200..10_000).contains(&age), "logged {age} ms ago");
     assert_eq!(body["last_seq"], first.seq + 2);
     // Lower case, like the API's other codes.
     let levels: Vec<_> = ours.iter().map(|l| l["level"].as_str().unwrap()).collect();
@@ -723,10 +985,11 @@ async fn the_log_is_kept_for_the_app() {
     assert!(text.contains(&format!("id: {}", first.seq)), "{text}");
     assert!(text.contains(r#""text":"routes test: first""#), "{text}");
     assert!(text.contains(r#""level":"warn""#), "{text}");
+    assert!(text.contains(r#""age_ms":"#), "{text}");
 
     // A browser reconnecting says what it saw last, and gets what it missed;
     // that wins over the query of the URL it reconnects to.
-    let mut again = reqwest::Client::new()
+    let mut again = crate::http::client()
         .get(format!("{base}/api/log/stream?after=0"))
         .header("last-event-id", first.seq.to_string())
         .send()
@@ -824,7 +1087,9 @@ async fn shots_the_grinder_asked_for_go_into_the_history() {
     );
     assert!(shot["id"].as_str().is_some_and(|id| !id.is_empty()));
     assert!(shot["started_at"].as_str().unwrap().ends_with('Z'));
+    assert_eq!(shot["integration_id"], Value::Null, "typed in");
     assert!(shot["ended_at"].as_str().unwrap() >= shot["started_at"].as_str().unwrap());
+    assert!(shot["running_ms"].as_u64().is_some_and(|ms| ms < 10_000));
     let saved: Value =
         serde_json::from_slice(&std::fs::read(dir.join("history.json")).unwrap()).unwrap();
     assert_eq!(saved["shots"].as_array().unwrap().len(), 3);
@@ -1054,7 +1319,7 @@ async fn integrations_are_edited_and_moved_into_the_app() {
 #[tokio::test]
 async fn web_pages_cannot_act_as_the_grinder() {
     let base = start().await;
-    let http = reqwest::Client::new();
+    let http = crate::http::client();
     // A page on another site, posting a start request as a CORS simple
     // request (no preflight), and reading a poll reply.
     let res = http
@@ -1113,7 +1378,7 @@ async fn web_pages_cannot_act_as_the_grinder() {
 #[tokio::test]
 async fn the_app_answers_home_names_only_and_refuses_other_sites() {
     let base = start().await;
-    let http = reqwest::Client::new();
+    let http = crate::http::client();
     let get_state = |host: &'static str| {
         http.get(format!("{base}/api/state"))
             .header("host", host)
@@ -1262,7 +1527,7 @@ async fn browser_headers_can_be_let_through_to_the_grinder_routes() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     spawn_server(listener, app, addr, &state);
-    let res = reqwest::Client::new()
+    let res = crate::http::client()
         .get(format!("http://{addr}{PATH_MAKO}"))
         .header("origin", "null")
         .send()
@@ -1273,7 +1538,6 @@ async fn browser_headers_can_be_let_through_to_the_grinder_routes() {
 
 #[tokio::test]
 async fn stopping_ends_the_live_streams_and_the_server() {
-    let _ = rustls::crypto::ring::default_provider().install_default();
     let state = Server::with_log(
         MachineConfig::default(),
         Arc::new(LogBook::new(logbook::CAPACITY)),
@@ -1299,7 +1563,11 @@ async fn stopping_ends_the_live_streams_and_the_server() {
     for path in ["/api/events/stream", "/api/log/stream"] {
         let mut res = None;
         for _ in 0..250 {
-            if let Ok(r) = reqwest::get(format!("{base}{path}")).await {
+            if let Ok(r) = crate::http::client()
+                .get(format!("{base}{path}"))
+                .send()
+                .await
+            {
                 res = Some(r);
                 break;
             }
@@ -1326,5 +1594,11 @@ async fn stopping_ends_the_live_streams_and_the_server() {
         asked.elapsed() < STOP_GRACE,
         "without waiting out the grace"
     );
-    assert!(reqwest::get(format!("{base}/api/state")).await.is_err());
+    assert!(
+        crate::http::client()
+            .get(format!("{base}/api/state"))
+            .send()
+            .await
+            .is_err()
+    );
 }

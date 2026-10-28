@@ -18,6 +18,66 @@
     return e;
   }
 
+  /** Sets the text of `node` (and its class, when `cls` is given) only when
+   *  it changed: a status or alert region announces every write, also of
+   *  the same words. */
+  function setText(node, text, cls) {
+    text = text == null ? "" : String(text);
+    if (node.textContent !== text) node.textContent = text;
+    if (cls != null && node.className !== cls) node.className = cls;
+    return node;
+  }
+
+  /** What tells a focusable element from its siblings across a rebuild:
+   *  its data-key, else its id, else the action it runs (data-act). */
+  const focusKey = (e) => (e && e.nodeType === 1 && (e.dataset.key || e.id || (e.dataset.act && "act:" + e.dataset.act))) || null;
+  function byFocusKey(box, key) {
+    for (const e of box.querySelectorAll("[data-key], [id], [data-act]")) if (focusKey(e) === key) return e;
+    return null;
+  }
+  /** Puts `nodes` into `box` in order. Nodes already in it stay where they
+   *  are (an open form keeps its focus and what was typed), the rest is
+   *  replaced around them. */
+  function place(box, nodes) {
+    const keep = new Set(nodes.filter((n) => n.parentNode === box));
+    for (const c of [...box.childNodes]) if (!keep.has(c)) c.remove();
+    let prev = null;
+    for (const n of nodes) {
+      if (prev ? prev.nextSibling !== n : box.firstChild !== n) {
+        if (prev) prev.after(n); else box.prepend(n);
+      }
+      prev = n;
+    }
+  }
+  // The signature each box was last built with (see patch).
+  const builtWith = new WeakMap();
+  /** Rebuilds `box` from `build()` (a list of nodes) only when `sig`
+   *  differs from the one it was last built with, so what does not change
+   *  is not redone between polls. The element that had the focus gets it
+   *  back by its key (focusKey), a field with its caret. Returns whether it
+   *  rebuilt. */
+  function patch(box, sig, build) {
+    if (builtWith.get(box) === sig) return false;
+    builtWith.set(box, sig);
+    const at = document.activeElement;
+    const key = at && at !== box && box.contains(at) ? focusKey(at) : null;
+    const caret = key && at.tagName === "INPUT" ? [at.selectionStart, at.selectionEnd] : null;
+    place(box, build());
+    if (key && !box.contains(document.activeElement)) {
+      const again = byFocusKey(box, key);
+      if (again) {
+        again.focus({ preventScroll: true });
+        if (caret && again.tagName === "INPUT") { try { again.setSelectionRange(caret[0], caret[1]); } catch (_) {} }
+      }
+    }
+    return true;
+  }
+  /** Rebuilds `box` on the next patch, whatever its signature. */
+  const repatch = (box) => builtWith.delete(box);
+
+  /** A plain click: not one that opens a new tab or window. */
+  const plainClick = (e) => !(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0);
+
   // Static icon markup (paths from the design), never built from server data.
   const PATHS = {
     check: '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
@@ -25,7 +85,7 @@
     alert: '<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.5"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/>',
     trash: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/>',
-    arrow: '<path d="M9 5l7 7-7 7"/>',
+    arrow: '<path d="M9 6l6 6-6 6"/>',
     cloud: '<path d="M7 18a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 9.5a3.5 3.5 0 0 1-.5 7H7z"/>',
     back: '<path d="M15 6l-6 6 6 6"/>',
     cross: '<path d="M6 6l12 12M18 6L6 18"/>',
@@ -69,7 +129,7 @@
   // downloaded log stays English.
   //
   // The catalogs are web/strings/<lang>.json, one per language in LANGS in
-  // control_api.rs. The server fills them in here when it starts, so they
+  // server/page.rs. The server fills them in here when it starts, so they
   // come with the page.
   const STRINGS = {/* web/strings/<lang>.json */};
 
@@ -203,15 +263,16 @@
   const grams = (g) => fmt.one.format(Math.round(g * 10) / 10);
   /** A recipe weight: 40, 36.5. */
   const gramsShort = (g) => fmt.upToOne.format(Math.round(g * 10) / 10);
-  /** m:ss from milliseconds. */
-  function clock(ms) {
-    const s = Math.max(0, Math.round(ms / 1000));
+  /** m:ss from milliseconds, to the nearest second; `round` Math.floor for
+   *  a running timer, Math.ceil for the time left. */
+  function clock(ms, round) {
+    const s = Math.max(0, (round || Math.round)(ms / 1000));
     return Math.floor(s / 60) + ":" + pad2(s % 60);
   }
-  /** m:ss from milliseconds, rounding down (a running timer). */
-  function clockDown(ms) {
-    const s = Math.max(0, Math.floor(ms / 1000));
-    return Math.floor(s / 60) + ":" + pad2(s % 60);
+  /** "0.4.0 · abc123" from a version "0.4.0+abc123", or "". */
+  function versionText(v) {
+    const [release, build] = String(v || "").split("+");
+    return release ? release + (build ? " · " + build : "") : "";
   }
   /** Clock times in the language's format. */
   const hhmm = (d) => fmt.hm.format(d);
@@ -238,16 +299,44 @@
   }
   const reducedMotion = () => !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 
+  /** A request to the API. One that fails throws an Error with the
+   *  server's `code`, its English sentence (`server`) and the HTTP
+   *  `status`; errorText() words it. Two codes are the page's own:
+   *  `request_failed` when no answer came (the server restarts, the WiFi
+   *  dropped), `request_status` for an answer without the API's error
+   *  body. */
   async function api(path, opts) {
     const init = Object.assign({ cache: "no-store" }, opts || {});
     if (init.body) init.headers = { "content-type": "application/json" };
-    const r = await fetch(path, init);
+    let r;
+    try { r = await fetch(path, init); }
+    catch (_) { throw apiError("request_failed", "", 0); }
     let body = null;
     try { body = await r.json(); } catch (_) {}
     if (!r.ok) {
-      throw new Error(body && body.error ? sentence(body.error) : t("common.requestFailed", { status: String(r.status) }));
+      const ok = !!body && typeof body === "object";
+      const code = ok && typeof body.code === "string" ? body.code : "request_status";
+      throw apiError(code, ok && typeof body.error === "string" ? body.error : "", r.status);
     }
     return body == null ? {} : body;
+  }
+  function apiError(code, server, status) {
+    const e = new Error(server ? sentence(server) : code);
+    e.code = code; e.server = server; e.status = status;
+    return e;
+  }
+  /** What went wrong with a request, in the person's language: the words
+   *  for its code (`error.<code>`, or `error.<code>.<variant>` where the
+   *  page knows which field it sent), which may show the server's English
+   *  sentence as {error}; else the server's sentence. A test in
+   *  server/page.rs checks that every code the server sends has its
+   *  words. */
+  function errorText(err, variant) {
+    const code = err && err.code;
+    const keys = !code ? [] : variant ? ["error." + code + "." + variant, "error." + code] : ["error." + code];
+    const key = keys.find(hasText);
+    if (key) return t(key, { error: err.server ? sentence(err.server) : "", status: String(err.status || "") });
+    return (err && err.message) || t("error.request_failed");
   }
 
   // --- App state ---------------------------------------------------------------
@@ -269,15 +358,13 @@
   const ui = {
     open: 1, planKey: null, info: false, errInfo: false, dismissed: 0,
     // System status: open or closed (sysOpen), as last set outside a stop
-    // (sysPref), and the stop it opened for by itself (sysStop, see STOPS).
+    // (sysPref), and the stop it opened for by itself (sysStop, see stopOf).
     sysOpen: false, sysPref: false, sysStop: null,
     pill: null,                  // the pill's label and short label, for a resize
-    // Shot events this page reported by hand, and the event numbers the one
-    // just sent falls between until its event is in.
-    lastScenario: null, mine: new Set(), mineRange: null,
-    // The running brew (its start event), whether step 2 shows the fields
-    // for it, and whether no integration reported it in time.
-    brew: null, typeIn: false, missed: false,
+    // The running brew (brewOf; undefined until the Start tab first
+    // rendered), whether step 2 shows the fields for it, and whether no
+    // integration reported it in time.
+    brew: undefined, typeIn: false, missed: false,
   };
 
   const wifiOf = () => (S && S.grinder && S.grinder.wifi) || null;
@@ -310,7 +397,7 @@
   // Why a brew ended without a result, by its `cause` (the server's
   // AbortCause): on purpose (history kind "aborted") or a failure, the text
   // on the Start tab and the history title. A timeout's texts say how long
-  // it waited (errorTitle, shotTitle). A test in control_api.rs checks this
+  // it waited (errorTitle, shotTitle). A test in server/page.rs checks this
   // table against the server.
   const CAUSES = {
     shot_aborted_by_user: { onPurpose: true, text: "start.aborted.user", title: "history.abortedUser" },
@@ -322,24 +409,99 @@
     grinder_unpaired: { onPurpose: false, text: "start.error.unknownApp", title: "start.error.unknownApp" },
     shot_end_missed: { onPurpose: false, title: "history.endMissed" },
   };
+  // What went wrong with the last shot on an E65/E80, by the link's
+  // `problem_cause` (the server's ProblemCause): a brew that ended for one
+  // of the causes above, or a result that did not reach the grinder. A
+  // test in server/page.rs checks this table against the server.
+  const PROBLEMS = {
+    grinder_shot_dropped: "problem.shotDropped",
+    grinder_shot_refused: "problem.shotRefused",
+    grinder_unpaired: "problem.unpaired",
+    grinder_result_expired: "problem.resultExpired",
+    grinder_result_refused: "problem.resultRefused",
+    grinder_result_delayed: "problem.resultDelayed",
+  };
+  /** The E65/E80 link `w`'s problem in words. */
+  const problemText = (w) => (PROBLEMS[w.problem_cause] ? t(PROBLEMS[w.problem_cause]) : sentence(w.problem));
+  // Why the grinder won't grind, by `grind_blocked.cause` (the server's
+  // GrindBlocked). A test in server/page.rs checks this table against it.
+  const BLOCKED = {
+    shot_running: "blocked.shotRunning",
+    machine_in_standby: "blocked.standby",
+    machine_in_eco: "blocked.eco",
+    machine_testing: "blocked.testing",
+    machine_faulty: "blocked.faulty",
+    machine_warming_up: "blocked.warmingUp",
+    machine_tank_empty: "blocked.tankEmpty",
+  };
+  /** System status's line for the grind_blocked `b`. */
+  const blockedText = (b) => t("sys.text.blocked", { message: BLOCKED[b.cause] ? t(BLOCKED[b.cause]) : b.grinder_message });
   /** The cause of a shot_aborted event or a history entry, or null. */
   const causeOf = (x) => (x && x.cause) || null;
   const causeInfo = (cause) => CAUSES[cause] || {};
   const isAbort = (cause) => !!causeInfo(cause).onPurpose;
   /** An E65/E80 setup: its link, or an address it is starting with. */
   const wifiSetup = () => !!(wifiOf() || (S && S.settings && S.settings.grinder_host));
-  /** The E65/E80 link is (re)starting and has not reached the grinder yet. */
-  function linkStarting() {
-    if (linkOn()) return false;
+  /** Where the E65/E80 link `w` is while it pairs (accepting, holding,
+   *  checking, quiet, asking), or null when it does not pair. */
+  const pairingPhase = (w) => (w && w.state === "pairing" ? w.phase || null : null);
+  // Connecting for this long counts as not reaching the grinder.
+  const CONNECT_LONG_MS = 15000;
+
+  // The grinder link, worked out in one place: System status and its
+  // pill, the banner, the grinder card and the setup all read it, so they
+  // say the same. `state` is one of
+  //   offline     gbs-anywhere does not answer
+  //   loading     its state is not in yet
+  //   pairing     an E65/E80 is being paired; `phase` says where
+  //   connecting  an E65/E80 link is starting and has not reached the
+  //               grinder yet (an address without its link yet, or a link
+  //               connecting for less than CONNECT_LONG_MS)
+  //   notSetUp    an E65/E80 answers but turns pairing down
+  //   missing     no grinder: an E64 WS that does not poll, an E65/E80
+  //               that does not answer (`unreached`, also after connecting
+  //               for long) or answers with errors
+  //   problem     connected, but the grinder turned down the last request
+  //   ready       connected
+  // `missing` (for missing and notSetUp) says why there is no grinder (see
+  // grinderMissing).
+  function linkStatus() {
+    if (!online) return { state: "offline" };
+    if (!S) return { state: "loading" };
     const wifi = wifiOf();
-    return wifi ? wifi.state === "connecting" : !!(S && S.settings && S.settings.grinder_host);
+    const on = linkOn();
+    const L = { state: "ready", wifi, on, phase: pairingPhase(wifi), unreached: false, missing: null };
+    if (wifi && wifi.state === "pairing") L.state = "pairing";
+    else if (on) L.state = wifi && wifi.problem_cause ? "problem" : "ready";
+    else if (wifi ? wifi.state === "connecting" && linkStateAge(wifi) <= CONNECT_LONG_MS : !!(S.settings && S.settings.grinder_host)) L.state = "connecting";
+    else if (setupNeeded() && wifi && wifi.not_set_up) L.state = "notSetUp";
+    else L.state = "missing";
+    if (L.state === "missing" || L.state === "notSetUp") L.missing = grinderMissing(wifi);
+    if (L.state === "missing" && wifi) L.unreached = wifi.state === "failing" ? !!wifi.unreachable : wifi.state === "connecting";
+    return L;
   }
+  /** The link as of the last render (see linkStatus). */
+  let link = { state: "loading" };
+
+  // Integration health (the server's `Health`): the tone and label of its
+  // pill, its item in System status's line, and whether it is out of
+  // order (`bad`: it reports no shot then). A test in server/page.rs
+  // checks the keys against the server.
+  const HEALTH = {
+    starting: { tone: "start", label: "integ.health.starting", check: ["wait", "clock", "check.integConnecting"] },
+    connected: { tone: "ok", label: "integ.health.connected", check: ["ok", "check", "check.integReady"] },
+    watching: { tone: "run", label: "integ.health.watching", check: ["ok", "check", "check.integReady"] },
+    failing: { tone: "error", label: "integ.health.failing", check: ["bad", "alert", "check.integError"], bad: true },
+    stopped: { tone: "error", label: "integ.health.stopped", check: ["bad", "alert", "check.integStopped"], bad: true },
+  };
+  /** The integration `i` is out of order: failing or stopped. */
+  const badHealth = (i) => !!(HEALTH[i.health] && HEALTH[i.health].bad);
 
   // Integrations that report shots by themselves. When every one has failed,
   // the shot can still be typed in by hand.
   function reporters() {
     const list = (S && S.integrations) || [];
-    const live = list.filter((i) => i.health !== "failing" && i.health !== "stopped");
+    const live = list.filter((i) => !badHealth(i));
     return { list, live, manual: live.length === 0 };
   }
   /** Seconds into a brew after which a shot no integration reported counts
@@ -375,13 +537,6 @@
     if (f.started && seenAt.has(f.started.seq)) return seenAt.get(f.started.seq);
     return f.sc === "running" ? Date.now() - elapsedMs() : null;
   }
-  /** How long the last brew ran until its outcome, from the ages of both
-   *  events, or null when one is missing. */
-  function brewMs(f) {
-    if (!f.started || !f.outcome || f.outcome.seq < f.started.seq) return null;
-    const start = brewStart(f), end = endTime(f.outcome);
-    return start != null && end != null ? end - start : null;
-  }
   const fresh = (ev) => { const t = endTime(ev); return t != null && Date.now() - t < FRESH_MS; };
   /** E64: a grind waits for the knob press only for a while. */
   const knobFresh = (ev) => seenAt.has(ev.seq) && Date.now() - seenAt.get(ev.seq) < Math.max(KNOB_MS, windowS() * 1000);
@@ -415,15 +570,15 @@
     return { sc, reason, cause, outcome, started: lastOf(["shot_started"]), job: lastOf(["grinder_grind_finished"]) };
   }
 
-  // Per state: the tone and badge (catalog key under badge.) of each step.
+  // Per state: the tone and badge (its catalog key, or "" for none) of each step.
   const PLANS = {
-    ready: [["start", "start"], ["none", ""], ["none", ""]],
-    knob: [["run", "pressKnob"], ["wait", "waiting"], ["none", ""]],
-    running: [["done", "done"], ["run", "running"], ["wait", "waiting"]],
-    checking: [["done", "done"], ["done", "done"], ["run", "running"]],
-    done: [["done", "done"], ["done", "done"], ["done", "done"]],
-    error: [["done", "done"], ["error", "error"], ["skip", "skipped"]],
-    aborted: [["done", "done"], ["abort", "aborted"], ["skip", "skipped"]],
+    ready: [["start", "badge.start"], ["none", ""], ["none", ""]],
+    knob: [["run", "badge.pressKnob"], ["wait", "badge.waiting"], ["none", ""]],
+    running: [["done", "badge.done"], ["run", "badge.running"], ["wait", "badge.waiting"]],
+    checking: [["done", "badge.done"], ["done", "badge.done"], ["run", "badge.running"]],
+    done: [["done", "badge.done"], ["done", "badge.done"], ["done", "badge.done"]],
+    error: [["done", "badge.done"], ["error", "badge.error"], ["skip", "badge.skipped"]],
+    aborted: [["done", "badge.done"], ["abort", "badge.aborted"], ["skip", "badge.skipped"]],
   };
 
   // --- Tabs --------------------------------------------------------------------
@@ -467,7 +622,7 @@
   }
   for (const a of document.querySelectorAll("nav.tabs a")) {
     a.addEventListener("click", (e) => {
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;   // new tab/window
+      if (!plainClick(e)) return;   // a new tab or window
       e.preventDefault();
       goTab(a.dataset.tab);
     });
@@ -493,71 +648,95 @@
     return b && !(S.shot.phase !== "ready" && b.cause === "shot_running") ? b : null;
   }
 
-  /** The last part of a server error ("cannot reach the grinder at …:
-   *  operation timed out" gives "operation timed out"): the cause, without
-   *  the addresses before it. */
-  const lastCause = (text) => String(text || "").split(": ").pop().trim();
-
   /** Why there is no grinder, in plain words (`text`), and the server's
-   *  error behind it (`detail`), which stays English like the log. */
+   *  error behind it (`detail`: its `error`, without the addresses
+   *  before it), which stays English like the log. */
   function grinderMissing(wifi) {
     if (!wifi) return { text: t("sys.missing.e64"), detail: "" };
-    const error = wifi.state === "failing" && wifi.detail ? lastCause(wifi.detail) : "";
+    const error = (wifi.state === "failing" && wifi.error) || "";
     // It answers, but not as it should: not a matter of switching it on.
     if (error && wifi.unreachable === false) return { text: t("sys.missing.linkError"), detail: error };
     return { text: t("sys.missing.wifi"), detail: error };
   }
 
-  // System states in which no shot can start: System status opens by
-  // itself, step 1 says it is blocked and the steps stay closed.
-  const STOPS = ["offline", "noGrinder", "blocked", "setup", "pairing"];
+  // What System status says, by its key: the pill's label (and a shorter
+  // one for where that does not fit), System status's title (`big`, else
+  // the label), whether no shot can start (`stop`: System status opens by
+  // itself and the steps stay closed), what step 1 shows meanwhile
+  // (`step1`: "wait" while the setup goes on or the link starts, else
+  // Blocked during a stop), and whether the title is the grinder's state
+  // (`grinder`: the banner and the line below leave it out).
+  const SYS = {
+    offline: { label: "sys.label.offline", stop: true },
+    connecting: { label: "sys.label.connecting" },
+    running: { label: "sys.label.running" },
+    knob: { label: "sys.label.knob", short: "sys.label.knobShort" },
+    pairing: { label: "sys.label.pairing", stop: true, step1: "wait", grinder: true },
+    linking: { label: "sys.label.linking", step1: "wait", grinder: true },
+    noGrinder: { label: "sys.label.noGrinder", short: "sys.label.noGrinderShort", stop: true, grinder: true },
+    setup: { label: "sys.label.setup", short: "sys.label.setupShort", stop: true, step1: "wait", grinder: true },
+    blocked: { label: "sys.label.blocked", stop: true },
+    error: { label: "sys.label.error" },
+    problem: { label: "sys.label.problem", grinder: true },
+    integError: { label: "sys.label.integError", short: "sys.label.integErrorShort" },
+    ready: { label: "sys.label.ready", big: "sys.label.readyLong" },
+  };
   /** The stop System status `s` shows, or null. Not during a shot, so the
    *  step in use stays open, and not for a moment offline (as when the
    *  phone wakes up), so nothing jumps. */
   function stopOf(s, f) {
-    if (!STOPS.includes(s.key) || ["running", "checking", "knob"].includes(f.sc)) return null;
+    if (!s.def.stop || ["running", "checking", "knob"].includes(f.sc)) return null;
     if (s.key === "offline" && Date.now() - offlineSince < 5000) return null;
     return s.key;
   }
 
+  // What the grinder card's pill (tone and text) and System status's line
+  // (tone, icon and text) say in each state of the link (see linkStatus).
+  const LINK_VIEW = {
+    pairing: { pill: ["start", "grinder.state.pairing"], check: ["wait", "clock", "check.grinderPairing"] },
+    connecting: { pill: ["start", "grinder.state.connecting"], check: ["wait", "clock", "check.grinderConnecting"] },
+    notSetUp: { pill: ["start", "grinder.state.notSetUp"], check: ["bad", "alert", "check.grinderOff"] },
+    missing: { pill: ["error", "grinder.state.notConnected"], check: ["bad", "alert", "check.grinderOff"] },
+    problem: { pill: ["warn", "grinder.state.problem"], check: ["bad", "alert", "sys.label.problem"] },
+    ready: { pill: ["ok", "grinder.state.ready"], check: ["ok", "check", "check.grinderReady"] },
+  };
+
+  /** What System status says for the shot of flow() `f` and the link. */
   function sysInfo(f) {
-    const wifi = wifiOf();
-    // `big` is the System status line; the header pill shows `label`, or
-    // `short` where that does not fit.
-    const s = (tone, icon, label, text, detail) => ({
-      key: label, tone, icon, text, detail: detail || "", label: t("sys.label." + label),
-      short: hasText("sys.label." + label + "Short") ? t("sys.label." + label + "Short") : "",
-      big: label === "ready" ? t("sys.label.readyLong") : t("sys.label." + label),
-    });
-    if (!online) return s("error", "alert", "offline", t("sys.text.offline"));
-    if (!S) return s("none", "clock", "connecting", "");
+    const L = link;
+    const s = (tone, icon, key, text, detail) => {
+      const def = SYS[key];
+      // `big` is the System status line; the header pill shows `label`, or
+      // `short` where that does not fit.
+      return { key, def, tone, icon, text, detail: detail || "", label: t(def.label), short: def.short ? t(def.short) : "", big: t(def.big || def.label) };
+    };
+    if (L.state === "offline") return s("error", "alert", "offline", t("sys.text.offline"));
+    if (L.state === "loading") return s("none", "clock", "connecting", "");
     const blocked = grindBlocked();
     if (f.sc === "running") return s("run", "clock", "running", t("sys.text.running"));
     if (f.sc === "checking") return s("run", "clock", "running", t("sys.text.checking"));
     if (f.sc === "knob") return s("run", "clock", "knob", t("sys.text.knob"));
     // Not paired yet: the setup (System status leads there) says what to do.
-    const phase = wifi && wifi.state === "pairing" ? wifi.phase : null;
-    if (phase === "asking") return s("start", "alert", "pairing", t("sys.text.needsId"));
-    if (phase === "quiet") return s("start", "clock", "pairing", t("sys.text.quiet", { n: quietMinutes(wifi) }));
-    if (phase === "accepting") return s("start", "alert", "setup", t("sys.text.accept"));
-    if (phase) return s("start", "clock", "pairing", t("sys.text.pairing"));
-    if (linkStarting()) {
+    if (L.state === "pairing") {
+      if (L.phase === "asking") return s("start", "alert", "pairing", t("sys.text.needsId"));
+      if (L.phase === "quiet") return s("start", "clock", "pairing", t("sys.text.quiet", { n: quietMinutes(L.wifi) }));
+      if (L.phase === "accepting") return s("start", "alert", "pairing", t("sys.text.accept"));
+      return s("start", "clock", "pairing", t("sys.text.pairing"));
+    }
+    if (L.state === "connecting") {
       const host = S.settings && S.settings.grinder_host;
       return s("start", "clock", "linking", host ? t("sys.text.linking", { host }) : t("sys.text.linkingNoHost"));
     }
-    if (!linkOn()) {
-      // It answers but turns pairing down: not set up, rather than not
-      // connected; its answer stays at hand with the log. Any other error
-      // shows as one.
-      if (setupNeeded() && wifi && wifi.not_set_up) return s("start", "alert", "setup", t("sys.text.setup"), lastCause(wifi.detail));
-      const missing = grinderMissing(wifi);
-      return s("error", "alert", "noGrinder", missing.text, missing.detail);
-    }
-    if (blocked) return s("warn", "alert", "blocked", t("sys.text.blocked", { message: blocked.grinder_message }));
+    // It answers but turns pairing down: not set up, rather than not
+    // connected; its answer stays at hand with the log. Any other error
+    // shows as one.
+    if (L.state === "notSetUp") return s("start", "alert", "setup", t("sys.text.setup"), L.wifi.error || "");
+    if (L.state === "missing") return s("error", "alert", "noGrinder", L.missing.text, L.missing.detail);
+    if (blocked) return s("warn", "alert", "blocked", blockedText(blocked));
     if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f));
     // Shots can still be made, but something needs a look: not green.
-    if (wifi && wifi.problem) return s("warn", "alert", "problem", t("sys.text.problem"), sentence(wifi.problem));
-    const failing = (S.integrations || []).find((i) => i.health === "failing" || i.health === "stopped");
+    if (L.state === "problem") return s("warn", "alert", "problem", t("sys.text.problem"), problemText(L.wifi));
+    const failing = (S.integrations || []).find(badHealth);
     if (failing) {
       const r = s("warn", "alert", "integError", t("sys.text.integError", { title: failing.title }), failing.last_error);
       r.integ = failing;
@@ -576,28 +755,22 @@
   function renderChecks(s) {
     const box = $("sys-checks");
     const items = [];
-    const wifi = wifiOf();
-    if (S && online) {
-      let grinder = null;
-      if (["noGrinder", "setup", "pairing", "linking", "problem"].includes(s.key)) { /* said above */ }
-      else if (wifi && wifi.state === "pairing") grinder = ["wait", "clock", t("check.grinderPairing")];
-      else if (linkOn()) grinder = ["ok", "check", tv("check.grinderReady")];
-      else if (linkStarting()) grinder = ["wait", "clock", t("check.grinderConnecting")];
-      else grinder = ["bad", "alert", t("check.grinderOff")];
+    const view = LINK_VIEW[link.state];
+    if (view) {
+      // Left out where System status's title says it already.
+      const grinder = s.def.grinder ? null : [view.check[0], view.check[1], tv(view.check[2])];
       if (grinder) items.push(grinder);
       const list = S.integrations || [];
       for (const i of list) {
-        if (i === s.integ) continue;
-        const title = { title: i.title };
-        if (i.health === "connected" || i.health === "watching") items.push(["ok", "check", t("check.integReady", title)]);
-        else if (i.health === "starting") items.push(["wait", "clock", t("check.integConnecting", title)]);
-        else items.push(["bad", "alert", i.health === "stopped" ? t("check.integStopped", title) : t("check.integError", title)]);
+        const h = HEALTH[i.health];
+        if (i === s.integ || !h) continue;
+        items.push([h.check[0], h.check[1], t(h.check[2], { title: i.title })]);
       }
       if (list.length === 0) items.push(["muted", null, t("check.noIntegration")]);
       // The grinder alone on a line says nothing System status doesn't.
       if (items.length === 1 && items[0] === grinder) items.length = 0;
     }
-    box.replaceChildren(...(items.length ? [el("div", { class: "checks-in" }, ...items.map(([cls, ic, text]) =>
+    patch(box, JSON.stringify(items), () => (items.length ? [el("div", { class: "checks-in" }, ...items.map(([cls, ic, text]) =>
       el("span", { class: cls }, ic ? icon(ic, 14, ic === "check" ? 2.6 : 2.2) : null, text)))] : []));
   }
 
@@ -605,16 +778,17 @@
     node.className = node.className.replace(/\bt-[a-z]+\b/g, "").trim() + " t-" + tone;
   }
 
-  /** Renders the pill and System status; returns what sysInfo() said. */
-  function renderHeader(f) {
-    const s = sysInfo(f);
-    // A stop opens System status; a tap closes it until the next stop. When
-    // the stop is over, it goes back to how it was left before.
-    const stop = stopOf(s, f);
-    if (stop !== ui.sysStop) {
-      ui.sysStop = stop;
-      ui.sysOpen = stop ? true : ui.sysPref;
-    }
+  /** System status opened or closed for the stop `stop` (see stopOf): a
+   *  stop opens it; a tap closes it until the next stop. When the stop is
+   *  over, it goes back to how it was left before. */
+  function followStop(stop) {
+    if (stop === ui.sysStop) return;
+    ui.sysStop = stop;
+    ui.sysOpen = stop ? true : ui.sysPref;
+  }
+
+  /** Renders the pill and System status `s` (from sysInfo). */
+  function renderHeader(s) {
     const pill = $("sys-pill");
     setTone(pill, s.tone);
     ui.pill = [s.label, s.short];
@@ -635,7 +809,6 @@
     $("sys-toggle").setAttribute("aria-expanded", String(ui.sysOpen));
     $("sys-body").hidden = !ui.sysOpen;
     renderChecks(s);
-    return s;
   }
   /** The pill's label, or its short form when the long one would be cut off. */
   function fitPill(label, short) {
@@ -673,25 +846,21 @@
    *  does not say itself, such as a grinder that went away mid-shot. */
   function renderBanner(f, s) {
     const b = $("banner");
-    const wifi = wifiOf();
-    // A status region announces every change, so only real ones.
-    const show = (cls, text) => {
-      b.hidden = false;
-      if (b.className !== "banner " + cls) b.className = "banner " + cls;
-      if (b.textContent !== text) b.textContent = text;
-    };
+    const L = link, wifi = L.wifi;
+    const show = (cls, text) => { b.hidden = false; setText(b, text, "banner " + cls); };
     if (!S || !online) { b.hidden = true; return; }
     const blocked = grindBlocked();
-    if (blocked && s.key !== "blocked") show("warn", t("sys.text.blocked", { message: blocked.grinder_message }));
-    else if (wifi && wifi.state === "pairing") b.hidden = true; // System status and the setup say it
-    else if (linkStarting()) b.hidden = true; // the system status says it
-    else if (!linkOn()) { if (s.key === "noGrinder" || s.key === "setup") b.hidden = true; else show("bad", grinderMissing(wifi).text); }
-    else if (wifi && wifi.problem && s.key !== "problem" && !(f.sc === "error" && f.reason === wifi.problem)) show("warn", t("sys.problem", { problem: sentence(wifi.problem) }));
+    if (blocked && s.key !== "blocked") show("warn", blockedText(blocked));
+    // Pairing or connecting: System status and the setup say it.
+    else if (L.state === "pairing" || L.state === "connecting" || s.def.grinder) b.hidden = true;
+    else if (L.missing) show("bad", L.missing.text);
+    // A brew that ended for the problem's cause says it already.
+    else if (L.state === "problem" && !(f.sc === "error" && f.cause === wifi.problem_cause)) show("warn", t("sys.problem", { problem: problemText(wifi) }));
     else b.hidden = true;
   }
 
   function setStep(n, tone, badgeKey, open) {
-    const label = badgeKey ? t("badge." + badgeKey) : "";
+    const label = badgeKey ? t(badgeKey) : "";
     const card = $("step-" + n);
     const head = card.querySelector(".card-head");
     const numEl = card.querySelector("[data-num]");
@@ -715,50 +884,96 @@
   /** "the La Marzocco cloud and the Half Decent Scale", from integrations. */
   const theTitles = (live) => joinList(live.map((i) => t("start.integrationName", { title: i.title })));
 
-  function renderStart() {
-    if (!S) return;
-    const f = flow();
-    const r = reporters();
-    const tg = targets();
-    const sys = renderHeader(f);
-    renderBanner(f, sys);
+  /** The brew that runs, as the server numbers its start event: "?" while
+   *  that event is not in yet, null while none runs. With the server's
+   *  boot_id, as its numbers start over when it restarts. */
+  function brewOf(f) {
+    if (f.sc !== "running") return null;
+    const s = f.started;
+    return S.server.boot_id + ":" + (s && !(f.outcome && f.outcome.seq > s.seq) ? s.seq : "?");
+  }
 
+  // The Start tab renders in four parts: what the state says (planStart),
+  // the page's own state that follows it (applyStart), what happens once
+  // per brew (brewStarted), and the page itself (drawStart).
+
+  /** What the Start tab shows, from the server's state alone: the shot
+   *  (flow), System status and its stop, the brew and each step's tone
+   *  and badge. */
+  function planStart() {
+    const f = flow();
+    const sys = sysInfo(f);
     // Step 1 says when no shot can start: blocked while there is no grinder
     // (or no gbs-anywhere, or the grinder won't grind), waiting while it
     // connects or pairs.
-    const stop = !!stopOf(sys, f);
+    const stop = stopOf(sys, f);
+    let plan = PLANS[f.sc];
+    // Also after a shot, whose result stays in steps 2 and 3.
+    if (stop && sys.def.step1 === "wait") plan = [["wait", "badge.waiting"], ...plan.slice(1)];
+    else if (stop && ["ready", "done", "error", "aborted"].includes(f.sc)) plan = [[sys.tone === "warn" ? "warn" : "error", "badge.blocked"], ...plan.slice(1)];
+    else if (f.sc === "ready" && sys.def.step1 === "wait") plan = [["wait", "badge.waiting"], ["none", ""], ["none", ""]];
+    return { f, sys, stop, plan, brew: brewOf(f), r: reporters(), tg: targets() };
+  }
+
+  /** The page's own state for plan `p`: System status open or closed, the
+   *  brew and its fields, and which step is open. Returns whether a new
+   *  brew started. */
+  function applyStart(p) {
+    const { f, r, stop } = p;
+    followStop(stop);
+    // A new brew: also one that started and another that followed it while
+    // the page was away (a phone asleep). Its start event coming in after
+    // the state is the same brew.
+    const was = ui.brew;
+    const same = p.brew === was || (p.brew !== null && was != null && was.endsWith(":?") && p.brew.split(":")[0] === was.split(":")[0]);
+    ui.brew = p.brew;
+    if (!same) ui.typeIn = ui.missed = false;
     // Step 2 shows the fields to type the shot in when no integration can
     // report it: none is working, the brew was started without the grinder,
     // or none reported it in time. Once shown, they stay for this brew.
-    const brew = f.sc === "running" ? (f.started ? f.started.seq : -1) : null;
-    if (brew !== ui.brew) { ui.brew = brew; ui.typeIn = ui.missed = false; }
-    if (brew !== null) {
+    if (p.brew !== null) {
       ui.missed = ui.missed || shotMissed(r);
       ui.typeIn = ui.typeIn || r.manual || !S.shot.requested_by_grinder || ui.missed;
     }
-    let plan = PLANS[f.sc];
-    // Also after a shot, whose result stays in steps 2 and 3.
-    if (stop && (sys.key === "setup" || sys.key === "pairing")) plan = [["wait", "waiting"], ...plan.slice(1)];
-    else if (stop && ["ready", "done", "error", "aborted"].includes(f.sc)) plan = [[sys.tone === "warn" ? "warn" : "error", "blocked"], ...plan.slice(1)];
-    else if (f.sc === "ready" && sys.key === "linking") plan = [["wait", "waiting"], ["none", ""], ["none", ""]];
-
     // Which step is open: the running or failed one opens by itself when the
     // shot moves on, step 3 with the result once done; otherwise step 1, or
     // none during a stop (System status tells why). A tap overrides it until
     // then.
-    const key = f.sc + ":" + (f.outcome ? f.outcome.seq : 0) + ":" + (f.job ? f.job.seq : 0) + ":" + (stop ? sys.key : "") + ":" + ui.typeIn;
+    const key = f.sc + ":" + (f.outcome ? f.outcome.seq : 0) + ":" + (f.job ? f.job.seq : 0) + ":" + (stop || "") + ":" + ui.typeIn;
     if (key !== ui.planKey) {
       ui.planKey = key;
-      const auto = plan.findIndex(([tone]) => tone === "run" || tone === "error");
+      const auto = p.plan.findIndex(([tone]) => tone === "run" || tone === "error");
       ui.open = stop ? 0 : auto >= 0 ? auto + 1 : f.sc === "done" ? 3 : 1;
       ui.errInfo = false;
     }
-    if (f.sc === "running" && ui.lastScenario !== "running") {
-      // A typed weight stays for the next shot; left empty, the recipe's is sent.
-      $("f-time").value = ""; setHint();
-      if (ui.lastScenario !== null && navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (_) {} }
-    }
-    ui.lastScenario = f.sc;
+    return !same && p.brew !== null;
+  }
+
+  /** Once per brew, as it starts: the shot time typed for the last one
+   *  goes (a typed weight stays for the next shot; left empty, the
+   *  recipe's is sent), and the phone buzzes, unless `quiet` (the page
+   *  just opened). */
+  function brewStarted(quiet) {
+    $("f-time").value = "";
+    setHint();
+    if (!quiet && navigator.vibrate) { try { navigator.vibrate([120, 80, 120]); } catch (_) {} }
+  }
+
+  /** Renders the Start tab; `L` is this render's linkStatus(), when it has one. */
+  function renderStart(L) {
+    if (!S) return;
+    link = L || linkStatus();
+    const opened = ui.brew === undefined;
+    const p = planStart();
+    if (applyStart(p)) brewStarted(opened);
+    drawStart(p);
+  }
+
+  /** The Start tab for plan `p`, as applyStart left the page's state. */
+  function drawStart(p) {
+    const { f, r, tg, sys, plan } = p;
+    renderHeader(sys);
+    renderBanner(f, sys);
     plan.forEach(([tone, label], i) => setStep(i + 1, tone, label, ui.open === i + 1));
 
     // Step 1
@@ -801,8 +1016,7 @@
       // Whichever comes first wins: the shot typed in or an integration's.
       const note = r.manual && r.list.length ? cap(t("start.step2.failed", { n: r.list.length, names: theTitles(r.list) }))
         : ui.missed ? t("start.step2.missed", { n: r.live.length, names: theTitles(r.live) }) : "";
-      // A status region announces every change, so only real ones.
-      if ($("s2-missed").textContent !== note) $("s2-missed").textContent = note;
+      setText($("s2-missed"), note);
       $("s2-missed").hidden = !note;
       $("s2-auto").hidden = ui.typeIn;
       $("shot-form").hidden = !ui.typeIn;
@@ -822,7 +1036,7 @@
       shot = res ? t("unit.shot", { time: secs(res.time_ms / 1000), weight: grams(res.weight_g) }) : "";
       $("s2-shot").textContent = shot;
       const at = endTime(f.outcome);
-      const by = reportedBy(f.outcome, res);
+      const by = reportedBy(f);
       $("s2-source").textContent = [by, at ? hhmmss(new Date(at)) : null].filter(Boolean).join(" · ");
     }
     $("s2-error").hidden = f.sc !== "error";
@@ -850,7 +1064,7 @@
     const ground = !(f.sc === "ready" || f.sc === "knob");
     [ground && recipe ? t("start.step1.recipeTarget", { recipe }) : "", shot, rating].forEach((text, i) => {
       const sum = $("step-" + (i + 1)).querySelector("[data-sum]");
-      if (sum.textContent !== text) sum.textContent = text;
+      setText(sum, text);
       sum.hidden = !text;
       const open = ui.open === i + 1;
       sum.classList.toggle("ghost", open);
@@ -858,21 +1072,26 @@
     });
   }
 
-  /** "Reported by La Marzocco cloud" or "Entered by hand". */
-  function reportedBy(ev, res) {
-    if (!res) return "";
-    if (ev && ui.mine.has(ev.seq)) return t("start.step2.byHand");
-    const i = ((S && S.integrations) || []).find((x) => x.last_report && x.last_report.time_ms === res.time_ms
-      && Math.abs(x.last_report.weight_g - res.weight_g) < 0.05);
-    return i ? t("start.step2.reportedBy", { title: i.title }) : t("start.step2.byHand");
+  /** The title of the integration `id`, or the id of one that is gone. */
+  function integTitle(id) {
+    const i = ((S && S.integrations) || []).find((x) => x.id === id);
+    return i ? i.title : id;
+  }
+  /** "Reported by La Marzocco cloud" or "Entered by hand" for the shot of
+   *  flow() `f`, as its event says (`integration_id`); "" until the event
+   *  of this brew is in. */
+  function reportedBy(f) {
+    const ev = f.outcome;
+    if (!ev || ev.kind !== "shot_reported" || (f.started && ev.seq < f.started.seq)) return "";
+    return ev.integration_id ? t("start.step2.reportedBy", { title: integTitle(ev.integration_id) }) : t("start.step2.byHand");
   }
 
   /** Why the shot of flow() `f` failed. */
   function errorTitle(f) {
     if (f.cause === "shot_timed_out") {
-      // How long it waited, from the server's events: not the setting now,
-      // which may have changed since.
-      const ms = brewMs(f);
+      // How long it waited, as the server measured it: not the setting
+      // now, which may have changed since.
+      const ms = f.outcome && f.outcome.kind === "shot_aborted" ? f.outcome.running_ms : null;
       return ms > 0 ? t("start.error.timeout", { window: clock(ms) }) : t("start.error.timeoutNoLimit");
     }
     const text = causeInfo(f.cause).text;
@@ -926,22 +1145,21 @@
     return sum;
   }
 
+  /** How long the running shot has run: the server's phase_age_ms, and
+   *  the time since that state came. */
   function elapsedMs() {
     if (!S || S.shot.phase !== "running") return 0;
-    return (S.machine.mako.REAL_EXTRACTION_TIME_MS || 0) + (performance.now() - stateAt);
+    return (S.shot.phase_age_ms || 0) + (performance.now() - stateAt);
   }
   function renderClock() {
     if (!S || S.shot.phase !== "running" || tab !== "start") return;
     // A shot counts as missed while the clock runs: show the fields then.
     if (!$("s2-run").hidden && !ui.missed && shotMissed(reporters())) { renderStart(); return; }
     const ms = elapsedMs();
-    $("s2-timer").textContent = clockDown(ms);
+    $("s2-timer").textContent = clock(ms, Math.floor);
     const win = windowS() * 1000;
     $("s2-left").hidden = !(win > 0);
-    if (win > 0) {
-      const left = Math.max(0, Math.ceil((win - ms) / 1000));
-      $("s2-left").textContent = t("start.step2.left", { time: Math.floor(left / 60) + ":" + pad2(left % 60) });
-    }
+    if (win > 0) $("s2-left").textContent = t("start.step2.left", { time: clock(win - ms, Math.ceil) });
   }
 
   $("s2-info-btn").addEventListener("click", () => { ui.info = !ui.info; renderStart(); });
@@ -965,47 +1183,29 @@
       if (range && typed * 1000 <= range.min_ms) { text = tv("start.form.tooShort", limit(range.min_ms)); isWarn = true; }
       else if (range && typed * 1000 > range.max_ms) { text = t("start.form.tooLong", limit(range.max_ms)); isWarn = true; }
     }
-    h.textContent = text;
-    h.className = "hint" + (isWarn ? " warn" : "");
+    setText(h, text, "hint" + (isWarn ? " warn" : ""));
     h.hidden = !text;
   }
   let busy = false;
   $("f-time").addEventListener("input", () => setHint());
   $("f-time").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("f-weight").focus(); } });
-  /** Marks the shot sent from this page once its event is in: the newest
-   *  shot in the range (after a gap, an integration's may come before it). */
-  function markMine() {
-    const r = ui.mineRange;
-    if (!r) return;
-    for (let i = events.length - 1; i >= 0; i--) {
-      const e = events[i];
-      if (e.kind !== "shot_reported" || e.seq <= r.after || e.seq > r.upTo) continue;
-      ui.mine.add(e.seq); ui.mineRange = null;
-      return;
-    }
-  }
   $("shot-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (busy) return;
     const secsTyped = num($("f-time").value), w = num($("f-weight").value);
     if (!isFinite(secsTyped) || secsTyped <= 0) { setHint(t("start.form.enterTime"), true); $("f-time").focus(); return; }
     busy = true; $("send").disabled = true;
-    const after = lastSeq;
     try {
       // Without a weight the server uses the recipe's; it never sends 0 g.
       const shot = w > 0 ? { time_s: secsTyped, weight_g: w } : { time_s: secsTyped };
-      const st = await api("/api/shot/result", { method: "POST", body: JSON.stringify(shot) });
-      // Only a shot the server took was typed here ("Entered by hand"): its
-      // event falls between the last one seen before and the reply.
-      ui.mineRange = { after, upTo: st.server.last_event_seq };
-      markMine();
+      await api("/api/shot/result", { method: "POST", body: JSON.stringify(shot) });
       if (document.activeElement) document.activeElement.blur();
       busy = false;
       setHint();
       await tick();
     } catch (err) {
       busy = false;
-      setHint(t("start.form.notSent", { error: err.message }), true);
+      setHint(t("start.form.notSent", { error: errorText(err) }), true);
     }
   });
   for (const b of document.querySelectorAll("[data-abort]")) {
@@ -1022,7 +1222,7 @@
               await api("/api/shot/abort", { method: "POST" });
               closeSheet();
               tick();
-            } catch (err) { sheetError(t("start.abort.failed", { error: err.message })); btn.disabled = false; }
+            } catch (err) { sheetError(t("start.abort.failed", { error: errorText(err) })); btn.disabled = false; }
           } },
         ],
         returnTo: b,
@@ -1031,27 +1231,26 @@
   }
 
   // --- Status tab ------------------------------------------------------------------
-  // Integration health: tone of its pill (the label is integ.health.<health>).
-  const HEALTH = { starting: "start", connected: "ok", watching: "run", failing: "error", stopped: "error" };
   const kindOf = (id) => (kinds || []).find((k) => k.id === id);
   const hasPassword = (k) => !!(k && k.fields.some((f) => f.input === "password"));
 
-  // Icons from the --icons directory, probed once per kind
-  // (undefined: not probed yet, null: none, string: URL).
-  const customIcons = {};
+  // Icons from the --icons directory, by kind: its URL, or null for none.
+  // Probed for every kind as the kinds load, before any of them shows, so
+  // the picker and the add form show them from the first time they open.
+  let customIcons = {};
+  /** The --icons file for kind `id` (svg, png or webp), or null. */
   async function probeIcon(id) {
-    customIcons[id] = null;
     for (const ext of ["svg", "png", "webp"]) {
       try {
         const r = await fetch("/icons/" + id + "." + ext, { method: "HEAD", cache: "no-store" });
-        if (r.ok) { customIcons[id] = "/icons/" + id + "." + ext; invalidateIntegrations(); return; }
+        if (r.ok) return "/icons/" + id + "." + ext;
       } catch (_) {}
     }
+    return null;
   }
   function iconFor(kindId, node) {
     const box = node || el("span", { class: "integ-icon" });
     if (!/^[a-z0-9_-]+$/.test(kindId)) { box.replaceChildren(icon("cloud", 22, 1.8)); return box; }
-    if (customIcons[kindId] === undefined) probeIcon(kindId);
     if (customIcons[kindId]) {
       const mark = el("span", { class: "mark" });
       mark.style.setProperty("--icon", "url('" + customIcons[kindId] + "')");
@@ -1070,7 +1269,10 @@
     kindsLoading = true;
     try {
       const r = await api("/api/integrations/kinds");
-      kinds = Array.isArray(r.kinds) ? r.kinds : [];
+      const list = Array.isArray(r.kinds) ? r.kinds : [];
+      const found = await Promise.all(list.map((k) => (/^[a-z0-9_-]+$/.test(k.id) ? probeIcon(k.id) : null)));
+      customIcons = Object.fromEntries(list.map((k, n) => [k.id, found[n]]));
+      kinds = list;
       kindsPersistent = !!r.persistent;
       invalidateIntegrations();
     } catch (_) {}
@@ -1088,56 +1290,65 @@
     return m ? m[1] : peer;
   }
 
+  // The group head's state in the grinder's facts, by the shot's phase
+  // (the server's `Phase`; a test in server/page.rs checks the keys).
+  const GROUP = {
+    ready: "grinder.group.idle",
+    running: "grinder.group.running",
+    finishing: "grinder.group.finishing",
+  };
+
   function renderGrinder() {
-    const wifi = wifiOf();
-    const on = linkOn();
+    const wifi = link.wifi;
+    const on = link.on;
     const e65 = wifiSetup();
     $("g-model").textContent = tv("grinder.model");
-    let tone = "error", state = "notConnected";
-    if (wifi && wifi.phase === "asking") { tone = "start"; state = "needsId"; }
-    else if (wifi && wifi.state === "pairing") { tone = "start"; state = "pairing"; }
-    else if (on) { tone = "ok"; state = "ready"; }
-    else if (linkStarting()) { tone = "start"; state = "connecting"; }
-    else if (setupNeeded() && wifi && wifi.not_set_up) { tone = "start"; state = "notSetUp"; }
+    const [tone, state] = link.phase === "asking" ? ["start", "grinder.state.needsId"] : (LINK_VIEW[link.state] || LINK_VIEW.missing).pill;
     setTone($("g-pill"), tone);
     // Set up while an E65/E80 is not paired, or no grinder is known yet;
     // clearing a pairing is in the menu.
     $("g-setup").hidden = !setupOffered() || !$("g-host-form").hidden;
-    $("g-pill-text").textContent = t("grinder.state." + state);
+    $("g-pill-text").textContent = t(state);
     renderGrinderMenu();
     const age = S.grinder.last_poll_age_ms;
     const typed = S.settings && S.settings.grinder_host;
     const facts = [
-      ["ip", e65 ? (typed || (wifi && urlHost(wifi.grinder)) || "–") : (hostOf(S.grinder.peer) || "–")],
+      ["grinder.fact.ip", e65 ? (typed || (wifi && urlHost(wifi.grinder)) || "–") : (hostOf(S.grinder.peer) || "–")],
     ];
     // The address an E64 WS polls; in Docker's range, with a note that it
     // is likely the container's own, until a grinder polled: then it found
     // the right one.
     const own = e65 ? null : ownAddress();
     const shown = own && own.ip && !(own.docker && age != null);
-    if (shown) facts.push(["serverIp", own.ip]);
+    if (shown) facts.push(["grinder.fact.serverIp", own.ip]);
     $("g-ip-docker").hidden = !(shown && own.docker);
-    if (e65) facts.push(["pairingId", wifi && wifi.pairing_id != null ? String(wifi.pairing_id) : t("grinder.fact.notPaired")]);
-    if (wifi && wifi.pairing_code != null && wifi.state === "pairing") facts.push(["pairingCode", String(wifi.pairing_code)]);
-    facts.push(["lastContact", age == null ? t("grinder.fact.never") : ago(age)]);
+    if (e65) facts.push(["grinder.fact.pairingId", wifi && wifi.pairing_id != null ? String(wifi.pairing_id) : t("grinder.fact.notPaired")]);
+    if (link.state === "pairing" && wifi.pairing_code != null) facts.push(["grinder.fact.pairingCode", String(wifi.pairing_code)]);
+    facts.push(["grinder.fact.lastContact", age == null ? t("grinder.fact.never") : ago(age)]);
     // Idle only with a grinder to brew for; a shot under way still shows.
-    const phase = S.shot.phase;
-    const inShot = phase === "running" || phase === "finishing";
-    facts.push(["group", inShot ? t("grinder.group." + phase) : on ? t("grinder.group.idle") : "–"]);
-    $("g-facts").replaceChildren(...facts.map(([k, v]) => el("div", null, el("dt", { text: t("grinder.fact." + k) }), el("dd", { text: v }))));
+    const inShot = S.shot.phase === "running" || S.shot.phase === "finishing";
+    facts.push(["grinder.fact.group", inShot ? t(GROUP[S.shot.phase]) : on ? t(GROUP.ready) : "–"]);
+    // Rebuilt when the names change; the values (the last contact moves on
+    // with every poll) are written in place.
+    const box = $("g-facts");
+    patch(box, JSON.stringify([lang, facts.map((x) => x[0])]), () => facts.map(([k]) => el("div", null, el("dt", { text: t(k) }), el("dd"))));
+    facts.forEach(([, v], n) => setText(box.children[n].lastChild, v));
   }
 
   $("g-setup").addEventListener("click", () => openSetup("setup"));
 
   // The ⋮ menu of a card on the Status tab (the grinder's, an
   // integration's), one open at a time. `menuFor` is the open one's key:
-  // "grinder" or "integ:<id>".
+  // "grinder" or "integ:<id>". It is a disclosure: the button shows and
+  // hides a short list of plain buttons right after it, which Tab reaches
+  // next; Escape, a click elsewhere or the focus leaving it closes it.
   let menuFor = null;
+  const menuId = (key) => "menu-" + key.replace(/[^A-Za-z0-9_-]/g, "-");
   /** The ⋮ button that opens the menu `key`. */
   function menuButton(key, label) {
     return el("button", {
-      type: "button", class: "kebab", "aria-label": label, "data-menu": key,
-      "aria-haspopup": "menu", "aria-expanded": String(menuFor === key),
+      type: "button", class: "kebab", "aria-label": label, "data-menu": key, "data-key": "kebab:" + key,
+      "aria-expanded": String(menuFor === key), "aria-controls": menuFor === key ? menuId(key) : null,
       onclick: (e) => {
         e.stopPropagation();
         if (menuFor === key) { closeMenu(true); return; }
@@ -1145,11 +1356,11 @@
       },
     }, kebab());
   }
-  /** The open menu: `actions` are [name, icon, class, run]. */
-  function menuList(label, actions) {
-    return el("div", { class: "menu", role: "menu", "aria-label": label },
-      actions.map(([name, ic, cls, run]) => el("button", {
-        type: "button", role: "menuitem", class: cls,
+  /** The open menu `key`: `actions` are [name, icon, class, run]. */
+  function menuList(key, label, actions) {
+    return el("div", { class: "menu", id: menuId(key), role: "group", "aria-label": label },
+      actions.map(([name, ic, cls, run], n) => el("button", {
+        type: "button", class: cls, "data-key": key + ":" + n,
         onclick: () => { closeMenu(false); run(); },
       }, icon(ic, 18, 2), name)));
   }
@@ -1170,6 +1381,13 @@
   document.addEventListener("click", (e) => {
     if (menuFor && !e.target.closest(".menu")) closeMenu(false);
   });
+  // The focus moving on past the menu and its button (Tab after its last
+  // item, say) closes it.
+  document.addEventListener("focusin", (e) => {
+    if (!menuFor) return;
+    const menu = $(menuId(menuFor)), b = e.target.closest && e.target.closest(".kebab");
+    if (!(menu && menu.contains(e.target)) && !(b && b.dataset.menu === menuFor)) closeMenu(false);
+  });
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (!$("sheet").hidden) closeSheet();
@@ -1183,7 +1401,6 @@
   const gMore = menuButton("grinder", "");
   gMore.hidden = true;   // until the state is in
   $("g-end").append(gMore);
-  let gMenuSig = "";
   function grinderActions() {
     const acts = [[S.settings && S.settings.grinder_host ? t("grinder.host.change") : t("grinder.host.enter"), "edit", "", () => hostEditor(true)]];
     if (wifiPaired()) acts.push([t("grinder.clear"), "trash", "danger", () => openSetup("repair")]);
@@ -1192,22 +1409,18 @@
   function renderGrinderMenu() {
     const open = menuFor === "grinder";
     const acts = grinderActions();
-    const sig = JSON.stringify([lang, open, acts.map((a) => a[0])]);
-    if (sig === gMenuSig) return;
-    gMenuSig = sig;
     gMore.hidden = false;
     gMore.setAttribute("aria-label", t("grinder.more"));
     gMore.setAttribute("aria-expanded", String(open));
-    const old = $("g-card").querySelector(":scope > .menu");
-    if (old) old.remove();
-    if (open) $("g-card").append(menuList(t("grinder.menu"), acts));
+    if (open) gMore.setAttribute("aria-controls", menuId("grinder")); else gMore.removeAttribute("aria-controls");
+    patch($("g-menu"), JSON.stringify([lang, open, acts.map((a) => a[0])]), () => (open ? [menuList("grinder", t("grinder.menu"), acts)] : []));
   }
 
   // Integrations list. Rebuilt only when something shown changes; an open
   // edit form stays in place while the other cards change around it.
-  let integSig = "", editing = null, editForm = null, integOpen = store.get("integOpen") !== "0";
+  let editing = null, editForm = null, integOpen = store.get("integOpen") !== "0";
   /** Rebuilds the integrations list on the next render, and renders. */
-  function invalidateIntegrations() { integSig = ""; renderStatus(); }
+  function invalidateIntegrations() { repatch($("integ-list")); renderStatus(); }
   function renderIntegrations() {
     const list = S.integrations || [];
     $("integ-count").textContent = String(list.length);
@@ -1218,25 +1431,34 @@
     $("integ-empty").hidden = list.length > 0 || adding;
     // Deleted from another phone while being edited here: the form goes.
     if (editing && !list.some((i) => i.id === editing)) { editing = null; editForm = null; }
-    const sig = JSON.stringify([list.map((i) => [i.id, i.title, i.subject, i.health, i.detail, integDetail(i), i.last_error, i.reports, i.source, i.adoptable, i.kind]),
+    // Not for a status line that moves on by itself ("last coffee 5 min
+    // ago", a live weight): that is written in place, so an open ⋮ menu
+    // keeps its focus.
+    const sig = JSON.stringify([lang, list.map((i) => [i.id, i.title, i.subject, i.health, i.reports, i.source, i.adoptable, i.kind]),
       !!kinds, menuFor, editing]);
-    if (sig === integSig) return;
-    integSig = sig;
     const box = $("integ-list");
-    const nodes = list.map((i) => (i.id === editing && editForm) || integItem(i));
-    if (editForm && editForm.parentNode === box) {
-      // The other cards change around the open form, which keeps its focus
-      // and what was typed.
-      const at = nodes.indexOf(editForm);
-      for (const c of [...box.children]) if (c !== editForm) c.remove();
-      editForm.before(...nodes.slice(0, at));
-      editForm.after(...nodes.slice(at + 1));
-    } else box.replaceChildren(...nodes);
+    patch(box, sig, () => list.map((i) => (i.id === editing && editForm) || integItem(i)));
+    list.forEach((i, n) => {
+      const line = box.children[n] && box.children[n].querySelector(":scope > .integ-detail");
+      if (!line) return;   // the edit form
+      const text = integLine(i);
+      setText(line, text);
+      line.hidden = !text;
+    });
+  }
+
+  /** An integration's status line: its error while failing, else what it
+   *  says it does. */
+  function integLine(i) {
+    const text = i.health === "failing" ? (i.last_error || i.detail || t("integ.errorFallback"))
+      : i.health === "stopped" ? t("integ.stopped") : integDetail(i);
+    return sentence(text).replace(/\.$/, "");
   }
 
   function integItem(i) {
-    const tone = HEALTH[i.health] || "none";
-    const label = HEALTH[i.health] ? t("integ.health." + i.health) : i.health;
+    const h = HEALTH[i.health];
+    const tone = h ? h.tone : "none";
+    const label = h ? t(h.label) : i.health;
     const key = "integ:" + i.id;
     const more = menuButton(key, t("integ.more", { title: i.title }));
     const actions = integActions(i);
@@ -1248,16 +1470,15 @@
       el("div", { class: "head-end" },
         el("span", { class: "pill-sm t-" + tone }, el("span", { class: "dot" }), label),
         actions.length ? more : null));
-    const bad = i.health === "failing" || i.health === "stopped";
-    const detailText = i.health === "failing" ? (i.last_error || i.detail || t("integ.errorFallback"))
-      : i.health === "stopped" ? t("integ.stopped") : integDetail(i);
+    const bad = badHealth(i);
     const foot = [];
     if (i.reports > 0) foot.push(t("integ.reports", { n: i.reports }));
     if (i.source === "command_line") foot.push(t("integ.fromStart"));
+    // The status line is filled in by renderIntegrations.
     const item = el("div", { class: "integ" }, head,
-      detailText ? el("p", { class: "integ-detail" + (bad ? " bad" : ""), text: sentence(detailText).replace(/\.$/, "") }) : null,
+      el("p", { class: "integ-detail" + (bad ? " bad" : ""), hidden: true }),
       foot.length ? el("p", { class: "foot", text: foot.join(" · ") }) : null);
-    if (menuFor === key) item.append(menuList(t("integ.menu", { title: i.title }), actions));
+    if (menuFor === key) item.append(menuList(key, t("integ.menu", { title: i.title }), actions));
     return item;
   }
 
@@ -1274,7 +1495,8 @@
     for (const [name, x] of Object.entries(i.detail_vars || {})) {
       if (x == null || typeof x === "object") continue;   // only numbers and text are filled in
       vars[name.replace(/_(ms|s|g)$/, "")] = typeof x !== "number" ? String(x)
-        : name === "age_ms" ? ageOf(x) : name === "time_ms" ? secs(x / 1000) : name === "weight_g" ? grams(x)
+        // An age is as of the state, so it goes on until the next one.
+        : name === "age_ms" ? ageOf(x + (performance.now() - stateAt)) : name === "time_ms" ? secs(x / 1000) : name === "weight_g" ? grams(x)
         : fmt.upToOne.format(x);
     }
     const text = serverText("integ.detail." + i.detail_key, i.detail, vars);
@@ -1322,7 +1544,7 @@
             closeSheet();
             await tick();
             startEdit(((S && S.integrations) || []).find((x) => x.id === i.id) || Object.assign({}, i, view));
-          } catch (err) { sheetError(err.message); btn.disabled = false; }
+          } catch (err) { sheetError(errorText(err)); btn.disabled = false; }
         } },
       ],
     });
@@ -1355,7 +1577,7 @@
             closeSheet();
             invalidateIntegrations();
             await tick();
-          } catch (err) { sheetError(t("integ.delete.failed", { error: err.message })); btn.disabled = false; }
+          } catch (err) { sheetError(t("integ.delete.failed", { error: errorText(err) })); btn.disabled = false; }
         } },
       ],
       focus: input,
@@ -1404,7 +1626,7 @@
     let saved;
     try { saved = await api("/api/integrations/" + encodeURIComponent(i.id) + "/settings"); }
     catch (err) {
-      return openSheet({ title: t("integ.edit.cant", { title: i.title }), body: [el("p", { class: "body-text", text: err.message })], actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }] });
+      return openSheet({ title: t("integ.edit.cant", { title: i.title }), body: [el("p", { class: "body-text", text: errorText(err) })], actions: [{ label: t("common.ok"), cls: "s-plain", run: closeSheet }] });
     }
     const values = saved.settings || {};
     const secrets = new Set(saved.secrets_set || []);
@@ -1422,7 +1644,7 @@
         await api("/api/integrations/" + encodeURIComponent(i.id), { method: "PUT", body: JSON.stringify({ settings: formValues(fields) }) });
         stopEdit();
         await tick();
-      } catch (err) { error.textContent = err.message; error.hidden = false; save.disabled = false; }
+      } catch (err) { setText(error, errorText(err)); error.hidden = false; save.disabled = false; }
     });
     editing = i.id; editForm = form;
     invalidateIntegrations();
@@ -1450,7 +1672,7 @@
       el("button", { type: "button", onclick: () => showForm(k) },
         iconFor(k.id),
         el("span", { class: "minw" }, el("span", { class: "kind-title", text: k.title }), stEl("span", { class: "kind-sum" }, kindKey(k.id, "summary"), k.summary)),
-        el("span", { class: "chev", style: "display:grid" }, icon("arrow", 18, 2.2))))));
+        el("span", { class: "chev" }, icon("arrow", 18, 2.2))))));
   }
   function showForm(k) {
     addingKind = k;
@@ -1476,11 +1698,29 @@
       openAdd(false);
       await tick();
     } catch (err) {
-      $("add-error").textContent = err.message; $("add-error").hidden = false;
+      setText($("add-error"), errorText(err)); $("add-error").hidden = false;
     } finally { $("add-submit").disabled = false; }
   });
 
-  // Settings
+  // Settings saved on the server (PUT /api/settings): the shot window, the
+  // grinder's address and the update check. While a save is under way,
+  // and for a state poll that began before its answer, the settings from
+  // the poll may be the ones from before it: refresh() keeps S.settings
+  // then (settingsGen), so a setting does not flick back.
+  let settingsGen = 0, settingsSaving = 0, settingsSeq = 0;
+  /** Saves `patch` (null for a setting's start value) and takes the
+   *  server's answer, the settings as now saved, into S.settings; only
+   *  the newest save's answer, as an older one may come back later.
+   *  Throws when it was not saved. */
+  async function putSettings(patch) {
+    const mine = ++settingsSeq;
+    settingsSaving++; settingsGen++;
+    try {
+      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify(patch) });
+      if (mine === settingsSeq && st && typeof st === "object" && Object.keys(patch).every((k) => k in st)) S.settings = st;
+    } finally { settingsSaving--; settingsGen++; }
+  }
+
   function renderSettings() {
     renderAppearance();
     renderLanguage();
@@ -1489,7 +1729,7 @@
     $("set-foot").hidden = false;
     $("set-window-row").hidden = false;
     renderWindow();
-    renderFrom("set-window", "shot_window_s", (v) => (v === 0 ? t("settings.noLimit") : clock(v * 1000) + " min"));
+    renderFrom("set-window", "shot_window_s", (v) => (v === 0 ? t("settings.noLimit") : t("unit.minutes", { time: clock(v * 1000) })));
     renderUpdateSetting();
     // The grinder's address, in the form on the grinder card. Use start
     // setting only with a start address to go back to: without one it
@@ -1511,7 +1751,7 @@
       : from === "command_line" ? t("settings.from.start")
       : from === "default" ? t("settings.from.default") : "";
     const line = $(id + "-from-text");
-    if (line.textContent !== text) line.textContent = text;
+    setText(line, text);
     $(id + "-from").hidden = !text;
     $(id + "-reset").hidden = from !== "app" || !st.start || !canReset;
   }
@@ -1528,17 +1768,10 @@
     const r = S && S.settings && S.settings.shot_window_range;
     return r && typeof r.min_s === "number" && typeof r.max_s === "number" ? r : null;
   }
-  const win = { pending: null, saved: null, seq: 0, timer: null, msg: "", warn: false, lastLimit: 0 };
-  /** The shot window as shown: the one waiting to be saved, else the one
-   *  just saved (a state poll that left before the save still brings the
-   *  old one, for a moment), else the server's. */
-  function winValue() {
-    if (win.pending != null) return win.pending;
-    const v = S.settings.shot_window_s;
-    if (win.saved && v !== win.saved.value && Date.now() - win.saved.at < 5000) return win.saved.value;
-    win.saved = null;
-    return v;
-  }
+  const win = { pending: null, seq: 0, timer: null, msg: "", warn: false, lastLimit: 0 };
+  /** The shot window as shown: the one waiting to be saved, else the
+   *  server's. */
+  const winValue = () => (win.pending != null ? win.pending : S.settings.shot_window_s);
   const winText = (v) => (v === 0 ? t("settings.noLimit") : clock(v * 1000));
   function renderWindow() {
     const r = winRange();
@@ -1564,9 +1797,7 @@
     $("set-window-none").setAttribute("aria-pressed", String(v === 0));
     $("set-window-range").textContent = t("settings.windowRange", { min: clock(r.min_s * 1000), max: clock(r.max_s * 1000) });
     $("set-window-field").classList.toggle("bad", win.warn && document.activeElement === input);
-    const msg = $("set-window-msg");
-    if (msg.textContent !== win.msg) msg.textContent = win.msg;
-    msg.className = "hint" + (win.warn ? " warn" : "");
+    setText($("set-window-msg"), win.msg, "hint" + (win.warn ? " warn" : ""));
   }
   function windowNote(text, warn) { win.msg = text || ""; win.warn = !!warn; }
 
@@ -1614,20 +1845,14 @@
     const seq = ++win.seq;
     let saved = false;
     try {
-      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ shot_window_s: value }) });
+      await putSettings({ shot_window_s: value });
       if (seq === win.seq) {
-        if (st && typeof st.shot_window_s === "number") {
-          S.settings = st;
-          win.saved = { value: st.shot_window_s, at: Date.now() };
-          // A state poll that left before this answer would bring back the
-          // old source line; one more poll after it puts it right.
-          tick();
-        }
+        tick();
         if (win.warn) windowNote("");   // an earlier failure is past
         saved = true;
       }
     } catch (x) {
-      if (seq === win.seq) windowNote(t("common.notSaved", { error: x.message }), true);
+      if (seq === win.seq) windowNote(t("common.notSaved", { error: errorText(x) }), true);
     } finally {
       // A newer value waits for its own save.
       if (win.pending === value) win.pending = null;
@@ -1775,7 +2000,6 @@
     setLanguage();
     applyStatic();
     renderLanguage();
-    integSig = "";
     win.msg = "";
     setHint();
     rebuildLogLines();
@@ -1797,13 +2021,12 @@
     $("set-update").setAttribute("aria-busy", "true");
     $("set-update-error").hidden = true;
     try {
-      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ update_check: on }) });
-      if (st && "update_check" in st) S.settings = st;
+      await putSettings({ update_check: on });
       renderSettings();
       tick();
       return true;
     } catch (x) {
-      $("set-update-error").textContent = t("common.notSaved", { error: x.message }); $("set-update-error").hidden = false;
+      setText($("set-update-error"), t("common.notSaved", { error: errorText(x) })); $("set-update-error").hidden = false;
       return false;
     } finally {
       updateSaving = false;
@@ -1830,14 +2053,12 @@
     renderStatus();
     if (!open && refocus) focusKebab("grinder");
   }
-  function hostError(x) { $("g-host-error").textContent = t("common.notSaved", { error: x.message }); $("g-host-error").hidden = false; }
+  function hostError(x) { setText($("g-host-error"), t("common.notSaved", { error: errorText(x, "host") })); $("g-host-error").hidden = false; }
   $("g-host-cancel").addEventListener("click", () => hostEditor(false, true));
   /** Saves the grinder's address on the server (the grinder card's form and
-   *  setup step 1); the server says what it does not take. */
-  async function saveHost(v) {
-    const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: v }) });
-    if (st && "grinder_host" in st) S.settings = st;
-  }
+   *  setup step 1; null for the start address); the server says what it
+   *  does not take. */
+  const saveHost = (v) => putSettings({ grinder_host: v });
   // An empty field removes the address ("" to the server, which without a
   // start address only forgets the app's one); Use start setting (null)
   // goes back to the start address.
@@ -1855,8 +2076,7 @@
   resetButton("g-host", async () => {
     $("g-host-error").hidden = true;
     try {
-      const st = await api("/api/settings", { method: "PUT", body: JSON.stringify({ grinder_host: null }) });
-      if (st && "grinder_host" in st) S.settings = st;
+      await saveHost(null);
       hostEditor(false, true);
       tick();
       return true;
@@ -1866,8 +2086,7 @@
   function renderVersion() {
     const u = S.update;
     const v = String(S.server.version || "");
-    const [release, build] = v.split("+");
-    $("v-installed").textContent = release ? release + (build ? " · " + build : "") : "–";
+    $("v-installed").textContent = versionText(v) || "–";
     $("v-installed").title = v;
     const badge = $("v-badge");
     const on = !!(u && S.settings && S.settings.update_check);
@@ -1885,8 +2104,10 @@
     $("v-whatsnew").hidden = !(on && u.available);
   }
 
-  function renderStatus() {
+  /** Renders the Status tab; `L` is this render's linkStatus(), when it has one. */
+  function renderStatus(L) {
     if (!S || tab !== "status") return;
+    link = L || linkStatus();
     renderGrinder();
     renderIntegrations();
     renderSettings();
@@ -1899,6 +2120,7 @@
   let hHidden = {};
   try { hHidden = JSON.parse(store.get("historyHidden") || "{}") || {}; } catch (_) {}
   let histLoading = false, histTried = 0, histError = "";
+  let histGen = 0;   // counts the history loads, for renderHistory's signature
 
   async function loadHistory() {
     if (histLoading) return;
@@ -1906,10 +2128,11 @@
     histTried = Date.now();
     try {
       hist = await api("/api/history");
+      histGen++;
       histState = "ok";
     } catch (e) {
       // Tried again shortly (see refresh).
-      histState = "failed"; histError = e.message;
+      histState = "failed"; histError = errorText(e);
     }
     histLoading = false;
     renderHistory();
@@ -1932,10 +2155,8 @@
       return s.weight_g != null ? t("unit.shot", { time, weight: grams(s.weight_g) }) : t("unit.seconds", { time });
     }
     const cause = causeOf(s);
-    if (cause === "shot_timed_out") {
-      const ms = Date.parse(s.ended_at) - Date.parse(s.started_at);
-      return t("history.timeout", { time: isFinite(ms) ? clock(ms) : windowLabel() });
-    }
+    // How long it waited, as the server measured it.
+    if (cause === "shot_timed_out") return s.running_ms != null ? t("history.timeout", { time: clock(s.running_ms) }) : t("start.error.timeoutNoLimit");
     const title = causeInfo(cause).title;
     if (title) return t(title);
     // A cause this app does not know: as the server says it.
@@ -1946,6 +2167,8 @@
     const tgt = [s.target_time_ms != null ? t("unit.seconds", { time: secs(s.target_time_ms / 1000) }) : null,
       s.target_weight_g != null ? t("unit.grams", { weight: gramsShort(s.target_weight_g) }) : null].filter(Boolean);
     if (tgt.length) parts.push(t("history.target", { targets: tgt.join(" · ") }));
+    // Who reported it, when an integration did; typed in is the default.
+    if (s.integration_id) parts.push(t("history.by", { title: integTitle(s.integration_id) }));
     return parts.join(" · ");
   }
   /** A success the grinder did not adjust from, as the server recorded it.
@@ -1970,19 +2193,19 @@
     const chips = $("h-chips"), groups = $("h-groups"), empty = $("h-empty"), foot = $("h-foot");
     chips.hidden = !hist;
     if (!hist) {
-      groups.replaceChildren(); empty.hidden = false; foot.hidden = true;
-      empty.textContent = histState === "failed" ? t("history.failed", { error: histError }) : t("history.loading");
+      patch(groups, "", () => []); empty.hidden = false; foot.hidden = true;
+      setText(empty, histState === "failed" ? t("history.failed", { error: histError }) : t("history.loading"));
       return;
     }
-    chips.replaceChildren(...HKINDS.map((k) => {
-      const on = !hHidden[k];
-      const n = shots.filter((s) => s.outcome === k).length;
-      return el("button", {
-        type: "button", class: "chip-hit k-" + k, "aria-pressed": String(on),
-        "aria-label": t("history.chip", { label: kindLabel(k), n }),
-        onclick: () => { hHidden[k] = on; store.set("historyHidden", JSON.stringify(hHidden)); renderHistory(); },
-      }, el("span", { class: "chip" }, kindLabel(k), el("span", { class: "chip-count", text: fmt.int.format(n) })));
-    }));
+    // Rebuilt only when something shown changes (every poll renders), so
+    // a chip keeps the focus; a tapped one gets it back by its key.
+    const counts = HKINDS.map((k) => shots.filter((s) => s.outcome === k).length);
+    const shown = (k) => !hHidden[k];
+    patch(chips, JSON.stringify([lang, locale, HKINDS.map(shown), counts]), () => HKINDS.map((k, i) => el("button", {
+      type: "button", class: "chip-hit k-" + k, "aria-pressed": String(shown(k)), "data-key": "chip:" + k,
+      "aria-label": t("history.chip", { label: kindLabel(k), n: counts[i] }),
+      onclick: () => { hHidden[k] = shown(k); store.set("historyHidden", JSON.stringify(hHidden)); renderHistory(); },
+    }, el("span", { class: "chip" }, kindLabel(k), el("span", { class: "chip-count", text: fmt.int.format(counts[i]) })))));
     // Newest first by the time shown, so a shot dated wrongly (the clock
     // was not set, or stepped) cannot split the days; those without a
     // known day come last, newest recorded first.
@@ -1997,7 +2220,11 @@
       byDay.get(label).items.push(x);
     }
     const days = [...byDay.values()];
-    groups.replaceChildren(...days.map((g) => el("section", { class: "day" },
+    // The days are named from today ("Today", "Yesterday"), which moves on
+    // at midnight.
+    const today = new Date().toDateString();
+    const titles = ((S && S.integrations) || []).map((i) => [i.id, i.title]);
+    patch(groups, JSON.stringify([lang, locale, HKINDS.map(shown), histGen, today, titles]), () => days.map((g) => el("section", { class: "day" },
       el("h2", { text: g.label }),
       el("ul", null, g.items.map(({ s, d }) => {
         const sub = shotSub(s);
@@ -2008,10 +2235,10 @@
           el("span", { class: "h-badge", text: ignored ? t("history.ignored") : kindLabel(s.outcome) }));
       })))));
     empty.hidden = visible.length > 0;
-    empty.textContent = shots.length === 0 ? t("history.empty") : t("history.noMatch");
+    setText(empty, shots.length === 0 ? t("history.empty") : t("history.noMatch"));
     foot.hidden = false;
     const kept = { n: hist.capacity || 200 };
-    foot.textContent = hist.persistent === false ? t("history.keptMemory", kept) : t("history.kept", kept);
+    setText(foot, hist.persistent === false ? t("history.keptMemory", kept) : t("history.kept", kept));
   }
 
   // --- Log ---------------------------------------------------------------------
@@ -2045,6 +2272,9 @@
     for (const l of lines) {
       if (!l || typeof l.seq !== "number" || l.seq <= log.last) continue;
       log.last = l.seq;
+      // When, on this device's clock, from how long ago the server says it
+      // was: its own clock (`at`) may not be set.
+      l.seenAt = Date.now() - (l.age_ms || 0);
       log.lines.push(l);
       frag.append(lineEl(l));
     }
@@ -2135,9 +2365,7 @@
     const live = window.EventSource ? log.connected : log.state === "live" && online;
     $("log-live-block").classList.toggle("on", log.follow && live);
     $("log-live-text").textContent = !live ? t("log.reconnecting") : log.follow ? t("log.live") : t("log.paused");
-    // A status region announces every change, so only real ones.
-    if (!log.done && $("log-note").textContent !== LOG_NOTE()) $("log-note").textContent = LOG_NOTE();
-    if (!log.done) $("log-note").classList.remove("done");
+    if (!log.done) setText($("log-note"), LOG_NOTE(), "log-note");
     $("log-copy").classList.toggle("done", log.done === "copy");
     $("log-dl").classList.toggle("done", log.done === "dl");
   }
@@ -2168,12 +2396,12 @@
     renderLog();
   });
   $("sys-setup-link").addEventListener("click", (e) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    if (!plainClick(e)) return;
     e.preventDefault();
     openSetup("setup");
   });
   $("sys-log-link").addEventListener("click", (e) => {
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+    if (!plainClick(e)) return;
     e.preventDefault();
     goTab("log");
   });
@@ -2234,8 +2462,7 @@
   /** Shows `note` under the log for a moment; `kind` "copy" or "dl" also ticks that button. */
   function logDone(kind, note) {
     log.done = kind;
-    $("log-note").textContent = note;
-    $("log-note").classList.toggle("done", kind === "copy" || kind === "dl");
+    setText($("log-note"), note, "log-note" + (kind === "copy" || kind === "dl" ? " done" : ""));
     clearTimeout(log.doneTimer);
     log.doneTimer = setTimeout(() => { log.done = null; renderLog(); }, 3500);
     renderLog();
@@ -2262,7 +2489,7 @@
 
   $("log-copy").addEventListener("click", async () => {
     const since = Date.now() - 60 * 60000;
-    let lines = log.lines.filter((l) => Date.parse(l.at) >= since && (!log.warnOnly || l.level !== "info"));
+    let lines = log.lines.filter((l) => l.seenAt >= since && (!log.warnOnly || l.level !== "info"));
     if (lines.length > 500) lines = lines.slice(-500);
     if (!lines.length) {
       logDone("note", log.warnOnly ? t("log.nothingWarnings") : t("log.nothingLines"));
@@ -2405,7 +2632,7 @@
   function closeSetup() { goTab(setupFrom); }
 
   const SETUP_TONE = { done: "done", active: "start", wait: "run", retry: "warn", later: "none" };
-  const SETUP_BADGE = { done: "done", active: "now", wait: "wait", retry: "retry", later: "later" };
+  const SETUP_BADGE = { done: "setup.badge.done", active: "setup.badge.now", wait: "setup.badge.wait", retry: "setup.badge.retry", later: "setup.badge.later" };
   /** A card's head as most steps have it: "Step n", its title, open by
    *  itself while it is the one to act on or wait for. */
   const stepHead = (no, title, st) => ({
@@ -2473,15 +2700,16 @@
 
   // The choice of grinder: a card of the view's own, first while it asks,
   // then on top (when the person chose here, not when the app could tell).
+  const SETUP_KIND = { e64: "setup.kind.e64", wifi: "setup.kind.wifi" };
   const KIND_CARD = {
     head: (st) => ({ kicker: t("setup.kind.kicker"), title: t("setup.kind.title"), mark: icon("grinder", 16, 2), no: null, auto: st === "active" }),
-    sub: (st) => (st === "done" ? t("setup.kind." + setupKind()) : ""),
+    sub: (st) => (st === "done" ? t(SETUP_KIND[setupKind()]) : ""),
     body(st) {
       if (st === "done") {
         // Once an E65/E80 address is saved, that is the grinder: removing
         // the address (grinder card, ⋮) is the way back.
         const change = setupKind() === "e64" || !wifiSetup();
-        return [el("p", { class: "body-text", text: t("setup.kind.chosen", { grinder: t("setup.kind." + setupKind()) }) }),
+        return [el("p", { class: "body-text", text: t("setup.kind.chosen", { grinder: t(SETUP_KIND[setupKind()]) }) }),
           change ? el("button", { type: "button", class: "wz-btn plain wide", "data-act": "kindChange" }, icon("back", 16, 2.5), t("setup.kind.change")) : null];
       }
       return [el("p", { class: "body-text", text: t("setup.kind.text") }),
@@ -2490,8 +2718,10 @@
     },
   };
 
-  function renderSetup() {
+  /** Renders the setup; `L` is this render's linkStatus(), when it has one. */
+  function renderSetup(L) {
     if (tab !== "setup" || !S) return;
+    link = L || linkStatus();
     // An address saved meanwhile makes it an E65/E80, and the card on top
     // says so.
     if (wz.kind === "e64" && wifiSetup()) wz.kind = "wifi";
@@ -2506,36 +2736,36 @@
     if (at.part === "done") forgetSetup(); else keepSetup();
     // The app's own pill is not shown here, so this one says when
     // gbs-anywhere does not answer.
-    const [pillKey, pillTone, pulse] = !online ? [null, "error", false] : F ? F.pill(at) : ["choose", "none", false];
+    const [pillKey, pillTone, pulse] = !online ? [null, "error", false] : F ? F.pill(at) : ["setup.pill.choose", "none", false];
     const pill = $("setup-pill");
     setTone(pill, pillTone);
     pill.classList.toggle("pulse", pulse);
-    const pillText = pillKey ? t("setup.pill." + pillKey) : t("sys.label.offline");
-    if ($("setup-pill-text").textContent !== pillText) $("setup-pill-text").textContent = pillText;
+    const pillText = pillKey ? t(pillKey) : t("sys.label.offline");
+    setText($("setup-pill-text"), pillText);
     const cards = F ? [...(wz.kind ? ["kind"] : []), ...F.cards()] : ["kind"];
     const states = cards.map((n) => (n === "kind" ? (F ? "done" : "active") : F.card(n, at)));
     // The bars and "Step n of …" count the numbered steps.
     const steps = F ? F.cards().filter((n) => F.number(n) != null) : [];
     const progress = !F ? t("setup.pill.choose") : F.progress(at) || t("setup.progress.step", { n: F.number(at.step), total: steps.length });
-    if ($("wz-progress").textContent !== progress) $("wz-progress").textContent = progress;
+    setText($("wz-progress"), progress);
 
     // Rebuilt only when something shown changes, so a field keeps what is
-    // typed and the focus stays put between polls.
+    // typed and the focus stays put between polls; after a rebuild the
+    // focus goes back to the same head, field or answer (see patch).
     const sig = JSON.stringify([lang, wz.kind, at, cards, states, wz.open, F ? F.sig(at) : null]);
     if (sig !== wz.sig) {
+      // A new setup starts from new cards: the old ones may still hold
+      // what was typed into a setup closed before, which this one doesn't know.
+      if (!wz.sig) { repatch($("wz-bars")); repatch($("wz-steps")); }
       wz.sig = sig;
-      $("wz-bars").replaceChildren(...steps.map((n) => el("span", { class: "wz-bar " + F.card(n, at) })));
-      const active = document.activeElement;
-      const keep = active && $("wz-steps").contains(active) && active.id ? active.id : null;
-      $("wz-steps").replaceChildren(
+      patch($("wz-bars"), sig, () => steps.map((n) => el("span", { class: "wz-bar " + F.card(n, at) })));
+      patch($("wz-steps"), sig, () => [
         ...(F ? F.top(at) : []),
         ...cards.map((n, i) => setupCardEl(F, n, states[i], at)),
-        ...(F ? F.end(at) : []));
+        ...(F ? F.end(at) : [])]);
       wz.reveal = null;
-      if (!wz.focus) wz.focus = keep;
     }
-    // Where an answer moves the focus to (or back where it was, after a
-    // rebuild); a field keeps its caret at the end.
+    // Where an answer moves the focus to; a field keeps its caret at the end.
     const target = wz.focus && $(wz.focus);
     wz.focus = null;
     if (target && document.activeElement !== target) {
@@ -2562,13 +2792,13 @@
     const num = st === "done" ? icon("check", 16, 2.6) : head.mark || (st === "retry" ? "!" : String(head.no));
     const bodyId = "wz-body-" + n;
     return el("section", { class: "card wz-card t-" + tone + (st === "later" ? " later" : st !== "done" ? " current" : "") },
-      el("button", { type: "button", class: "wz-head", id: "wz-head-" + n, "data-toggle": String(n), "aria-expanded": String(open),
+      el("button", { type: "button", class: "card-head step-head wz-head", id: "wz-head-" + n, "data-toggle": String(n), "aria-expanded": String(open),
         "aria-controls": open ? bodyId : null, disabled: st === "later" || !body },
         el("span", { class: "num" }, num),
         el("span", { class: "head-col" },
           el("span", { class: "kicker", text: head.kicker }),
           el("span", { class: "step-title", text: head.title })),
-        el("span", { class: "badge", text: t("setup.badge." + SETUP_BADGE[st]) }),
+        el("span", { class: "badge", text: t(SETUP_BADGE[st]) }),
         chevron(),
         sub ? el("span", { class: "meta" + (open ? " ghost" : ""), "aria-hidden": open ? "true" : null, text: sub }) : null),
       open ? el("div", { class: "wz-body", id: bodyId }, body) : null);
@@ -2721,8 +2951,8 @@
       return "";
     },
     pill(at) {
-      if (at.step === "x3") return at.part === "done" ? ["connected", "done", false] : ["polling", "run", true];
-      return ["prepare", "start", false];
+      if (at.step === "x3") return at.part === "done" ? ["setup.pill.connected", "done", false] : ["setup.pill.polling", "run", true];
+      return ["setup.pill.prepare", "start", false];
     },
     progress: (at) => (at.part === "done" ? t("setup.pill.connected") : ""),
     sig: () => [wz.e64.x1, wz.e64.x2, ownAddress()],
@@ -2790,8 +3020,6 @@
   // After Restart setup, a link still paired (not failing) after a few of
   // its 2-s polls has the grinder taking the pairing.
   const STILL_PAIRED_MS = 15000;
-  // Connecting for this long counts as not reaching the grinder.
-  const CONNECT_LONG_MS = 15000;
   // The phases of the restart wait (step 4).
   const WAIT_PHASES = ["holding", "checking", "quiet"];
 
@@ -2812,7 +3040,7 @@
     const old = wz.mode === "repair" && !wz.pair.cleared;
     if (old && !wz.pair.clearTapped) return { step: "clear" };
     if (!old && wifiPaired()) return { step: 5, part: "done" };
-    const phase = w && w.state === "pairing" ? w.phase : null;
+    const phase = pairingPhase(w);
     if (phase === "asking") return { step: 5, part: "id" };
     // The restart wait, once the person confirmed here, or when the view
     // opened in it. The quiet always: a check went unanswered, also when
@@ -2851,34 +3079,30 @@
     return "active";
   }
 
-  /** The header pill: its text (setup.pill.<key>), tone and whether it pulses. */
+  /** The header pill: its text (a setup.pill key), tone and whether it pulses. */
   function pairPill(at) {
-    if (at.part === "done") return wz.pair.statusOn === "no" ? ["lost", "warn", false] : ["done", "done", false];
-    if (at.step === 1) return ["address", "none", false];
-    if (at.step === "clear") return ["clear", wz.pair.clearTapped ? "run" : "start", wz.pair.clearTapped];
-    if (at.step === 2) return ["prepare", "start", false];
-    if (at.step === 3) return ["code", at.code ? "start" : "run", !at.code];
-    if (at.step === 4) return [pairConfirmed() ? "restart" : "prepare", "run", true];
-    if (at.part === "lost") return ["lost", "warn", false];
-    return ["id", "start", false];
+    if (at.part === "done") return wz.pair.statusOn === "no" ? ["setup.pill.lost", "warn", false] : ["setup.pill.done", "done", false];
+    if (at.step === 1) return ["setup.pill.address", "none", false];
+    if (at.step === "clear") return ["setup.pill.clear", wz.pair.clearTapped ? "run" : "start", wz.pair.clearTapped];
+    if (at.step === 2) return ["setup.pill.prepare", "start", false];
+    if (at.step === 3) return ["setup.pill.code", at.code ? "start" : "run", !at.code];
+    if (at.step === 4) return [pairConfirmed() ? "setup.pill.restart" : "setup.pill.prepare", "run", true];
+    if (at.part === "lost") return ["setup.pill.lost", "warn", false];
+    return ["setup.pill.id", "start", false];
   }
 
   /** Accepted was tapped here for this attempt, or the link holds the
    *  check after one (after a reload). */
   function pairConfirmed() {
-    const w = wifiOf();
-    return wz.pair.confirmed || wz.pair.tapped || !!(w && w.state === "pairing" && (w.phase === "holding" || w.phase === "checking"));
+    const phase = pairingPhase(wifiOf());
+    return wz.pair.confirmed || wz.pair.tapped || phase === "holding" || phase === "checking";
   }
 
   /** gbs-anywhere doesn't reach the grinder at the address: it does not
-   *  answer, or the link has been connecting for long. Not while the old
-   *  pairing is cleared on the grinder (that can take Local WiFi off). */
-  function pairUnreached() {
-    const w = wifiOf();
-    if (!w || (wz.mode === "repair" && !wz.pair.cleared)) return false;
-    if (w.state === "failing") return !!w.unreachable;
-    return w.state === "connecting" && linkStateAge(w) > CONNECT_LONG_MS;
-  }
+   *  answer, or the link has been connecting for long (see linkStatus).
+   *  Not while the old pairing is cleared on the grinder (that can take
+   *  Local WiFi off). */
+  const pairUnreached = () => link.unreached && !(wz.mode === "repair" && !wz.pair.cleared);
 
   /** The link reached the grinder: it answers, paired or not. */
   function pairReached() {
@@ -2989,7 +3213,7 @@
       const registered = wz.pair.confirmed;
       // Nothing is sent to the grinder for a while: the usual time no longer
       // holds, so it is not shown.
-      const quiet = !!w && w.state === "pairing" && w.phase === "quiet";
+      const quiet = pairingPhase(w) === "quiet";
       // Opened in the wait (or reloaded), the timer counts from where this
       // phase began, not from the tap: the usual total doesn't fit then.
       const midWait = WAIT_PHASES.includes((wz.pair.entry || {}).phase);
@@ -3073,8 +3297,8 @@
    *  link's phase began (the server's phase_age_ms); in the quiet time, how
    *  long until gbs-anywhere checks again. */
   function pairWaited() {
-    if (wz.pair.quietFrom != null) return clockDown(Math.max(0, wz.pair.quietMs - (performance.now() - wz.pair.quietFrom)));
-    return wz.pair.waitFrom == null ? "0:00" : clockDown(performance.now() - wz.pair.waitFrom);
+    if (wz.pair.quietFrom != null) return clock(wz.pair.quietMs - (performance.now() - wz.pair.quietFrom), Math.floor);
+    return wz.pair.waitFrom == null ? "0:00" : clock(performance.now() - wz.pair.waitFrom, Math.floor);
   }
 
   /** The first Pairing Code after the restart wait: the same one is the
@@ -3100,7 +3324,7 @@
    *  old pairing, and a new step starts with its cards as they open. */
   function pairSync() {
     const w = wifiOf();
-    const phase = w && w.state === "pairing" ? w.phase : null;
+    const phase = pairingPhase(w);
     // A hold follows a confirmation, also one tapped on another device or
     // before its reply came: the wait shows at once, and the check after it
     // stays part of it.
@@ -3370,8 +3594,8 @@
       await tick();
     } catch (x) {
       wz.pair.acceptBusy = false;
-      wz.pair.acceptError = x.message;
-      setupSay(x.message);
+      wz.pair.acceptError = errorText(x);
+      setupSay(wz.pair.acceptError);
     } finally { renderSetup(); }
   }
 
@@ -3392,7 +3616,7 @@
       wz.pair.editHost = false; wz.pair.hostValue = null;
       await tick();
     } catch (x) {
-      wz.pair.hostError = x.message; wz.focus = "wz-host"; setupSay(x.message);
+      wz.pair.hostError = errorText(x, "host"); wz.focus = "wz-host"; setupSay(wz.pair.hostError);
     } finally { wz.pair.hostBusy = false; renderAll(); }
   }
 
@@ -3409,7 +3633,7 @@
       wz.pair.idValue = "";
       await tick();
     } catch (x) {
-      wz.pair.idError = x.message; wz.focus = "wz-id"; setupSay(x.message);
+      wz.pair.idError = errorText(x); wz.focus = "wz-id"; setupSay(wz.pair.idError);
     } finally { wz.pair.idBusy = false; renderSetup(); }
   }
 
@@ -3480,23 +3704,29 @@
     if (typeof back === "function") back();
     else if (back && back.focus && document.contains(back)) back.focus();
   }
-  function sheetError(text) { $("sheet-error").textContent = text; $("sheet-error").hidden = false; }
+  function sheetError(text) { setText($("sheet-error"), text); $("sheet-error").hidden = false; }
   $("sheet").addEventListener("click", (e) => { if (e.target === $("sheet")) closeSheet(); });
 
   // --- Live updates --------------------------------------------------------------------
   function renderAll() {
-    if (!S) { renderHeader({ sc: "ready" }); return; }
+    // The link once for every view, so they all say the same.
+    link = linkStatus();
+    if (!S) {
+      const f = { sc: "ready" }, s = sysInfo(f);
+      followStop(stopOf(s, f));
+      renderHeader(s);
+      return;
+    }
     // Name and version at the bottom of every tab but Status, whose
     // gbs-anywhere card shows them.
     $("app-footer").hidden = tab === "status";
-    const [release, build] = String(S.server.version || "").split("+");
-    $("app-footer").textContent = "gbs-anywhere" + (release ? " " + release + (build ? " · " + build : "") : "");
+    $("app-footer").textContent = ["gbs-anywhere", versionText(S.server.version)].filter(Boolean).join(" ");
     $("app-footer").title = String(S.server.version || "");
-    renderStart();
-    renderStatus();
+    renderStart(link);
+    renderStatus(link);
     renderHistory();
     renderLog();
-    renderSetup();
+    renderSetup(link);
   }
 
   // Another version of gbs-anywhere answers (it was updated): the page that
@@ -3519,6 +3749,7 @@
 
   async function refresh() {
     let st;
+    const gen = settingsGen;
     try { st = await api("/api/state"); }
     catch (_) { if (online) offlineSince = Date.now(); online = false; renderAll(); return; }
     online = true;
@@ -3536,10 +3767,13 @@
     }
     // The server restarted: a new boot_id.
     const restarted = !!S && st.server.boot_id !== S.server.boot_id;
+    // A settings save under way or answered since this poll began: its
+    // answer stands, not the settings from before it (see putSettings).
+    if (S && S.settings && !restarted && (settingsSaving || gen !== settingsGen)) st.settings = S.settings;
     S = st; stateAt = performance.now();
     if (restarted) {
       events = []; lastSeq = 0; seenAt.clear();
-      ui.mine.clear(); ui.mineRange = null; ui.dismissed = 0; ui.planKey = null;
+      ui.dismissed = 0; ui.planKey = null;
       kinds = null;
       restartLog();
     }
@@ -3561,12 +3795,10 @@
             if (e.kind === "shot_reported" || e.kind === "shot_aborted") shotDone = true;
             lastSeq = e.seq;
           }
-          markMine();
           if (events.length > 500) {
             events.splice(0, events.length - 500);
             const min = events[0].seq;
             for (const k of seenAt.keys()) if (k < min) seenAt.delete(k);
-            for (const k of ui.mine) if (k < min) ui.mine.delete(k);
           }
           lastSeq = Math.max(lastSeq, st.server.last_event_seq);
           caughtUp = true;
@@ -3595,13 +3827,14 @@
 
   // Machine events arrive as server-sent events; /api/state is polled for the
   // rest (grinder link, integrations), less often while the stream is up.
+  // The stream names each event by its kind (the server's MachineEvent); a
+  // test in server/page.rs checks this list against it.
+  const EVENT_KINDS = ["grinder_grind_finished", "grinder_shot_requested", "shot_started", "shot_reported", "shot_aborted", "shot_finished"];
   function connectEvents() {
     if (!window.EventSource) return;
     const es = new EventSource("/api/events/stream");
     const onEvent = () => tick();
-    for (const k of ["grinder_grind_finished", "grinder_shot_requested", "shot_started", "shot_reported", "shot_aborted", "shot_finished", "message"]) {
-      es.addEventListener(k, onEvent);
-    }
+    for (const k of EVENT_KINDS) es.addEventListener(k, onEvent);
     es.addEventListener("open", () => { sseOpen = true; tick(); });
     es.addEventListener("error", () => { sseOpen = false; if (es.readyState === 2) setTimeout(connectEvents, 5000); });
   }

@@ -16,15 +16,15 @@
 //! * [`cloud`]: the customer-app API client and its request signing.
 //! * [`run`]: the task.
 
-pub mod cloud;
-pub mod config;
-pub mod run;
+pub(crate) mod cloud;
+pub(crate) mod config;
+pub(crate) mod run;
 
 use crate::integration::{Integration, Kind, Settings};
 
 const TITLE: &str = "La Marzocco cloud";
 
-pub static KIND: Kind = Kind {
+pub(crate) static KIND: Kind = Kind {
     id: "la_marzocco",
     title: TITLE,
     summary: "Time and weight from a connected La Marzocco's coffee log \

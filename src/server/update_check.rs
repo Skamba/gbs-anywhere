@@ -16,10 +16,11 @@ use serde_json::{Value, json};
 use crate::server::Server;
 
 /// Where the latest release is asked for.
-pub const RELEASES_API: &str = "https://api.github.com/repos/Skamba/gbs-anywhere/releases/latest";
+pub(crate) const RELEASES_API: &str =
+    "https://api.github.com/repos/Skamba/gbs-anywhere/releases/latest";
 
 /// The page people open to get it.
-pub const RELEASES_PAGE: &str = "https://github.com/Skamba/gbs-anywhere/releases/latest";
+pub(crate) const RELEASES_PAGE: &str = "https://github.com/Skamba/gbs-anywhere/releases/latest";
 
 /// A release description is a few kilobytes; anything this big is not one.
 const MAX_REPLY_BYTES: usize = 1024 * 1024;
@@ -28,14 +29,14 @@ const MAX_REPLY_BYTES: usize = 1024 * 1024;
 #[derive(Debug, Clone)]
 pub struct UpdateConfig {
     /// [`RELEASES_API`], or a local fake in tests.
-    pub url: String,
+    pub(crate) url: String,
     /// After the start (or being turned on), before the first look.
-    pub first: Duration,
+    pub(crate) first: Duration,
     /// Between looks.
-    pub every: Duration,
+    pub(crate) every: Duration,
     /// After a failed look.
-    pub retry: Duration,
-    pub timeout: Duration,
+    pub(crate) retry: Duration,
+    pub(crate) timeout: Duration,
 }
 
 impl Default for UpdateConfig {
@@ -63,10 +64,9 @@ pub(super) struct UpdateState {
 
 impl Server {
     /// Starts the task that looks for newer releases while the check is on
-    /// (see [`Server::set_update_check`]).
+    /// (see `Server::set_update_check`).
     pub fn start_update_check(self: &Arc<Self>, cfg: UpdateConfig) {
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let http = match reqwest::Client::builder()
+        let http = match crate::http::builder()
             .user_agent(format!("gbs-anywhere/{}", crate::version()))
             .timeout(cfg.timeout)
             // Only an answer from this address counts. If the repository is
@@ -105,7 +105,7 @@ impl Server {
     }
 
     /// `update` in `GET /api/state`.
-    pub fn update_json(&self) -> Value {
+    pub(crate) fn update_json(&self) -> Value {
         let s = self.update_state();
         json!({
             "latest": s.latest,
@@ -491,7 +491,7 @@ mod tests {
             r#"{"tag_name":"nightly"}"#.to_owned(),
         )));
         let url = fake(reply, Arc::default()).await;
-        let http = reqwest::Client::new();
+        let http = crate::http::client();
         let e = latest_release(&http, &url).await.unwrap_err();
         assert!(e.to_string().contains("not vX.Y.Z"), "{e}");
     }
@@ -503,7 +503,7 @@ mod tests {
             r#"{"tag_name":"vv1.2.3"}"#.to_owned(),
         )));
         let url = fake(reply.clone(), Arc::default()).await;
-        let http = reqwest::Client::new();
+        let http = crate::http::client();
         assert!(latest_release(&http, &url).await.is_err());
         *reply.lock().unwrap() = (StatusCode::OK, r#"{"tag_name":"v1.2.3"}"#.to_owned());
         assert_eq!(latest_release(&http, &url).await.unwrap(), "1.2.3");

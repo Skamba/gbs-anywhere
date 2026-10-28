@@ -11,7 +11,6 @@
 //! [`crate::integration::Integrations`]); [`SettingsFile`] is the one place
 //! that writes it.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -19,15 +18,14 @@ use std::time::Duration;
 use anyhow::Context;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
-use tokio::task::AbortHandle;
 
 use crate::integration::Settings;
-use crate::protocol::AbortCause;
-use crate::server::wifi_grinder::{PairingLock, grinder_address};
+use crate::server::private_file::{make_private, save_private};
+use crate::server::wifi_grinder::grinder_address;
 use crate::server::{Server, WifiConfig, WifiGrinder};
 
 /// The shot window unless set (`--shot-window-s`).
-pub const DEFAULT_SHOT_WINDOW_S: u32 = 180;
+pub(crate) const DEFAULT_SHOT_WINDOW_S: u32 = 180;
 
 /// The shortest shot window the app can set; 0 (no limit) is allowed too.
 pub const MIN_SHOT_WINDOW_S: u32 = 30;
@@ -53,25 +51,25 @@ pub struct SettingsFile {
 pub struct FileData {
     /// Integrations added in the app (with their passwords).
     #[serde(default)]
-    pub integrations: Vec<SavedIntegration>,
+    pub(crate) integrations: Vec<SavedIntegration>,
     /// Settings changed in the app.
     #[serde(default, skip_serializing_if = "AppSettings::is_empty")]
-    pub settings: AppSettings,
+    pub(crate) settings: AppSettings,
     /// Keys this version does not know (written by a newer one), kept.
     #[serde(flatten)]
-    pub other: Map<String, Value>,
+    pub(crate) other: Map<String, Value>,
 }
 
 /// One integration added in the app.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SavedIntegration {
-    pub id: String,
-    pub kind: String,
+    pub(crate) id: String,
+    pub(crate) kind: String,
     pub settings: Settings,
     /// Moved here from the command line: while it is here, the flags and
     /// environment variables of its kind are ignored.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub from_command_line: bool,
+    pub(crate) from_command_line: bool,
 }
 
 impl FileData {
@@ -115,7 +113,7 @@ impl SettingsFile {
 
     /// Changes the file: `change` edits a copy, which is written and only
     /// then kept. When writing fails, nothing changed.
-    pub fn update(&self, change: impl FnOnce(&mut FileData)) -> anyhow::Result<()> {
+    pub(crate) fn update(&self, change: impl FnOnce(&mut FileData)) -> anyhow::Result<()> {
         let mut data = self.lock();
         let mut next = data.clone();
         change(&mut next);
@@ -130,107 +128,6 @@ impl SettingsFile {
     }
 }
 
-/// Readable by the owner only: the settings file holds passwords, the pairing
-/// file what lets anyone speak to the grinder as gbs-anywhere, the history
-/// when someone is home. The mode is set on the open file too, because a
-/// file that is already there (say, left over from a crash) keeps its own.
-/// That is best effort: some shares (SMB, NFS that maps the owner) refuse a
-/// change of mode, and the file is still written there, as before;
-/// [`make_private`] warns about it at startup.
-pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) = f.set_permissions(std::fs::Permissions::from_mode(0o600)) {
-            tracing::debug!(
-                "{}: cannot make it readable by its owner only: {e}",
-                path.display()
-            );
-        }
-    }
-    f.write_all(bytes)?;
-    f.sync_all()
-}
-
-/// Replaces the file at `path` with `bytes`, readable by the owner only
-/// ([`write_private`]). It is written next to it as `<path>.tmp` and renamed
-/// into place, so a crash never leaves half a file; on unix the directory is
-/// synced too, so the rename outlasts a power cut. The `.tmp` name is fixed,
-/// so each file needs a single writer.
-pub(crate) fn save_private(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    write_private(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, path).with_context(|| format!("writing {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        // Best effort: some file systems (network shares) cannot sync a
-        // directory, and the file itself is written by now.
-        let dir = match path.parent() {
-            Some(dir) if !dir.as_os_str().is_empty() => dir,
-            _ => Path::new("."),
-        };
-        if let Err(e) = std::fs::File::open(dir).and_then(|d| d.sync_all()) {
-            tracing::debug!("{}: cannot sync its directory: {e}", path.display());
-        }
-    }
-    Ok(())
-}
-
-/// Makes a file [`write_private`] keeps readable by its owner only if others
-/// may read it (an older version may have left it so), and says so in the
-/// log. Run at startup; a missing file is fine, and a failure is only a
-/// warning.
-pub(crate) fn make_private(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = match std::fs::metadata(path) {
-            Ok(meta) => meta.permissions().mode(),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-            Err(e) => {
-                tracing::warn!("{}: cannot check who may read it: {e}", path.display());
-                return;
-            }
-        };
-        if mode & 0o077 == 0 {
-            return;
-        }
-        // Checked again afterwards: some file systems (SMB shares, a Windows
-        // folder under WSL or Docker Desktop) take the change without
-        // keeping it.
-        let kept = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .and_then(|()| std::fs::metadata(path))
-            .map(|meta| meta.permissions().mode() & 0o077 == 0);
-        match kept {
-            Ok(true) => tracing::info!(
-                "{}: others could read it; made it readable by its owner only",
-                path.display()
-            ),
-            Ok(false) => tracing::warn!(
-                "{}: others may read it, and its file system does not keep it readable by its \
-                 owner only",
-                path.display()
-            ),
-            Err(e) => tracing::warn!(
-                "{}: others may read it, and making it readable by its owner only failed: {e}",
-                path.display()
-            ),
-        }
-    }
-    #[cfg(not(unix))]
-    let _ = path;
-}
-
 // ---------------------------------------------------------------------------
 // The settings
 // ---------------------------------------------------------------------------
@@ -238,10 +135,10 @@ pub(crate) fn make_private(path: &Path) {
 /// Settings changed in the app, as saved. A missing value was not changed
 /// there.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct AppSettings {
+pub(crate) struct AppSettings {
     /// Seconds the machine waits for a shot; 0 waits forever.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub shot_window_s: Option<u32>,
+    pub(crate) shot_window_s: Option<u32>,
     /// The E65/E80 grinder's address; `Some(None)` when it was removed in
     /// the app over a start address (`""` in the API, `null` in the file).
     #[serde(
@@ -249,17 +146,17 @@ pub struct AppSettings {
         deserialize_with = "present",
         skip_serializing_if = "Option::is_none"
     )]
-    pub grinder_host: Option<Option<String>>,
+    pub(crate) grinder_host: Option<Option<String>>,
     /// Whether to look for a newer release once a day.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub update_check: Option<bool>,
+    pub(crate) update_check: Option<bool>,
     /// Settings this version does not know (written by a newer one), kept.
     #[serde(flatten)]
-    pub other: Map<String, Value>,
+    pub(crate) other: Map<String, Value>,
 }
 
 impl AppSettings {
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         *self == Self::default()
     }
 }
@@ -289,7 +186,7 @@ pub struct Startup {
 /// Where a setting's value comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-pub enum SettingSource {
+pub(crate) enum SettingSource {
     Default,
     CommandLine,
     App,
@@ -297,17 +194,17 @@ pub enum SettingSource {
 
 /// A change from `PUT /api/settings`: only the keys that were sent.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct SettingsChange {
+pub(crate) struct SettingsChange {
     /// `Some(None)` goes back to the start setting (`null`).
-    pub shot_window_s: Option<Option<u32>>,
-    pub grinder_host: Option<HostChange>,
+    pub(crate) shot_window_s: Option<Option<u32>>,
+    pub(crate) grinder_host: Option<HostChange>,
     /// `Some(None)` goes back to the start setting (`null`).
-    pub update_check: Option<Option<bool>>,
+    pub(crate) update_check: Option<Option<bool>>,
 }
 
 /// A new grinder address from the app.
 #[derive(Debug, Clone, PartialEq)]
-pub enum HostChange {
+pub(crate) enum HostChange {
     /// Back to `--grinder` / `GRINDER_HOST`, if set (`null`): the app's
     /// value is forgotten.
     Reset,
@@ -319,12 +216,19 @@ pub enum HostChange {
 
 /// Whether the app can set this shot window.
 fn window_ok(secs: u32) -> bool {
-    secs == 0 || (MIN_SHOT_WINDOW_S..=MAX_SHOT_WINDOW_S).contains(&secs)
+    shot_window_ok(f64::from(secs))
+}
+
+/// Whether a shot window of `secs` is allowed: 0 (no limit), or
+/// [`MIN_SHOT_WINDOW_S`] to [`MAX_SHOT_WINDOW_S`]. The same for the app, the
+/// settings file and `--shot-window-s` (which may have fractions).
+pub fn shot_window_ok(secs: f64) -> bool {
+    secs == 0.0 || (f64::from(MIN_SHOT_WINDOW_S)..=f64::from(MAX_SHOT_WINDOW_S)).contains(&secs)
 }
 
 impl SettingsChange {
     /// Checks a request body; the error is a sentence for the person.
-    pub fn parse(body: &Value) -> Result<Self, String> {
+    pub(crate) fn parse(body: &Value) -> Result<Self, String> {
         let Value::Object(obj) = body else {
             return Err("expected a JSON object with the settings to change".into());
         };
@@ -333,26 +237,21 @@ impl SettingsChange {
             match key.as_str() {
                 "shot_window_s" => {
                     // `null`: back to `--shot-window-s`, else the default.
-                    let secs = match value {
-                        Value::Null => None,
-                        v => Some(
-                            v.as_f64()
-                                .filter(|s| {
-                                    s.fract() == 0.0
-                                        && (0.0..=f64::from(MAX_SHOT_WINDOW_S)).contains(s)
-                                })
-                                .map(|s| s as u32)
-                                .filter(|s| window_ok(*s))
-                                .ok_or_else(|| {
-                                    format!(
-                                        "the shot window is 0 (no limit), {MIN_SHOT_WINDOW_S} to \
-                                         {MAX_SHOT_WINDOW_S} whole seconds, or null for the start \
-                                         setting"
-                                    )
-                                })?,
-                        ),
-                    };
-                    change.shot_window_s = Some(secs);
+                    change.shot_window_s = Some(or_null(value, |v| {
+                        v.as_f64()
+                            .filter(|s| {
+                                s.fract() == 0.0 && (0.0..=f64::from(MAX_SHOT_WINDOW_S)).contains(s)
+                            })
+                            .map(|s| s as u32)
+                            .filter(|s| window_ok(*s))
+                            .ok_or_else(|| {
+                                format!(
+                                    "the shot window is 0 (no limit), {MIN_SHOT_WINDOW_S} to \
+                                     {MAX_SHOT_WINDOW_S} whole seconds, or null for the start \
+                                     setting"
+                                )
+                            })
+                    })?);
                 }
                 "grinder_host" => {
                     change.grinder_host = Some(match value {
@@ -370,14 +269,13 @@ impl SettingsChange {
                 }
                 "update_check" => {
                     // `null`: back to `--update-check`, else on.
-                    let on = match value {
-                        Value::Null => None,
-                        v => Some(v.as_bool().ok_or(
+                    change.update_check = Some(or_null(value, |v| {
+                        v.as_bool().ok_or_else(|| {
                             "the update check is true (on), false (off), or null for the start \
-                             setting",
-                        )?),
-                    };
-                    change.update_check = Some(on);
+                             setting"
+                                .to_owned()
+                        })
+                    })?);
                 }
                 other => return Err(format!("unknown setting `{other}`")),
             }
@@ -386,9 +284,21 @@ impl SettingsChange {
     }
 }
 
+/// A value from `PUT /api/settings`: `null` (back to the start setting) is
+/// `None`, anything else what `parse` makes of it.
+fn or_null<T>(
+    value: &Value,
+    parse: impl FnOnce(&Value) -> Result<T, String>,
+) -> Result<Option<T>, String> {
+    match value {
+        Value::Null => Ok(None),
+        v => parse(v).map(Some),
+    }
+}
+
 /// Why a change was not made. Nothing changed in either case.
 #[derive(Debug, PartialEq)]
-pub enum SettingsError {
+pub(crate) enum SettingsError {
     /// The settings file could not be written.
     Save(String),
     /// The link to the new grinder address could not be set up.
@@ -408,7 +318,7 @@ impl std::error::Error for SettingsError {}
 
 impl SettingsError {
     /// As a fixed code, for `code` in the API's errors.
-    pub fn code(&self) -> &'static str {
+    pub(crate) fn code(&self) -> &'static str {
         match self {
             Self::Save(_) => "settings_not_saved",
             Self::Grinder(_) => "grinder_link_failed",
@@ -416,17 +326,12 @@ impl SettingsError {
     }
 }
 
-/// The settings as they are now, and the E65/E80 link they started.
+/// The settings as they are now.
 #[derive(Default)]
 pub(super) struct Live {
     startup: Startup,
     app: AppSettings,
     file: Option<Arc<SettingsFile>>,
-    link: Option<RunningLink>,
-}
-
-struct RunningLink {
-    task: AbortHandle,
 }
 
 /// The settings as read from the file, keeping only values the app could
@@ -452,12 +357,66 @@ fn checked(mut app: AppSettings) -> AppSettings {
     app
 }
 
-/// The shot window in seconds and where it comes from.
-fn shot_window(startup: &Startup, app: &AppSettings) -> (u32, SettingSource) {
-    match (app.shot_window_s, startup.shot_window_s) {
-        (Some(s), _) => (s, SettingSource::App),
-        (None, Some(s)) => (whole_seconds(s), SettingSource::CommandLine),
-        (None, None) => (DEFAULT_SHOT_WINDOW_S, SettingSource::Default),
+/// Which value counts: the one set in the app, else the start setting (a
+/// flag or environment variable), else the default.
+fn resolve<T>(app: Option<T>, start: Option<T>, default: T) -> (T, SettingSource) {
+    match (app, start) {
+        (Some(v), _) => (v, SettingSource::App),
+        (None, Some(v)) => (v, SettingSource::CommandLine),
+        (None, None) => (default, SettingSource::Default),
+    }
+}
+
+/// Every setting as it counts, and where it comes from. A new setting gets
+/// a field in [`AppSettings`], [`Startup`] and [`SettingsChange`], its arm
+/// in [`SettingsChange::parse`], a field here (in `of` and `entries`), and
+/// then is applied in `start_settings` and `change_settings`, logged through
+/// a [`Logged`] of its own.
+#[derive(Debug, Clone, PartialEq)]
+struct Values {
+    /// In whole seconds; 0 waits forever.
+    shot_window_s: (u32, SettingSource),
+    /// The E65/E80 grinder's address, if there is one.
+    grinder_host: (Option<String>, SettingSource),
+    /// Whether to look for newer releases; on unless set.
+    update_check: (bool, SettingSource),
+}
+
+impl Values {
+    fn of(startup: &Startup, app: &AppSettings) -> Self {
+        Self {
+            shot_window_s: resolve(
+                app.shot_window_s,
+                startup.shot_window_s.map(whole_seconds),
+                DEFAULT_SHOT_WINDOW_S,
+            ),
+            grinder_host: resolve(
+                app.grinder_host.clone(),
+                startup.grinder_host.clone().map(Some),
+                None,
+            ),
+            update_check: resolve(app.update_check, startup.update_check, true),
+        }
+    }
+
+    /// What `null` goes back to: the flags, else the defaults.
+    fn start(startup: &Startup) -> Self {
+        Self::of(startup, &AppSettings::default())
+    }
+
+    /// Each value under its name in the API, with where it comes from.
+    fn entries(&self) -> [(&'static str, Value, SettingSource); 3] {
+        fn entry<T: Serialize>(
+            key: &'static str,
+            (v, from): &(T, SettingSource),
+        ) -> (&'static str, Value, SettingSource) {
+            (key, json!(v), *from)
+        }
+        [
+            entry("shot_window_s", &self.shot_window_s),
+            entry("grinder_host", &self.grinder_host),
+            entry("update_check", &self.update_check),
+        ]
     }
 }
 
@@ -472,28 +431,64 @@ fn whole_seconds(secs: f64) -> u32 {
     }
 }
 
-/// The E65/E80 grinder's address and where it comes from.
-fn grinder_host(startup: &Startup, app: &AppSettings) -> (Option<String>, SettingSource) {
-    match (&app.grinder_host, &startup.grinder_host) {
-        (Some(h), _) => (h.clone(), SettingSource::App),
-        (None, Some(h)) => (Some(h.clone()), SettingSource::CommandLine),
-        (None, None) => (None, SettingSource::Default),
-    }
-}
-
-/// Whether to look for newer releases (on unless set) and where that comes
-/// from.
-fn update_check(startup: &Startup, app: &AppSettings) -> (bool, SettingSource) {
-    match (app.update_check, startup.update_check) {
-        (Some(on), _) => (on, SettingSource::App),
-        (None, Some(on)) => (on, SettingSource::CommandLine),
-        (None, None) => (true, SettingSource::Default),
-    }
-}
-
 /// The machine's limit for a shot window of `secs` (0: none).
 fn window_limit(secs: u32) -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs.into()))
+}
+
+/// Whether a value set in the app is used instead of a flag (or
+/// environment variable) that was given too: `now` is the value as it
+/// counts, `start` what the flags say.
+fn app_over_flag<T>(now: &(T, SettingSource), start: &(T, SettingSource)) -> bool {
+    now.1 == SettingSource::App && start.1 == SettingSource::CommandLine
+}
+
+/// How the log names a setting, its flag and its value.
+struct Logged<T> {
+    name: &'static str,
+    flag: &'static str,
+    show: fn(&T) -> String,
+}
+
+const SHOT_WINDOW: Logged<u32> = Logged {
+    name: "shot window",
+    flag: "--shot-window-s",
+    show: |secs| format!("{secs} s"),
+};
+
+const UPDATE_CHECK: Logged<bool> = Logged {
+    name: "update check",
+    flag: "--update-check",
+    show: |on| if *on { "on" } else { "off" }.to_owned(),
+};
+
+impl<T: PartialEq> Logged<T> {
+    /// At startup: says so when the value set in the app is used instead of
+    /// the flag.
+    fn app_over_flag(&self, now: &(T, SettingSource), start: &(T, SettingSource)) {
+        if app_over_flag(now, start) {
+            tracing::info!(
+                "settings: the {} set in the app ({}) is used instead of {}",
+                self.name,
+                (self.show)(&now.0),
+                self.flag
+            );
+        }
+    }
+
+    /// After a change: says so when the value, or where it comes from,
+    /// changed. True when the value itself did, so it needs applying.
+    fn changed(&self, old: &(T, SettingSource), new: &(T, SettingSource)) -> bool {
+        if old != new {
+            tracing::info!(
+                "settings: {} now {} ({})",
+                self.name,
+                (self.show)(&new.0),
+                changed_by(new.1)
+            );
+        }
+        old.0 != new.0
+    }
 }
 
 /// Why a value changed, for the log.
@@ -506,40 +501,34 @@ fn changed_by(from: SettingSource) -> &'static str {
 
 impl Live {
     fn json(&self) -> Value {
-        let (window, window_from) = shot_window(&self.startup, &self.app);
-        let (host, host_from) = grinder_host(&self.startup, &self.app);
-        let (update, update_from) = update_check(&self.startup, &self.app);
-        // What `null` goes back to: the flags, else the defaults.
-        let start = AppSettings::default();
-        json!({
-            "shot_window_s": window,
-            "grinder_host": host,
-            "update_check": update,
-            "source": {
-                "shot_window_s": window_from,
-                "grinder_host": host_from,
-                "update_check": update_from,
-            },
-            "start": {
-                "shot_window_s": shot_window(&self.startup, &start).0,
-                "grinder_host": grinder_host(&self.startup, &start).0,
-                "update_check": update_check(&self.startup, &start).0,
-            },
-            // What the app can set, besides 0 (no limit).
-            "shot_window_range": {
-                "min_s": MIN_SHOT_WINDOW_S,
-                "max_s": MAX_SHOT_WINDOW_S,
-            },
-            "persistent": self.file.is_some(),
-        })
+        let mut out = Map::new();
+        let mut source = Map::new();
+        for (key, value, from) in Values::of(&self.startup, &self.app).entries() {
+            out.insert(key.into(), value);
+            source.insert(key.into(), json!(from));
+        }
+        let start: Map<_, _> = Values::start(&self.startup)
+            .entries()
+            .into_iter()
+            .map(|(key, value, _)| (key.to_owned(), value))
+            .collect();
+        out.insert("source".into(), source.into());
+        out.insert("start".into(), start.into());
+        // What the app can set, besides 0 (no limit).
+        out.insert(
+            "shot_window_range".into(),
+            json!({ "min_s": MIN_SHOT_WINDOW_S, "max_s": MAX_SHOT_WINDOW_S }),
+        );
+        out.insert("persistent".into(), self.file.is_some().into());
+        out.into()
     }
 
-    /// The link for `host`, ready to run; loads (or makes) the pairing.
-    fn prepare_link(&self, host: &str, lock: PairingLock) -> anyhow::Result<WifiGrinder> {
+    /// The link for `host`, ready to start; loads (or makes) the pairing.
+    fn prepare_link(&self, server: &Server, host: &str) -> anyhow::Result<WifiGrinder> {
         let mut cfg = WifiConfig::from_host(host)?;
         cfg.pairing_file = self.startup.pairing_file.clone();
         cfg.pairing_id = self.startup.pairing_id;
-        WifiGrinder::new(cfg, lock)
+        server.wifi_link(cfg)
     }
 }
 
@@ -560,26 +549,14 @@ impl Server {
         live.app = checked(file.as_ref().map(|f| f.data().settings).unwrap_or_default());
         live.startup = startup;
         live.file = file;
-        let (window, from) = shot_window(&live.startup, &live.app);
-        if from == SettingSource::App && live.startup.shot_window_s.is_some() {
-            tracing::info!(
-                "settings: the shot window set in the app ({window} s) is used instead of \
-                 --shot-window-s"
-            );
-        }
-        self.with(|m, _| m.set_shot_window(window_limit(window)));
-        let (update, from) = update_check(&live.startup, &live.app);
-        if from == SettingSource::App && live.startup.update_check.is_some() {
-            tracing::info!(
-                "settings: the update check set in the app ({}) is used instead of \
-                 --update-check",
-                if update { "on" } else { "off" }
-            );
-        }
-        self.set_update_check(update);
-        let (host, from) = grinder_host(&live.startup, &live.app);
-        if from == SettingSource::App && live.startup.grinder_host.is_some() {
-            if host.is_some() {
+        let now = Values::of(&live.startup, &live.app);
+        let start = Values::start(&live.startup);
+        SHOT_WINDOW.app_over_flag(&now.shot_window_s, &start.shot_window_s);
+        self.with(|m, _| m.set_shot_window(window_limit(now.shot_window_s.0)));
+        UPDATE_CHECK.app_over_flag(&now.update_check, &start.update_check);
+        self.set_update_check(now.update_check.0);
+        if app_over_flag(&now.grinder_host, &start.grinder_host) {
+            if now.grinder_host.0.is_some() {
                 tracing::info!(
                     "settings: the grinder address set in the app is used instead of --grinder"
                 );
@@ -589,19 +566,20 @@ impl Server {
                 );
             }
         }
-        if let Some(host) = host {
-            let lock = self.pairing_lock.clone();
-            let link = live.prepare_link(&host, lock).with_context(|| match from {
+        if let (Some(host), from) = now.grinder_host {
+            let link = live.prepare_link(self, &host).with_context(|| match from {
                 SettingSource::App => "the grinder address set in the app".to_owned(),
                 _ => "--grinder".to_owned(),
             })?;
-            self.run_link(&mut live, link);
+            // Under the settings lock, as every start and stop from here, so
+            // they apply in the order the changes came.
+            self.start_wifi_link(link);
         }
         Ok(())
     }
 
     /// `settings` in `GET /api/state`, and the reply to `PUT /api/settings`.
-    pub fn settings_json(&self) -> Value {
+    pub(crate) fn settings_json(&self) -> Value {
         self.live().json()
     }
 
@@ -609,7 +587,7 @@ impl Server {
     /// the start setting is dropped from the file. A new grinder address
     /// restarts the E65/E80 link (the pairing stays where it was kept); no
     /// address stops it.
-    pub fn change_settings(
+    pub(crate) fn change_settings(
         self: &Arc<Self>,
         change: SettingsChange,
     ) -> Result<Value, SettingsError> {
@@ -636,14 +614,15 @@ impl Server {
         if let Some(on) = change.update_check {
             app.update_check = on;
         }
-        let (old_host, old_host_from) = grinder_host(&live.startup, &live.app);
-        let (new_host, host_from) = grinder_host(&live.startup, &app);
-        let relink = old_host != new_host;
-        let link = match &new_host {
+        let old = Values::of(&live.startup, &live.app);
+        let new = Values::of(&live.startup, &app);
+        let (new_host, host_from) = &new.grinder_host;
+        let relink = old.grinder_host.0 != *new_host;
+        let link = match new_host {
             // The old link still runs here, and keeps the pairing file until
             // its task has ended (see `PairingLock`).
             Some(host) if relink => Some(
-                live.prepare_link(host, self.pairing_lock.clone())
+                live.prepare_link(self, host)
                     .map_err(|e| SettingsError::Grinder(format!("{e:#}")))?,
             ),
             _ => None,
@@ -652,88 +631,33 @@ impl Server {
             file.update(|d| d.settings = app.clone())
                 .map_err(|e| SettingsError::Save(format!("{e:#}")))?;
         }
-        let old_window = shot_window(&live.startup, &live.app);
-        let old_update = update_check(&live.startup, &live.app);
         live.app = app;
-        // Logged when the value or where it comes from changes.
-        let update = update_check(&live.startup, &live.app);
-        if update != old_update {
-            tracing::info!(
-                "settings: update check now {} ({})",
-                if update.0 { "on" } else { "off" },
-                changed_by(update.1)
-            );
+        // Logged when the value or where it comes from changes, applied when
+        // the value does.
+        if UPDATE_CHECK.changed(&old.update_check, &new.update_check) {
+            self.set_update_check(new.update_check.0);
         }
-        if update.0 != old_update.0 {
-            self.set_update_check(update.0);
-        }
-        let window = shot_window(&live.startup, &live.app);
-        if window != old_window {
-            tracing::info!(
-                "settings: shot window now {} s ({})",
-                window.0,
-                changed_by(window.1)
-            );
-        }
-        if window.0 != old_window.0 {
-            self.with(|m, _| m.set_shot_window(window_limit(window.0)));
+        if SHOT_WINDOW.changed(&old.shot_window_s, &new.shot_window_s) {
+            self.with(|m, _| m.set_shot_window(window_limit(new.shot_window_s.0)));
         }
         // (With no address left, the link's line below says it.)
-        if old_host_from == SettingSource::App
-            && host_from != SettingSource::App
+        if old.grinder_host.1 == SettingSource::App
+            && *host_from != SettingSource::App
             && new_host.is_some()
         {
             tracing::info!("settings: grinder address is the start setting again");
         }
         if relink {
-            self.stop_link(&mut live);
+            self.stop_wifi_link();
             match link {
-                Some(link) => self.run_link(&mut live, link),
-                None if host_from == SettingSource::App => tracing::info!(
+                Some(link) => self.start_wifi_link(link),
+                None if *host_from == SettingSource::App => tracing::info!(
                     "grinder: address removed in the app (instead of --grinder), link stopped"
                 ),
                 None => tracing::info!("grinder: no address any more, link stopped"),
             }
         }
         Ok(live.json())
-    }
-
-    fn run_link(self: &Arc<Self>, live: &mut Live, link: WifiGrinder) {
-        if live.startup.pairing_file.is_none() {
-            tracing::warn!(
-                "no --config or --grinder-pairing-file: the pairing lasts until restart"
-            );
-        }
-        tracing::info!("grinder: pairing over Local WiFi with {}", link.base_url());
-        // Taken here, under the settings lock, rather than in the task: an
-        // older link that is still finishing a step can then never take over
-        // again, so only this one reports and gets the pairing IDs typed in
-        // the app.
-        let (owner, ids, accept) = self.attach_wifi();
-        // Shown until the link reports for itself, so the app never sees an
-        // address without a link.
-        self.set_wifi(owner, link.connecting());
-        let task = tokio::spawn(link.run(self.clone(), owner, ids, accept)).abort_handle();
-        live.link = Some(RunningLink { task });
-    }
-
-    /// Stops the running link. A shot it was waiting for (a brew job) can no
-    /// longer reach the grinder, so that brew ends; a knob press of an E64 WS
-    /// on the same server goes on.
-    fn stop_link(&self, live: &mut Live) {
-        let Some(old) = live.link.take() else {
-            return;
-        };
-        // The task ends at its next await; if it is in the middle of a step
-        // right now, what it still reports is ignored once detached, and the
-        // next link waits for it to end before it touches the pairing file.
-        old.task.abort();
-        self.detach_wifi();
-        self.with(|m, now| {
-            if m.brewing_for_brew_job(now) {
-                let _ = m.give_up(now, AbortCause::GrinderAddressChanged);
-            }
-        });
     }
 
     fn live(&self) -> MutexGuard<'_, Live> {
@@ -745,6 +669,9 @@ impl Server {
 mod tests {
     use super::*;
     use crate::protocol::MachineConfig;
+    use crate::test_support::temp_dir;
+    #[cfg(unix)]
+    use crate::test_support::{mode, set_mode};
 
     #[test]
     fn values_edited_into_what_the_app_refuses_are_ignored() {
@@ -767,15 +694,6 @@ mod tests {
             ..AppSettings::default()
         };
         assert_eq!(checked(removed.clone()), removed);
-    }
-
-    fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "gbs-anywhere-settings-{name}-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
     }
 
     fn change(body: Value) -> Result<SettingsChange, String> {
@@ -846,7 +764,7 @@ mod tests {
             shot_window_s: Some(150.6),
             ..Startup::default()
         };
-        let (secs, from) = shot_window(&startup, &AppSettings::default());
+        let (secs, from) = Values::start(&startup).shot_window_s;
         assert_eq!((secs, from), (151, SettingSource::CommandLine));
         assert_eq!(window_limit(secs), Some(Duration::from_secs(151)));
     }
@@ -931,40 +849,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    fn mode(path: &Path) -> u32 {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
-    }
-
-    #[cfg(unix)]
-    fn set_mode(path: &Path, mode: u32) {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn a_save_leaves_no_file_others_can_read() {
-        let dir = temp_dir("mode");
-        let path = dir.join("settings.json");
-        let file = SettingsFile::open(&path).unwrap();
-        // One left over from a crash, as others could read it, and the file
-        // as an older version left it.
-        let tmp = dir.join("settings.json.tmp");
-        std::fs::write(&tmp, "{}").unwrap();
-        set_mode(&tmp, 0o644);
-        set_mode(&path, 0o644);
-        file.update(|d| d.settings.shot_window_s = Some(120))
-            .unwrap();
-        assert_eq!(mode(&path), 0o600);
-        // Written in place too.
-        set_mode(&path, 0o644);
-        write_private(&path, b"{}").unwrap();
-        assert_eq!(mode(&path), 0o600);
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[cfg(unix)]
     #[tokio::test]
     async fn files_others_can_read_are_made_owner_only_at_startup() {
         let dir = temp_dir("startup");
@@ -992,13 +876,6 @@ mod tests {
             assert_eq!(mode(f), 0o600, "{}", f.display());
         }
         assert_eq!(std::fs::read_to_string(&pairing).unwrap(), saved_pairing);
-
-        // Only ever closer: a file only its owner may read stays as it is,
-        // and a missing one is fine.
-        set_mode(&pairing, 0o400);
-        make_private(&pairing);
-        assert_eq!(mode(&pairing), 0o400);
-        make_private(&dir.join("missing.json"));
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1201,6 +1078,34 @@ mod tests {
         assert_eq!(s["source"]["update_check"], "app");
         assert!(x.update_check_on());
         assert!(change(json!({ "update_check": "off" })).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_settings_show_value_source_and_start_of_each() {
+        let x = Server::new(MachineConfig::default());
+        let flags = Startup {
+            shot_window_s: Some(150.0),
+            ..Startup::default()
+        };
+        x.start_settings(flags, None).unwrap();
+        x.change_settings(change(json!({ "update_check": false })).unwrap())
+            .unwrap();
+        assert_eq!(
+            x.settings_json(),
+            json!({
+                "shot_window_s": 150,
+                "grinder_host": null,
+                "update_check": false,
+                "source": {
+                    "shot_window_s": "command_line",
+                    "grinder_host": "default",
+                    "update_check": "app",
+                },
+                "start": { "shot_window_s": 150, "grinder_host": null, "update_check": true },
+                "shot_window_range": { "min_s": MIN_SHOT_WINDOW_S, "max_s": MAX_SHOT_WINDOW_S },
+                "persistent": false,
+            })
+        );
     }
 
     #[tokio::test]

@@ -20,6 +20,12 @@ before.
 | `state: "failing"` while nothing is sent for 3 minutes after an unanswered pairing check | `state: "pairing"`, `phase: "quiet"` (`unreachable` stays `true`) |
 | `POST /api/grinder/pairing` while not paired and not asking for an ID: `grinder_already_paired` | `grinder_not_asking`; `grinder_already_paired` only while paired |
 
+- `--finishing-hold-s` takes 3 to 60 seconds (was 0 to 3600): with a hold
+  shorter than an E64 WS poll, the grinder missed shots that the app said
+  were sent.
+- `--shot-window-s` takes 0 or 30 to 3600 seconds, as the app does (1 to 29
+  were taken before).
+
 ### Added
 
 - **Set up grinder**: the app sets up the grinder step by step, in the
@@ -58,6 +64,18 @@ before.
   too, as the server sees it. When that looks like an address inside
   Docker, which the grinder can't reach, the app says so instead. In the
   API: `server.ip` and `server.ip_in_docker_range` in `/api/state`.
+- The control API says how long things took or happened, as the server
+  measured them, so apps don't depend on its clock: `shot.phase_age_ms`
+  while a shot runs, `running_ms` on `shot_reported`, `shot_aborted` and
+  each history entry (for shots saved by earlier builds, from their two
+  times), and `age_ms` on each log line in `/api/log` and its stream.
+- `shot_reported` and the shot history name the integration that reported a
+  shot (`integration_id`; `null` when typed in the app or sent through the
+  API). The history shows it next to the target.
+- `grinder.wifi` has `problem_cause`, the last shot's problem as a code (an
+  abort cause such as `grinder_shot_dropped`, or `grinder_result_expired`,
+  `grinder_result_refused`, `grinder_result_delayed`), and `error`: while
+  the link fails, why, without the steps before it.
 
 ### Changed
 
@@ -82,11 +100,76 @@ before.
   instead of "Generic WiFi", and the pairing hints use the grinder's words
   (Configuration, Start Pairing, Pairing Code). Without a grinder, the
   refusal points to **Set up grinder**.
+- A flag given again now wins over the one before, so `--control <addr>`
+  after the Docker image name or in `GBS_ANYWHERE_ARGS` turns on the control
+  address that the image and the Debian package turn off. Lists such as
+  `--allow-host` still add up.
+- The `--log` file is readable by its owner only. Past 4 MiB it moves to
+  `<file>.1` and starts over, and each request stays on one shortened line.
+- `/api/events/stream` resumes from `Last-Event-ID` (or `?after=N`) like
+  `/api/log/stream`, and no longer skips events when it falls behind.
+- La Marzocco cloud: a refused login, or a machine it can't pick (none on
+  the account, the serial number not on it, or more than one and no serial
+  number), is tried again after an hour once it was refused for 2 minutes
+  in a row, instead of every 5 minutes forever; changing its settings in the
+  app tries again at once. The card says when.
+- The app now uses the same words for the grinder's state everywhere. A
+  Pairing Code waiting to be accepted shows as "Pairing", not "Grinder not
+  set up". A grinder that doesn't answer within 15 s counts as not
+  connected, also in the setup's step 1. A paired E65/E80 GbS with a problem
+  shows "Problem" on the grinder card.
+- The ⋮ menus on the Status tab close when the focus moves on past them, and
+  screen readers now announce them as a button that shows a list rather than
+  as a menu.
+- An `age_ms` among an integration's `detail_vars` is as of the reply, so "3
+  min ago" counts on in the app.
 
 ### Fixed
 
 - The log in the app shows each line's time again, and **Copy** finds the
   lines of the last hour; both were broken since 0.3.0.
+- Unknown or unparsable requests under `/api/v2` no longer change the
+  grinder address shown in the app, and are logged once per device and path
+  rather than every time, so they can't push the rest out of the app's log.
+- An invalid `--control` address, or one already in use, now names the flag
+  and the address, and is reported before anything starts.
+- A `--log` file that can't be opened now says which file.
+- La Marzocco cloud: a coffee made before the knob press is no longer
+  reported as the shot when the cloud can't be reached at the knob press.
+  Coffees are compared on the cloud's own clock, and a shot is missed (type
+  it in the app) rather than reported wrong.
+- La Marzocco cloud: when the next knob press came within one check
+  interval, the previous shot's coffee could be reported for the new one.
+  Each knob press is now its own brew, also for the Half Decent Scale.
+- A knob press made while the La Marzocco cloud integration is logging in or
+  retrying is no longer missed.
+- The La Marzocco card no longer shows "last coffee 0 s ago" when the
+  computer's clock is behind or not set; it leaves the age out.
+- An integration that stops on an internal error now shows as failing with
+  the error, and the error appears in the app's log.
+- A shot time typed for one shot no longer stays for the next one when the
+  phone slept or lost the network in between.
+- Tapping or focusing a filter on the History tab, an open ⋮ menu, or an
+  answer in the setup no longer loses the focus when the page updates.
+- Screen readers no longer repeat the hint under the shot time on every
+  keystroke, or an error message that didn't change.
+- A setting changed under Status → Settings (update check, time to pull the
+  shot) no longer flicks back to its old value for a moment.
+- The setup's progress bars fill the whole row for the E64 WS's three steps.
+- Icons from `--icons` show in the list of integrations to add the first
+  time it opens.
+- The app shows request errors in your language, also when gbs-anywhere does
+  not answer (it said "Failed to fetch" or "Load failed").
+- The app words an E65/E80 problem and a blocked grind in your language
+  instead of the server's English, and shows a problem once when the failed
+  shot has the same cause.
+- "Reported by …" names the integration that reported the shot, instead of
+  guessing from the time and weight.
+- Copying the last hour of the log works when the gbs-anywhere computer's
+  clock is not set.
+- The shot timer keeps running when the machine values are overridden, and a
+  timeout in the history no longer shows the current time limit for an older
+  shot.
 
 ## [0.3.1] - 2026-10-24
 
