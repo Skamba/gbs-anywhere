@@ -30,7 +30,7 @@
 //! | GET | `/api/log?after=N` | the server's last log lines with `seq > N` (see [below](#get-apilog)) |
 //! | GET | `/api/log/stream` | new log lines, live, as server-sent events (`log`), each as in `/api/log` with its `age_ms` as it is sent; `Last-Event-ID` (or else `?after=N`) sends the missed ones first |
 //! | GET | `/api/events?after=N` | events with `seq > N`, each with its `kind` (see [below](#get-apievents)) |
-//! | GET | `/api/events/stream` | the same, live, as server-sent events named by `kind`, each with its `seq` as the event `id`, none skipped; `Last-Event-ID` (or else `?after=N`) sends the missed ones still kept first, all of them for an `N` from before a restart |
+//! | GET | `/api/events/stream` | the same, live, as server-sent events named by `kind`, each with its `seq` as the event `id`, none skipped; `Last-Event-ID` (or else `?after=N`) sends the missed ones still kept first, all of them for an `N` beyond the last event; numbers start over when the server restarts, so a client that follows across restarts compares `server.boot_id` in `/api/state` |
 //! | POST | `/api/shot/result` | `{"time_s":30,"weight_g":36}` (or `time_ms`) — ends the shot with these numbers; without a weight, the recipe's |
 //! | POST | `/api/shot/abort` | ends the shot as a user abort (grinder skips it) |
 //! | POST | `/api/shot/start` | starts a shot without a grinder request (an E64 WS sees a flush; an E65/E80 nothing) |
@@ -85,7 +85,7 @@
 //! * `unknown_pairing_id`: the last pairing ID the grinder did not take, while asking.
 //! * `pairing_lost` and `unreachable`.
 //! * `not_set_up`: not paired, and the grinder answered the pairing application with a client error, as one not set up for pairing would.
-//! * `detail`, and `failure`: while `failing`, why, in English, without the steps before it that `detail` lists, e.g. `operation timed out`.
+//! * `detail`, and `error`: while `failing`, why, in English, without the steps before it that `detail` lists, e.g. `operation timed out`.
 //! * `problem`: what went wrong with the last shot, in English, until the next one goes through.
 //! * `problem_cause`: the same as a code: the `AbortCause` of a brew that ended without an answer (`grinder_shot_dropped`, `grinder_shot_refused`, `grinder_unpaired`), or `grinder_result_expired` (the result did not reach the grinder in time), `grinder_result_refused` or `grinder_result_delayed` (not yet, still trying).
 //!
@@ -276,7 +276,7 @@ async fn no_icon() -> StatusCode {
 
 /// An icon file from the `--icons` directory. Names are restricted to
 /// `[a-z0-9_-]+.(svg|png|webp)` so nothing else on disk can be read.
-async fn icon(State(x): State<Arc<Server>>, Path(name): Path<String>) -> Response {
+async fn icon(State(x): State<Arc<Server>>, Segment(name): Segment<String>) -> Response {
     let Some(dir) = x.icons_dir() else {
         return error(
             StatusCode::NOT_FOUND,
@@ -625,7 +625,10 @@ async fn add_integration(
     }
 }
 
-async fn integration_settings(State(x): State<Arc<Server>>, Path(id): Path<String>) -> Response {
+async fn integration_settings(
+    State(x): State<Arc<Server>>,
+    Segment(id): Segment<String>,
+) -> Response {
     match x.integrations().form(&id) {
         Ok(form) => Json(form).into_response(),
         Err(e) => change_error(&e),
@@ -640,7 +643,7 @@ struct UpdateIntegration {
 
 async fn update_integration(
     State(x): State<Arc<Server>>,
-    Path(id): Path<String>,
+    Segment(id): Segment<String>,
     Body(req): Body<UpdateIntegration>,
 ) -> Response {
     match x.integrations().update(&x, &id, req.settings) {
@@ -649,14 +652,17 @@ async fn update_integration(
     }
 }
 
-async fn adopt_integration(State(x): State<Arc<Server>>, Path(id): Path<String>) -> Response {
+async fn adopt_integration(State(x): State<Arc<Server>>, Segment(id): Segment<String>) -> Response {
     match x.integrations().adopt(&id) {
         Ok(view) => Json(view).into_response(),
         Err(e) => change_error(&e),
     }
 }
 
-async fn remove_integration(State(x): State<Arc<Server>>, Path(id): Path<String>) -> Response {
+async fn remove_integration(
+    State(x): State<Arc<Server>>,
+    Segment(id): Segment<String>,
+) -> Response {
     match x.integrations().remove(&id) {
         Ok(()) => Json(json!({ "id": id })).into_response(),
         Err(e) => change_error(&e),
@@ -830,6 +836,21 @@ impl<T: DeserializeOwned, S: Send + Sync> FromRequestParts<S> for Params<T> {
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Response> {
         match Query::<T>::from_request_parts(parts, state).await {
             Ok(Query(params)) => Ok(Self(params)),
+            Err(e) => Err(error(e.status(), "request_invalid", &e.body_text())),
+        }
+    }
+}
+
+/// A path segment, as `Path` reads it, but one it can't read (not UTF-8,
+/// say) gets the API's error reply with `request_invalid`.
+struct Segment<T>(T);
+
+impl<T: DeserializeOwned + Send, S: Send + Sync> FromRequestParts<S> for Segment<T> {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Response> {
+        match Path::<T>::from_request_parts(parts, state).await {
+            Ok(Path(segment)) => Ok(Self(segment)),
             Err(e) => Err(error(e.status(), "request_invalid", &e.body_text())),
         }
     }

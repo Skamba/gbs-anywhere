@@ -74,7 +74,7 @@ before.
   API). The history shows it next to the target.
 - `grinder.wifi` has `problem_cause`, the last shot's problem as a code (an
   abort cause such as `grinder_shot_dropped`, or `grinder_result_expired`,
-  `grinder_result_refused`, `grinder_result_delayed`), and `failure`: while
+  `grinder_result_refused`, `grinder_result_delayed`), and `error`: while
   the link fails, why, without the steps before it.
 
 ### Changed

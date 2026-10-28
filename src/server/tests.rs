@@ -622,8 +622,8 @@ async fn control_api_rejects_what_it_cannot_do() {
     let reply = call(post.clone(), format!("{base}/api/machine"), patch).await;
     assert_eq!(code_of(reply), expect(400, "machine_patch_invalid"));
 
-    // A body or query it can't read: malformed, of the wrong shape, or not
-    // said to be JSON.
+    // A body, query or path it can't read: malformed, of the wrong shape,
+    // not said to be JSON, or not UTF-8.
     let http = crate::http::client();
     let result = format!("{base}/api/shot/result");
     for req in [
@@ -634,6 +634,9 @@ async fn control_api_rejects_what_it_cannot_do() {
         http.post(&result).body(r#"{"time_s":30}"#),
         http.get(format!("{base}/api/events?after=x")),
         http.get(format!("{base}/api/log?after=-1")),
+        http.get(format!("{base}/api/integrations/%FF/settings")),
+        http.delete(format!("{base}/api/integrations/%FF")),
+        http.get(format!("{base}/icons/%FF.svg")),
     ] {
         let res = req.send().await.unwrap();
         let status = res.status().as_u16();

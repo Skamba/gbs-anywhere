@@ -233,6 +233,10 @@ struct OpenTranscript {
     len: u64,
     /// The log said that starting over failed.
     warned: bool,
+    /// The file was moved to `<file>.1` but no new one could be opened:
+    /// `file` is the moved one, which is neither written nor emptied, and
+    /// the next line tries to open the file again.
+    moved: bool,
 }
 
 impl Transcript {
@@ -250,6 +254,7 @@ impl Transcript {
                 file,
                 len,
                 warned: false,
+                moved: false,
             }),
         })
     }
@@ -257,6 +262,16 @@ impl Transcript {
     /// Appends `line`. A failed write is only a lost line.
     pub(crate) async fn write(&self, line: &str) {
         let mut open = self.open.lock().await;
+        if open.moved {
+            match open_private(&self.path).await {
+                Ok(file) => {
+                    open.file = file;
+                    open.len = 0;
+                    open.moved = false;
+                }
+                Err(_) => return,
+            }
+        }
         let size = u64::try_from(line.len()).unwrap_or(u64::MAX);
         if open.len > 0 && open.len.saturating_add(size) > self.max_bytes {
             match self.start_over(&mut open).await {
@@ -265,6 +280,9 @@ impl Transcript {
                     tracing::warn!("--log: cannot start {} over: {e}", self.path.display());
                 }
                 Err(_) => {}
+            }
+            if open.moved {
+                return;
             }
         }
         let written = async {
@@ -278,12 +296,28 @@ impl Transcript {
     }
 
     /// Moves the file to `<file>.1` and opens a new one; if it can't be
-    /// moved, empties it.
+    /// moved, empties it. If the new one can't be opened, the old one goes
+    /// back and is emptied, so the open handle never writes into or empties
+    /// `<file>.1`.
     async fn start_over(&self, open: &mut OpenTranscript) -> std::io::Result<()> {
         let mut old = self.path.as_os_str().to_owned();
         old.push(".1");
-        match tokio::fs::rename(&self.path, PathBuf::from(old)).await {
-            Ok(()) => open.file = open_private(&self.path).await?,
+        let old = PathBuf::from(old);
+        match tokio::fs::rename(&self.path, &old).await {
+            Ok(()) => match open_private(&self.path).await {
+                Ok(file) => open.file = file,
+                Err(e) => {
+                    // Back in place, it is emptied as if it couldn't be
+                    // moved; otherwise it is left alone.
+                    if tokio::fs::rename(&old, &self.path).await.is_ok() {
+                        open.file.set_len(0).await?;
+                        open.len = 0;
+                    } else {
+                        open.moved = true;
+                    }
+                    return Err(e);
+                }
+            },
             Err(_) => open.file.set_len(0).await?,
         }
         open.len = 0;
@@ -392,6 +426,23 @@ mod tests {
         t.write(&line(6)).await;
         assert_eq!(read(&old), line(4) + &line(5));
         assert_eq!(read(&path), line(6));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn a_transcript_moved_away_is_left_alone_until_it_opens_again() {
+        let dir = temp_dir("moved");
+        let path = dir.join("grinder.log");
+        let old = dir.join("grinder.log.1");
+        let t = Transcript::open(&path, 100).await.unwrap();
+        t.write("kept\n").await;
+        // As after a move to `.1` whose new file could not be opened.
+        std::fs::rename(&path, &old).unwrap();
+        t.open.lock().await.moved = true;
+        t.write("next\n").await;
+        let read = |p: &Path| std::fs::read_to_string(p).unwrap();
+        assert_eq!(read(&old), "kept\n", "the moved file is not written");
+        assert_eq!(read(&path), "next\n", "a new file is opened");
         let _ = std::fs::remove_dir_all(dir);
     }
 

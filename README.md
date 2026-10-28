@@ -391,7 +391,8 @@ Without Docker you can also type the shot into the console: `30 36` means
 Scripts and other front ends can use the app's JSON API on the same port,
 e.g. `POST /api/shot/result` with `{"time_s":30,"weight_g":36}`, or follow
 `GET /api/events/stream` (reconnected with `Last-Event-ID`, it first sends
-the events missed meanwhile). All routes are listed in
+the events missed meanwhile; event numbers start over when gbs-anywhere
+restarts, which `server.boot_id` in `/api/state` tells). All routes are listed in
 [`src/server/control_api.rs`](src/server/control_api.rs).
 `GET /api/state` comes in groups (`shot`, `grinder`, `machine`,
 `integrations`, `settings`, `update`, `server`), and an error replies

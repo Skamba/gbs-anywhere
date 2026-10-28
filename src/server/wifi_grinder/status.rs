@@ -34,7 +34,7 @@ impl WifiGrinder {
             pairing_lost: self.screen.pairing_lost,
             quiet_ms: self.cfg.restart_quiet.as_millis() as u64,
             detail,
-            failure: (state == WifiState::Failing)
+            error: (state == WifiState::Failing)
                 .then(|| self.reach.failure.clone())
                 .flatten(),
             problem: self.jobs.problem.as_ref().map(|p| p.text.clone()),

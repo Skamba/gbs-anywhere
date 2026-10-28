@@ -649,11 +649,11 @@
   }
 
   /** Why there is no grinder, in plain words (`text`), and the server's
-   *  error behind it (`detail`: its `failure`, without the addresses
+   *  error behind it (`detail`: its `error`, without the addresses
    *  before it), which stays English like the log. */
   function grinderMissing(wifi) {
     if (!wifi) return { text: t("sys.missing.e64"), detail: "" };
-    const error = (wifi.state === "failing" && wifi.failure) || "";
+    const error = (wifi.state === "failing" && wifi.error) || "";
     // It answers, but not as it should: not a matter of switching it on.
     if (error && wifi.unreachable === false) return { text: t("sys.missing.linkError"), detail: error };
     return { text: t("sys.missing.wifi"), detail: error };
@@ -730,7 +730,7 @@
     // It answers but turns pairing down: not set up, rather than not
     // connected; its answer stays at hand with the log. Any other error
     // shows as one.
-    if (L.state === "notSetUp") return s("start", "alert", "setup", t("sys.text.setup"), L.wifi.failure || "");
+    if (L.state === "notSetUp") return s("start", "alert", "setup", t("sys.text.setup"), L.wifi.error || "");
     if (L.state === "missing") return s("error", "alert", "noGrinder", L.missing.text, L.missing.detail);
     if (blocked) return s("warn", "alert", "blocked", blockedText(blocked));
     if (f.sc === "error") return s("error", "alert", "error", t("sys.text.error"), errorTitle(f));

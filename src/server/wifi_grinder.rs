@@ -133,7 +133,7 @@ pub(crate) struct WifiLink {
     pub(crate) detail: String,
     /// While `failing`: why, in English words, without the steps that led
     /// there (`detail` has them all), e.g. `operation timed out`.
-    pub(crate) failure: Option<String>,
+    pub(crate) error: Option<String>,
     /// What went wrong with the last shot, in English words, until the next
     /// one goes through.
     pub(crate) problem: Option<String>,

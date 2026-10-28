@@ -53,7 +53,7 @@ async fn the_app_sees_a_grinder_that_does_not_answer_until_it_does() {
     let w = wifi(&server);
     assert!(w.unreachable);
     // Why, without the steps before it: the address is in `detail`.
-    let failure = w.failure.expect("why it fails");
+    let failure = w.error.expect("why it fails");
     assert!(
         w.detail.starts_with("cannot reach the grinder at"),
         "{}",
@@ -68,7 +68,7 @@ async fn the_app_sees_a_grinder_that_does_not_answer_until_it_does() {
     serve_fake(listener, Fake::default());
     wait_for("paired", || paired(&server)).await;
     assert!(!wifi(&server).unreachable);
-    assert_eq!(wifi(&server).failure, None, "only while failing");
+    assert_eq!(wifi(&server).error, None, "only while failing");
 }
 
 #[tokio::test]
