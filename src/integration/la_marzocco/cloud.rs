@@ -429,6 +429,23 @@ async fn refused(what: &str, resp: reqwest::Response) -> anyhow::Error {
     let status = resp.status();
     let body = resp.text().await.unwrap_or_default();
     tracing::debug!("{TITLE}: {what} failed: {status} {}", body.trim());
+    refusal(what, status, &body)
+}
+
+/// The reply's `code` when the account's owner has yet to accept La
+/// Marzocco's updated terms and privacy policy, which the app asks for when
+/// it opens: every request is refused until they do.
+const POLICY_CODE: &str = "USER_MUST_ACCEPT_POLICY";
+
+/// The error for a refused reply: its status, or what to do when the cloud
+/// waits for the terms to be accepted.
+fn refusal(what: &str, status: reqwest::StatusCode, body: &str) -> anyhow::Error {
+    let reply = serde_json::from_str::<Value>(body).ok();
+    if reply.as_ref().and_then(|v| v["code"].as_str()) == Some(POLICY_CODE) {
+        return anyhow::anyhow!(
+            "{what} refused: La Marzocco asks to accept its updated terms and privacy policy; open the La Marzocco app and confirm them"
+        );
+    }
     anyhow::anyhow!("{what} failed: {status}")
 }
 
@@ -443,6 +460,22 @@ mod tests {
 
     fn fake_pub() -> Vec<u8> {
         (0u8..91).collect()
+    }
+
+    #[test]
+    fn a_policy_to_accept_says_what_to_do() {
+        let forbidden = reqwest::StatusCode::FORBIDDEN;
+        let body = r#"{"success":false,"message":"User must accept latest policy","code":"USER_MUST_ACCEPT_POLICY"}"#;
+        let e = refusal("machine list", forbidden, body);
+        assert_eq!(
+            format!("{e:#}"),
+            "machine list refused: La Marzocco asks to accept its updated terms and privacy policy; open the La Marzocco app and confirm them"
+        );
+        // Any other refusal by its status only.
+        for body in ["", "<html>Request blocked</html>", r#"{"code":"OTHER"}"#] {
+            let e = refusal("coffee log", forbidden, body);
+            assert_eq!(format!("{e:#}"), "coffee log failed: 403 Forbidden");
+        }
     }
 
     #[test]

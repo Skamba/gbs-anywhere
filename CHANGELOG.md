@@ -141,6 +141,11 @@ before.
 - La Marzocco cloud: when the next knob press came within one check
   interval, the previous shot's coffee could be reported for the new one.
   Each knob press is now its own brew, also for the Half Decent Scale.
+- La Marzocco cloud: when La Marzocco asks to confirm its updated terms
+  and privacy policy, the card says to confirm them in the La Marzocco app,
+  instead of only "403 Forbidden". An error that keeps coming back is logged
+  once and then once an hour, rather than at every try (every 3 s during a
+  brew, up to every 5 minutes otherwise).
 - A knob press made while the La Marzocco cloud integration is logging in or
   retrying is no longer missed.
 - The La Marzocco card no longer shows "last coffee 0 s ago" when the
