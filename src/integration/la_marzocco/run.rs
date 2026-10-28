@@ -1,7 +1,7 @@
 //! The task: log in, find the machine, and for each brew the grinder asks
 //! for poll its coffee log until the shot shows up.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::bail;
 
@@ -16,10 +16,11 @@ const MAX_BACKOFF: Duration = Duration::from_secs(300);
 /// ([`is_permanent`]). Changing the settings in the app restarts the
 /// integration at once.
 const PERMANENT_RETRY: Duration = Duration::from_secs(3600);
-/// How many refusals in a row get the normal backoff before the hour: a
+/// How long refusals in a row get the normal backoff before the hour: a
 /// login signed while this computer's clock was still unset can be refused
-/// once and work a minute later.
-const REFUSALS_BEFORE_THE_HOUR: u32 = 3;
+/// once and work a minute later. Counted from the first refusal rather than
+/// in tries, so it holds whatever the backoff's steps.
+const REFUSED_BEFORE_THE_HOUR: Duration = Duration::from_secs(120);
 
 /// The integration. See the module docs.
 pub(crate) struct LaMarzocco {
@@ -47,14 +48,15 @@ pub(crate) fn new_coffee(coffees: &[LastCoffee], after_ms: i64) -> Option<&LastC
 
 async fn run(link: Link, cfg: Config) {
     let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
-    let mut refusals = 0u32;
+    // When the first of the refusals in a row came, if the last error was one.
+    let mut refused_since: Option<Instant> = None;
     loop {
         link.status
             .starting(Detail::keyed("la_marzocco.logging_in", "logging in"));
         let e = match connect(&cfg).await {
             Ok((client, machine)) => {
                 backoff.reset();
-                refusals = 0;
+                refused_since = None;
                 link.status.subject(&machine.subject);
                 link.status
                     .connected(idle_line(machine.last.as_ref(), now_ms()));
@@ -71,8 +73,9 @@ async fn run(link: Link, cfg: Config) {
             Some(choice) => tracing::warn!("{TITLE}: {}", choice.log),
             None => tracing::warn!("{TITLE}: {e:#}"),
         }
-        refusals = if is_permanent(&e) { refusals + 1 } else { 0 };
-        if waits_an_hour(refusals) {
+        let now = Instant::now();
+        refused_since = is_permanent(&e).then(|| refused_since.unwrap_or(now));
+        if refused_since.is_some_and(|first| waits_an_hour(first, now)) {
             link.status.error(format!("{e:#}; trying again in an hour"));
             tracing::info!("{TITLE}: trying again in an hour, or once its settings change");
             tokio::time::sleep(PERMANENT_RETRY).await;
@@ -83,10 +86,10 @@ async fn run(link: Link, cfg: Config) {
     }
 }
 
-/// Whether `refusals` permanent errors in a row wait the hour rather than
-/// the normal backoff.
-fn waits_an_hour(refusals: u32) -> bool {
-    refusals >= REFUSALS_BEFORE_THE_HOUR
+/// Whether permanent errors in a row since `first` wait the hour at `now`
+/// rather than the normal backoff.
+fn waits_an_hour(first: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(first) >= REFUSED_BEFORE_THE_HOUR
 }
 
 /// Whether trying again in a few minutes won't fix `e`: the login was
@@ -850,9 +853,15 @@ mod tests {
         assert!(!is_permanent(&e), "{e:#}");
 
         // A refusal is tried again soon at first, in case this computer's
-        // clock was just being set; only refusals in a row wait the hour.
-        assert!(!waits_an_hour(1) && !waits_an_hour(2));
-        assert!(waits_an_hour(3) && waits_an_hour(4));
+        // clock was just being set; only refusals in a row for 2 minutes
+        // wait the hour. With the backoff's steps the tries come at 0, 5,
+        // 15, 35, 75 and 155 s: the last one waits the hour.
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        for s in [0, 5, 15, 35, 75] {
+            assert!(!waits_an_hour(t0, at(s)), "{s} s");
+        }
+        assert!(waits_an_hour(t0, at(120)) && waits_an_hour(t0, at(155)));
         cloud.refuse_login.store(true, Ordering::SeqCst);
         let l = Link {
             server: Server::new(MachineConfig::default()),
