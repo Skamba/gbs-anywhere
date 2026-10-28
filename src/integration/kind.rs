@@ -25,7 +25,7 @@ pub struct Kind {
     /// The setup form, in order.
     pub fields: &'static [Field],
     /// Turns filled-in settings into the integration. [`Kind::create`] has
-    /// already checked required fields and numbers; check the rest here.
+    /// already checked required fields, numbers and booleans; check the rest here.
     #[serde(skip)]
     pub build: fn(&Settings) -> anyhow::Result<Box<dyn Integration>>,
 }
@@ -40,7 +40,7 @@ pub struct Field {
     pub help: &'static str,
     pub input: Input,
     pub required: bool,
-    /// Used when left empty, shown as the placeholder; empty for none.
+    /// Used when left empty; a placeholder for text or the initial checkbox state.
     pub default: &'static str,
 }
 
@@ -53,6 +53,8 @@ pub enum Input {
     /// Never sent back by the API, not trimmed.
     Password,
     Number,
+    /// Stored as "true" or "false" like the other form's string values.
+    Checkbox,
 }
 
 impl Kind {
@@ -82,6 +84,9 @@ impl Kind {
             }
             if f.input == Input::Number {
                 settings.number(f.key)?;
+            }
+            if f.input == Input::Checkbox {
+                settings.boolean(f.key)?;
             }
         }
         (self.build)(settings)
@@ -193,6 +198,16 @@ impl Settings {
         Ok(Some(n))
     }
 
+    /// A checkbox value; `None` when missing or blank in an older settings file.
+    pub fn boolean(&self, key: &str) -> anyhow::Result<Option<bool>> {
+        self.text(key)
+            .map(|v| {
+                v.parse::<bool>()
+                    .with_context(|| format!("`{key}` must be true or false"))
+            })
+            .transpose()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -239,6 +254,14 @@ mod tests {
                 input: Input::Number,
                 required: false,
                 default: "3",
+            },
+            Field {
+                key: "enabled",
+                label: "Enabled",
+                help: "",
+                input: Input::Checkbox,
+                required: false,
+                default: "false",
             },
         ],
         build: |_| Ok(Box::new(Nothing)),
@@ -318,5 +341,23 @@ mod tests {
         assert!(KIND.same_settings(&flags, &app.clone().with("every", Some("3,0"))));
         let test_server = flags.clone().with("base_url", Some("http://x"));
         assert!(!KIND.same_settings(&test_server, &app));
+    }
+
+    #[test]
+    fn checkboxes_validate_and_keep_the_default_for_older_settings() {
+        let old = Settings::new()
+            .with("user", Some("me"))
+            .with("pass", Some("secret"));
+        assert_eq!(old.boolean("enabled").unwrap(), None);
+        for enabled in [false, true] {
+            let settings = old.clone().with("enabled", Some(enabled));
+            assert!(KIND.create(&settings, true).is_ok());
+            assert_eq!(settings.boolean("enabled").unwrap(), Some(enabled));
+            assert_eq!(KIND.same_settings(&old, &settings), !enabled);
+        }
+        assert_eq!(
+            err(&old.with("enabled", Some("on")), true),
+            "`enabled` must be true or false"
+        );
     }
 }

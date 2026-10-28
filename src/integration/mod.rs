@@ -137,6 +137,13 @@ pub enum ReportOutcome {
 }
 
 impl Link {
+    pub(crate) fn waiting_for(&self, started: Instant) -> bool {
+        self.server.with(|m, now| {
+            matches!(m.phase(now), Phase::Running {
+            since, requested_by_grinder: true,
+        } if since == started)
+        })
+    }
     /// Whether the grinder asked for a brew and is waiting for the result.
     pub fn grinder_waiting(&self) -> bool {
         self.server.with(|m, now| {
@@ -161,15 +168,33 @@ impl Link {
     /// integration has no weight: the grinder's recipe weight is used).
     /// Applies the rules and logs the outcome under this integration's name.
     pub fn report(&self, time: Duration, weight: Option<(f64, String)>) -> ReportOutcome {
+        self.report_inner(None, time, weight)
+    }
+
+    pub(crate) fn report_for(
+        &self,
+        started: Instant,
+        time: Duration,
+        weight: Option<(f64, String)>,
+    ) -> ReportOutcome {
+        self.report_inner(Some(started), time, weight)
+    }
+
+    fn report_inner(
+        &self,
+        started: Option<Instant>,
+        time: Duration,
+        weight: Option<(f64, String)>,
+    ) -> ReportOutcome {
         let title = self.status.title();
         let secs = time.as_secs_f64();
         let outcome = self.server.with(|m, now| {
             if !matches!(
                 m.phase(now),
                 Phase::Running {
+                    since,
                     requested_by_grinder: true,
-                    ..
-                }
+                } if started.is_none_or(|expected| expected == since)
             ) {
                 return ReportOutcome::NotWaiting;
             }
@@ -214,6 +239,10 @@ impl GrinderBrews {
     /// Waits for the next grinder-requested brew. `false` once the server is
     /// gone.
     pub async fn next(&mut self) -> bool {
+        self.next_started().await.is_some()
+    }
+
+    pub(crate) async fn next_started(&mut self) -> Option<Instant> {
         loop {
             match self.0.recv().await {
                 Ok(rec)
@@ -225,10 +254,10 @@ impl GrinderBrews {
                         }
                     ) =>
                 {
-                    return true;
+                    return Some(rec.at);
                 }
                 Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => return false,
+                Err(broadcast::error::RecvError::Closed) => return None,
             }
         }
     }
@@ -519,6 +548,27 @@ mod tests {
             server: Server::new(MachineConfig::default()),
             status: Status::new("test", "test", "Test"),
         }
+    }
+
+    #[test]
+    fn a_delayed_report_cannot_answer_the_next_brew() {
+        let l = link();
+        let first = Instant::now();
+        l.server.with(|m, _| m.on_start_request(first, Some(9)));
+        l.server.with(|m, now| m.abort(now)).unwrap();
+        let second = first + Duration::from_secs(30);
+        l.server.with(|m, _| m.on_start_request(second, Some(9)));
+        assert!(!l.waiting_for(first));
+        assert!(l.waiting_for(second));
+        assert_eq!(
+            l.report_for(first, Duration::from_secs(28), Some((30.0, "test".into()))),
+            ReportOutcome::NotWaiting
+        );
+        assert!(l.waiting_for(second));
+        assert!(matches!(
+            l.report_for(second, Duration::from_secs(28), Some((30.0, "test".into()))),
+            ReportOutcome::Reported { .. }
+        ));
     }
 
     #[test]

@@ -22,6 +22,16 @@ before.
 
 ### Added
 
+- Experimental, default-off La Marzocco recipe following for paired E65/E80
+  GbS grinders: read the current grind's exact recipe target and select an
+  existing matching Brew-by-Weight Dose 1 or Dose 2 before brewing. If
+  neither matches, it saves the target to Dose 1 and selects it, keeping
+  Dose 2. Enabling the option permits this persistent preset change. The app
+  never starts a shot. Start shows the target
+  confirmation or the need for a manual check. Setup adds a checkbox and a
+  private grinder Owner password; CLI equivalents are `--lm-recipe-follow`
+  and `--lm-grinder-owner-password`. See [RECIPE-FOLLOW.md](RECIPE-FOLLOW.md)
+  for source builds, Docker/NAS setup and the unvalidated real-device scope.
 - **Set up grinder**: the app sets up the grinder step by step, in the
   grinder's own menu names, from **Set up grinder ›** in System status on
   the Start tab or **Set up** on the grinder card. While no grinder is

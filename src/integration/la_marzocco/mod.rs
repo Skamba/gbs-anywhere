@@ -18,6 +18,7 @@
 
 pub mod cloud;
 pub mod config;
+mod recipe_log;
 pub mod run;
 
 use crate::integration::{Integration, Kind, Settings};

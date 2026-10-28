@@ -1,0 +1,15 @@
+services:
+  gbs-anywhere:
+    build:
+      context: .
+    image: gbs-anywhere-recipe-follow:local
+    restart: unless-stopped
+    ports:
+      - "8089:80"
+    volumes:
+      - gbs-recipe-follow-data:/data
+    command: ["--update-check", "off"]
+
+volumes:
+  gbs-recipe-follow-data:
+    name: gbs-recipe-follow-data

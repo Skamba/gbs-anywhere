@@ -77,6 +77,8 @@ struct Fake {
     lose_jobs: bool,
     /// `brewAccept` requests to fail with HTTP 503, as if the network dropped.
     fail_accept: u32,
+    /// A contradictory HTTP failure with JSON status Ok must not authorize writes.
+    accept_http_error: bool,
     /// Job requests to refuse with 403, as while starting up.
     refuse_jobs: u32,
     /// `(path, body)` of every `brewAccept` and `brewDone`.
@@ -209,6 +211,13 @@ async fn handle(State(fake): State<Shared>, uri: Uri, Json(body): Json<Value>) -
         }
         wifi::PATH_BREW_ACCEPT => {
             f.calls.push((path.to_owned(), body.clone()));
+            if f.accept_http_error {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"status":"Ok"})),
+                )
+                    .into_response();
+            }
             if f.fail_accept > 0 {
                 f.fail_accept -= 1;
                 return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -489,6 +498,107 @@ fn the_app_sets_only_a_host_and_port() {
 
 fn taken(fake: &Shared) -> usize {
     fake.lock().unwrap().calls_to(wifi::PATH_BREW_ACCEPT).len()
+}
+
+fn brew_started(server: &Server) -> Instant {
+    server.with(|m, now| match m.phase(now) {
+        Phase::Running { since, .. } => since,
+        _ => panic!("expected a running brew"),
+    })
+}
+
+#[tokio::test]
+async fn recipe_writes_skip_startup_jobs_and_claim_a_fresh_accept_only_once() {
+    let (server, fake) = start(
+        Fake {
+            paired: Some(PAIRING_ID),
+            jobs: vec![job("old", 30_000)],
+            ..Fake::default()
+        },
+        None,
+        Some(PAIRING_ID),
+    )
+    .await;
+    wait_for("startup job", || taken(&fake) >= 1).await;
+    assert!(server.claim_recipe_job(brew_started(&server)).is_none());
+    report(&server, 28.0, 30.0);
+    wait_for("first answer", || {
+        !fake
+            .lock()
+            .unwrap()
+            .calls_to(wifi::PATH_BREW_DONE)
+            .is_empty()
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(130)).await;
+    fake.lock().unwrap().jobs.push(job("fresh", 40_000));
+    wait_for("fresh accepted", || taken(&fake) >= 2).await;
+    let since = brew_started(&server);
+    let claimed = std::cell::RefCell::new(None);
+    wait_for("recipe permit", || {
+        *claimed.borrow_mut() = server.claim_recipe_job(since);
+        claimed.borrow().is_some()
+    })
+    .await;
+    let permit = claimed.into_inner().unwrap();
+    assert_eq!(permit.grind_uuid, "fresh");
+    assert!(server.recipe_job_current(&permit));
+    assert!(server.claim_recipe_job(since).is_none());
+    fake.lock().unwrap().hand_back_taken();
+    wait_for("accepted again", || taken(&fake) >= 3).await;
+    assert!(
+        server.claim_recipe_job(since).is_none(),
+        "reaccept cannot replay a write"
+    );
+    server.detach_wifi();
+    assert!(
+        !server.recipe_job_current(&permit),
+        "replaced owner revokes the permit"
+    );
+    server.stop();
+}
+
+#[tokio::test]
+async fn a_lost_accept_reply_does_not_authorize_a_recipe_write() {
+    let (server, fake) = start(
+        Fake {
+            paired: Some(PAIRING_ID),
+            ..Fake::default()
+        },
+        None,
+        Some(PAIRING_ID),
+    )
+    .await;
+    wait_for("empty baseline poll", || server.grinder_link().polls > 0).await;
+    {
+        let mut f = fake.lock().unwrap();
+        f.drop_accept_reply = 1;
+        f.jobs.push(job("uncertain", 30_000));
+    }
+    wait_for("accept attempted", || taken(&fake) > 0).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert!(server.claim_recipe_job(brew_started(&server)).is_none());
+    server.stop();
+}
+
+#[tokio::test]
+async fn an_http_error_with_ok_json_does_not_authorize_a_recipe_write() {
+    let (server, fake) = start(
+        Fake {
+            paired: Some(PAIRING_ID),
+            accept_http_error: true,
+            ..Fake::default()
+        },
+        None,
+        Some(PAIRING_ID),
+    )
+    .await;
+    wait_for("baseline poll", || server.grinder_link().polls > 0).await;
+    fake.lock().unwrap().jobs.push(job("refused", 30_000));
+    wait_for("contradictory accept", || taken(&fake) > 0).await;
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert!(server.claim_recipe_job(brew_started(&server)).is_none());
+    server.stop();
 }
 
 #[tokio::test]

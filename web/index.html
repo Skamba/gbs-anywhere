@@ -78,6 +78,11 @@
       </div>
     </section>
 
+    <section class="card pad stack-12" id="start-integrations" aria-labelledby="start-integration-title" hidden>
+      <p class="kicker" id="start-integration-title" data-i18n="start.integrationStatus">Machine status before brewing</p>
+      <div id="start-integration-details" class="stack-12" role="status"></div>
+    </section>
+
     <section class="card clip" id="step-1" data-i18n-attr="aria-label:start.step1.kicker" aria-label="Step 1">
       <button type="button" class="card-head" data-step="1" aria-expanded="false" aria-controls="step-1-body">
         <span class="num" data-num></span>
@@ -95,7 +100,7 @@
     <section class="card clip" id="step-2" data-i18n-attr="aria-label:start.step2.kicker" aria-label="Step 2">
       <button type="button" class="card-head" data-step="2" aria-expanded="false" aria-controls="step-2-body">
         <span class="num" data-num></span>
-        <span class="head-col"><span class="kicker" data-i18n="start.step2.kicker">Step 2</span><span class="step-title" data-i18n="start.step2.title">Pull the shot on the espresso machine</span></span>
+        <span class="head-col"><span class="kicker" data-i18n="start.step2.kicker">Step 2</span><span class="step-title" id="s2-title" data-i18n="start.step2.title">Pull the shot on the espresso machine</span></span>
         <span class="badge" data-badge></span>
         <svg class="chev" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
         <span class="step-sum" data-sum hidden></span>

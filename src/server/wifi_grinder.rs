@@ -1193,7 +1193,7 @@ impl WifiGrinder {
         }
         let accept = BrewAccept::new(pairing_id, &held.job);
         let accepted = match self.post(wifi::PATH_BREW_ACCEPT, &accept).await {
-            Ok(reply) if reply.status() == wifi::STATUS_OK => true,
+            Ok(reply) if reply.http.is_success() && reply.status() == wifi::STATUS_OK => true,
             Ok(reply) if reply.status() == wifi::STATUS_JOB_UNKNOWN => {
                 self.drop_job(server, AbortCause::GrinderShotDropped);
                 return;
@@ -1211,6 +1211,12 @@ impl WifiGrinder {
         };
         if let Some(held) = &mut self.current {
             held.accepted = accepted;
+        }
+        if accepted && let Some(held) = &self.current {
+            // Jobs already present on the first poll are not new target-write requests.
+            if self.seen_in(&held.job) > 1 {
+                server.accept_recipe_job(self.owner, &held.job.grind_uuid);
+            }
         }
     }
 

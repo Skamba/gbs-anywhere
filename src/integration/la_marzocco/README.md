@@ -15,6 +15,17 @@ cloud**, then enter your La Marzocco Home e-mail address and password. Add the
 machine's serial number (e.g. `MI000000`) if the account has more than one
 machine.
 
+On the experimental `codex/desktop-recipe-follow` branch, the same form also
+offers **Follow the grinder recipe (experimental)**, off by default, and
+**Grinder Owner password**. This selects an already configured matching
+Brew-by-Weight Dose 1 or Dose 2 after a fresh E65/E80 GbS grind. If neither
+matches, it saves the recipe target to Dose 1 and selects it, preserving
+Dose 2. Enabling it permits this persistent change to Dose 1; it never
+starts brewing. Read the [recipe-follow setup and
+testing guide](../../../RECIPE-FOLLOW.md) before enabling it; this desktop
+implementation has not yet been validated with a real cup. Its source-build
+instructions replace the upstream image command below for this feature.
+
 Setting it up in the app is the better way: the password is then kept in
 the settings file on the `/data` volume, readable by its owner only, rather
 than in the container's environment, which `docker inspect` shows.
@@ -38,6 +49,15 @@ its settings.
 | Password | `--lm-password` | `LM_PASSWORD` | |
 | Machine serial number | `--lm-serial` | `LM_SERIAL` | the account's only machine |
 | Check interval (seconds, 1 to 60) | `--lm-poll-s` | `LM_POLL_S` | 3 |
+| Follow the grinder recipe (experimental) | `--lm-recipe-follow` | `LM_RECIPE_FOLLOW` | false |
+| Grinder Owner password | `--lm-grinder-owner-password` | `LM_GRINDER_OWNER_PASSWORD` | unset |
+
+Recipe following needs the Owner password only when enabled. The app never
+returns either password through its API; while editing, leaving a saved
+password blank keeps it. Turning the checkbox off retains the saved Owner
+password but stops recipe following. Delete the integration to remove its
+stored passwords. `LM_RECIPE_FOLLOW=true` enables the CLI setting; keep
+passwords out of shell history and shared Compose files.
 
 ## How it works
 
@@ -45,8 +65,10 @@ After the knob press (on an E65/E80 GbS: after the Grind-by-Sync grind)
 gbs-anywhere asks the cloud for new coffees every 3 s (the check interval,
 `--lm-poll-s`; lower reports sooner but sends more requests).
 The first coffee logged after the knob press is the shot: its extraction time
-and its weight go to the grinder. Without a scale reading it uses the recipe
-weight the grinder sent. The log says which.
+and its weight go to the grinder. With recipe following off, a missing scale
+reading falls back to the recipe weight the grinder sent; the log says which.
+With experimental recipe following on, a coffee without measured scale
+weight is skipped instead, and Start explains why.
 
 - **Only while the grinder waits for the shot,** after a knob press (on an
   E65/E80 GbS: after the Grind-by-Sync grind). Coffees made at other times

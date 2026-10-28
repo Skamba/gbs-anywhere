@@ -27,6 +27,95 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Tokens last an hour; refresh this long before that.
 const TOKEN_LIFETIME: Duration = Duration::from_secs(3600);
 const TOKEN_REFRESH_MARGIN: Duration = Duration::from_secs(600);
+const BBW_TIMEOUT: Duration = Duration::from_secs(8);
+const BBW_MAX_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// Select a matching preset, or set Dose1 to the target while preserving Dose2.
+/// These commands never start a brew.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BbwSelection {
+    Confirmed,
+    AlreadySet,
+    /// A POST may have taken effect. Do not repeat it for this brew.
+    Unknown,
+    /// No command was sent; the reason contains no vendor response data.
+    NotApplied(&'static str),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct BbwState {
+    mode: String,
+    doses: [u32; 2],
+}
+
+/// Presets have 0.1 g resolution; tolerate only the cloud's float32 noise.
+fn dose_tenths(grams: f64) -> Option<u32> {
+    let tenths = grams * 10.0;
+    (grams.is_finite() && grams > 0.0 && grams <= 200.0 && (tenths - tenths.round()).abs() < 0.001)
+        .then_some(tenths.round() as u32)
+        .filter(|value| *value > 0)
+}
+
+fn parse_bbw_dashboard(value: &Value, serial: &str) -> Result<BbwState, &'static str> {
+    if value["serialNumber"].as_str() != Some(serial) {
+        return Err("Machine identity could not be confirmed.");
+    }
+    if value["connected"].as_bool() != Some(true) {
+        return Err("Coffee machine is offline or its connection is unknown.");
+    }
+    let widgets = value["widgets"]
+        .as_array()
+        .ok_or("Dashboard is incomplete.")?;
+    let output = |code| {
+        let mut matching = widgets.iter().filter(|w| w["code"].as_str() == Some(code));
+        let first = matching.next().ok_or("Dashboard is incomplete.")?;
+        if matching.next().is_some() || !first["output"].is_object() {
+            return Err("Dashboard is ambiguous or incomplete.");
+        }
+        Ok(&first["output"])
+    };
+    if output("CMMachineStatus")?["status"].as_str() != Some("PoweredOn") {
+        return Err("Coffee machine is not ready.");
+    }
+    let bbw = output("CMBrewByWeightDoses")?;
+    if bbw["scaleConnected"].as_bool() != Some(true) {
+        return Err("Coffee scale is disconnected or its connection is unknown.");
+    }
+    let mode = bbw["mode"]
+        .as_str()
+        .ok_or("Current dose mode is unavailable.")?;
+    if !matches!(mode, "Dose1" | "Dose2" | "Continuous" | "PulsesType") {
+        return Err("Current dose mode is unsupported.");
+    }
+    let dose = |name: &str| {
+        bbw["doses"][name]["dose"]
+            .as_f64()
+            .and_then(dose_tenths)
+            .ok_or("Stored doses are incomplete or invalid.")
+    };
+    Ok(BbwState {
+        mode: mode.to_owned(),
+        doses: [dose("Dose1")?, dose("Dose2")?],
+    })
+}
+
+async fn bbw_json(mut response: reqwest::Response) -> Result<Value, &'static str> {
+    if !response.status().is_success() {
+        return Err("Cloud dashboard request failed.");
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "Cloud dashboard read failed.")?
+    {
+        if bytes.len() + chunk.len() > BBW_MAX_RESPONSE_BYTES {
+            return Err("Cloud dashboard is too large.");
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    serde_json::from_slice(&bytes).map_err(|_| "Cloud dashboard is not valid JSON.")
+}
 
 // ---------------------------------------------------------------------------
 // Installation key and request signing
@@ -381,6 +470,176 @@ impl CloudClient {
         bail!("{what}: still unauthorized after signing in again")
     }
 
+    /// Prefer a matching preset; otherwise select Dose1 and update its weight,
+    /// preserving Dose2. The caller must not retry an unknown result and must
+    /// check its brew identity and TTL in `still_current`. All reads and writes
+    /// share eight seconds; each command is sent at most once. Historical
+    /// coffees never supply the current mode or doses.
+    pub async fn select_bbw_target(
+        &mut self,
+        serial: &str,
+        grams: f64,
+        still_current: impl Fn() -> bool,
+    ) -> BbwSelection {
+        let mut sent = false;
+        let attempt = self.select_bbw_once(serial, grams, &still_current, &mut sent);
+        match tokio::time::timeout(BBW_TIMEOUT, attempt).await {
+            Ok(result) => result,
+            Err(_) if sent => BbwSelection::Unknown,
+            Err(_) => BbwSelection::NotApplied("Recipe selection deadline expired."),
+        }
+    }
+
+    async fn bbw_dashboard(
+        &self,
+        http: &reqwest::Client,
+        serial: &str,
+        token: &str,
+    ) -> Result<BbwState, &'static str> {
+        let mut request = http
+            .get(format!("{}/things/{serial}/dashboard", self.base_url))
+            .bearer_auth(token);
+        for (key, value) in self.key.request_headers() {
+            request = request.header(key, value);
+        }
+        let response = request
+            .send()
+            .await
+            .map_err(|_| "Cloud dashboard request failed.")?;
+        let value = bbw_json(response).await?;
+        parse_bbw_dashboard(&value, serial)
+    }
+
+    async fn select_bbw_once(
+        &mut self,
+        serial: &str,
+        grams: f64,
+        still_current: &impl Fn() -> bool,
+        sent: &mut bool,
+    ) -> BbwSelection {
+        let Some(target) = dose_tenths(grams) else {
+            return BbwSelection::NotApplied("Recipe target must be 0.1 to 200 g in 0.1 g steps.");
+        };
+        if serial.is_empty()
+            || serial.len() > 64
+            || !serial
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return BbwSelection::NotApplied("Machine identity is invalid.");
+        }
+        if !still_current() {
+            return BbwSelection::NotApplied("Brew changed or its deadline expired.");
+        }
+        // A separate control client cannot replay a POST after a redirect or
+        // a transport retry. The existing read-only polling client is unchanged.
+        let Ok(http) = reqwest::Client::builder()
+            .timeout(BBW_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::none())
+            .retry(reqwest::retry::never())
+            .build()
+        else {
+            return BbwSelection::NotApplied("Cloud control client could not start.");
+        };
+        let Ok(token) = self.access_token().await else {
+            return BbwSelection::NotApplied("Cloud authentication failed.");
+        };
+        let before = match self.bbw_dashboard(&http, serial, &token).await {
+            Ok(state) => state,
+            Err(reason) => return BbwSelection::NotApplied(reason),
+        };
+        if !still_current() {
+            return BbwSelection::NotApplied("Brew changed or its deadline expired.");
+        }
+        let modes = ["Dose1", "Dose2"];
+        if modes
+            .iter()
+            .enumerate()
+            .any(|(i, mode)| before.mode == *mode && before.doses[i] == target)
+        {
+            return BbwSelection::AlreadySet;
+        }
+        let (mode, update_dose1) = match (before.doses[0] == target, before.doses[1] == target) {
+            (true, false) => (modes[0], false),
+            (false, true) => (modes[1], false),
+            (true, true) => {
+                return BbwSelection::NotApplied("Both presets match; select one manually.");
+            }
+            (false, false) => (modes[0], true),
+        };
+        let mut observed = before;
+        if observed.mode != mode {
+            let mut request = http
+                .post(format!(
+                    "{}/things/{serial}/command/CoffeeMachineBrewByWeightChangeMode",
+                    self.base_url
+                ))
+                .bearer_auth(&token)
+                .json(&json!({"mode": mode}));
+            for (key, value) in self.key.request_headers() {
+                request = request.header(key, value);
+            }
+            if !still_current() {
+                return BbwSelection::NotApplied("Brew changed or its deadline expired.");
+            }
+            *sent = true;
+            match request.send().await {
+                Ok(response) if response.status().is_success() => drop(response),
+                _ => return BbwSelection::Unknown,
+            }
+            // A 2xx is only receipt. Before changing any weight, require a
+            // fresh mode confirmation with both original doses still intact.
+            observed = match self.bbw_dashboard(&http, serial, &token).await {
+                Ok(after)
+                    if still_current() && after.mode == mode && after.doses == observed.doses =>
+                {
+                    after
+                }
+                _ => return BbwSelection::Unknown,
+            };
+        }
+        if !update_dose1 {
+            return BbwSelection::Confirmed;
+        }
+        let expected_doses = [target, observed.doses[1]];
+        let mut request = http
+            .post(format!(
+                "{}/things/{serial}/command/CoffeeMachineBrewByWeightSettingDoses",
+                self.base_url
+            ))
+            .bearer_auth(&token)
+            .json(&json!({"doses":{
+                "Dose1":f64::from(target) / 10.0,
+                "Dose2":f64::from(observed.doses[1]) / 10.0
+            }}));
+        for (key, value) in self.key.request_headers() {
+            request = request.header(key, value);
+        }
+        // Last check after the fresh preflight and immediately before I/O.
+        if !still_current() {
+            return if *sent {
+                BbwSelection::Unknown
+            } else {
+                BbwSelection::NotApplied("Brew changed or its deadline expired.")
+            };
+        }
+        *sent = true;
+        let response = match request.send().await {
+            Ok(response) if response.status().is_success() => response,
+            _ => return BbwSelection::Unknown,
+        };
+        // A 2xx only means the command was received. Never log its body,
+        // replay it, or treat the old dashboard as proof it took effect.
+        drop(response);
+        let after = self.bbw_dashboard(&http, serial, &token).await;
+        match after {
+            Ok(after) if still_current() && after.mode == mode && after.doses == expected_doses => {
+                BbwSelection::Confirmed
+            }
+            _ => BbwSelection::Unknown,
+        }
+    }
+
     pub async fn things(&mut self) -> anyhow::Result<Vec<Thing>> {
         let v = self.get("things", "machine list").await?;
         serde_json::from_value(v).context("things: unexpected shape")
@@ -402,15 +661,16 @@ impl CloudClient {
     }
 }
 
-/// A refused request as an error with its status only. The reply itself can
-/// repeat account details, so it goes to the debug log, which the app's log
-/// view leaves out.
+/// A refused request as an error with its status only. Response bodies can
+/// repeat passwords or tokens, so they must not enter even the debug log.
 async fn refused(what: &str, resp: reqwest::Response) -> anyhow::Error {
     let status = resp.status();
-    let body = resp.text().await.unwrap_or_default();
-    tracing::debug!("{TITLE}: {what} failed: {status} {}", body.trim());
     anyhow::anyhow!("{what} failed: {status}")
 }
+
+#[cfg(test)]
+#[path = "cloud_bbw_tests.rs"]
+mod bbw_tests;
 
 #[cfg(test)]
 mod tests {

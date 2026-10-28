@@ -1,12 +1,12 @@
 //! The task: log in, find the machine, and after each knob press poll its
 //! coffee log until the shot shows up.
 
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::bail;
 
 use super::TITLE;
-use super::cloud::{CloudClient, LastCoffee, Thing};
+use super::cloud::{BbwSelection, CloudClient, LastCoffee, Thing};
 use super::config::Config;
 use crate::integration::{Backoff, BoxFuture, Detail, Integration, Link, tenths};
 
@@ -34,7 +34,12 @@ pub fn new_coffee(coffees: &[LastCoffee], after_ms: i64) -> Option<&LastCoffee> 
         .iter()
         .filter(|c| c.time > after_ms)
         .max_by_key(|c| c.time)
-        .filter(|c| c.valid)
+        .filter(|c| {
+            c.valid
+                && c.extraction_seconds.is_finite()
+                && c.extraction_seconds > 0.0
+                && c.extraction_seconds <= 3600.0
+        })
 }
 
 async fn run(link: Link, cfg: Config) {
@@ -157,7 +162,7 @@ async fn connect(cfg: &Config) -> anyhow::Result<(CloudClient, Machine)> {
     };
     let serial = machine.serial_number.clone();
     let coffees = client.last_coffees(&serial, 7).await?;
-    let last = coffees.first().map(Idle::from);
+    let last = coffees.iter().max_by_key(|c| c.time).map(Idle::from);
     let subject = format!("{serial} · {}", machine.model_name);
     tracing::info!(
         "{TITLE}: connected to {} (serial ending {}), {}",
@@ -246,7 +251,102 @@ fn age_of(delta_ms: i64) -> String {
     }
 }
 
-/// Waits for knob presses and polls the coffee log during each brew.
+const RECIPE_WINDOW: Duration = Duration::from_secs(15);
+
+fn measured_grams(coffee: &LastCoffee) -> Option<f64> {
+    if coffee.dose_mode.as_deref() != Some("MassType") {
+        return None;
+    }
+    let grams = coffee.dose_value?;
+    let rounded = (grams * 10.0).round() / 10.0;
+    (grams.is_finite() && grams > 0.0 && grams <= 1000.0 && rounded > 0.0).then_some(rounded)
+}
+
+fn manual_target() -> Detail {
+    Detail::keyed(
+        "la_marzocco.recipe_manual",
+        "target not changed · select and check it on the machine before brewing",
+    )
+}
+
+async fn follow_recipe(
+    link: &Link,
+    cfg: &Config,
+    client: &mut CloudClient,
+    serial: &str,
+    started: Instant,
+) -> Detail {
+    if link
+        .server
+        .integrations()
+        .list()
+        .iter()
+        .filter(|i| i.status.kind == "la_marzocco")
+        .count()
+        != 1
+    {
+        tracing::warn!("{TITLE}: automatic targets require exactly one La Marzocco integration");
+        return manual_target();
+    }
+    let Some(password) = cfg.grinder_owner_password.as_deref() else {
+        return manual_target();
+    };
+    link.status.watching(Detail::keyed(
+        "la_marzocco.recipe_reading",
+        "reading the recipe target · wait before brewing",
+    ));
+    let job = loop {
+        if !link.waiting_for(started) || started.elapsed() >= RECIPE_WINDOW {
+            return manual_target();
+        }
+        if let Some(job) = link.server.claim_recipe_job(started) {
+            break job;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let current = || started.elapsed() < RECIPE_WINDOW && link.server.recipe_job_current(&job);
+    if !current() {
+        return manual_target();
+    }
+    let remaining = RECIPE_WINDOW.saturating_sub(started.elapsed());
+    let target = tokio::time::timeout(
+        remaining,
+        super::recipe_log::target_weight(&job.grinder, password, &job.grind_uuid),
+    )
+    .await;
+    let grams = match target {
+        Ok(Ok(grams)) => grams,
+        Ok(Err(error)) => {
+            tracing::warn!("{TITLE}: recipe lookup failed: {error}");
+            return manual_target();
+        }
+        Err(_) => {
+            tracing::warn!("{TITLE}: recipe lookup deadline expired");
+            return manual_target();
+        }
+    };
+    // The claimed job is never retried, even if the command's outcome is unknown.
+    match client
+        .select_bbw_target(serial, f64::from(grams), current)
+        .await
+    {
+        BbwSelection::Confirmed | BbwSelection::AlreadySet => Detail::keyed(
+            "la_marzocco.recipe_ready",
+            format!("target {grams} g confirmed · check the machine before brewing"),
+        )
+        .var("weight_g", grams),
+        BbwSelection::Unknown => Detail::keyed(
+            "la_marzocco.recipe_unknown",
+            "target change unconfirmed · check the machine; no automatic retry",
+        ),
+        BbwSelection::NotApplied(reason) => {
+            tracing::warn!("{TITLE}: recipe target not changed: {reason}");
+            manual_target()
+        }
+    }
+}
+
+/// Waits for new grinder requests; every request establishes its own cloud baseline.
 async fn watch(
     link: &Link,
     cfg: &Config,
@@ -254,51 +354,69 @@ async fn watch(
     machine: Machine,
 ) -> anyhow::Result<()> {
     let mut brews = link.grinder_brews();
-    // Newest coffee we know of; only newer ones count as the shot.
-    let mut newest_ms = now_ms();
+    let mut newest_ms = machine.last.map_or(i64::MIN, |c| c.time_ms);
     let mut idle = machine.last;
     let mut refresh = tokio::time::interval(IDLE_REFRESH);
-    refresh.tick().await; // the first tick fires at once
+    refresh.tick().await;
     loop {
-        tokio::select! {
-            pressed = brews.next() => {
-                if !pressed {
-                    return Ok(());
-                }
+        let started = tokio::select! {
+            pressed = brews.next_started() => {
+                let Some(started) = pressed else { return Ok(()) };
+                started
             }
             _ = refresh.tick() => {
                 link.status.connected(idle_line(idle.as_ref(), now_ms()));
                 continue;
             }
+        };
+        if !link.waiting_for(started) {
+            continue;
         }
-        // Baseline: whatever the log holds at the knob press is not the shot.
+        if cfg.recipe_follow {
+            link.status.watching(Detail::keyed(
+                "la_marzocco.recipe_reading",
+                "reading the recipe target · wait before brewing",
+            ));
+        }
+        // A failed first read cannot make an older cloud coffee eligible later.
         match client.last_coffees(&machine.serial, 1).await {
             Ok(list) => {
-                if let Some(c) = list.first() {
+                if let Some(c) = list.iter().max_by_key(|c| c.time) {
                     newest_ms = newest_ms.max(c.time);
                 }
             }
-            Err(e) => tracing::warn!("{TITLE}: {e:#}"),
+            Err(e) => {
+                tracing::warn!("{TITLE}: baseline failed; skipping this grind: {e:#}");
+                link.status.watching(Detail::keyed(
+                    "la_marzocco.baseline_failed",
+                    "this grind has no reliable coffee baseline · target changes and feedback skipped",
+                ));
+                continue;
+            }
+        }
+        if !link.waiting_for(started) {
+            continue;
         }
         let poll_s = cfg.poll.as_secs();
-        tracing::info!("{TITLE}: grinder is waiting, watching the coffee log every {poll_s} s");
-        let waiting = Detail::keyed(
-            "la_marzocco.watching",
-            format!("grinder is waiting · checking the coffee log every {poll_s} s"),
-        )
-        .var("every_s", poll_s);
+        let waiting = if cfg.recipe_follow {
+            follow_recipe(link, cfg, &mut client, &machine.serial, started).await
+        } else {
+            Detail::keyed(
+                "la_marzocco.watching",
+                format!("grinder is waiting · checking the coffee log every {poll_s} s"),
+            )
+            .var("every_s", poll_s)
+        };
         link.status.watching(waiting.clone());
         let mut errors = 0u32;
         loop {
             tokio::time::sleep(cfg.poll).await;
-            if !link.grinder_waiting() {
-                tracing::info!("{TITLE}: brew ended without a coffee from the log");
+            if !link.waiting_for(started) {
                 break;
             }
             let list = match client.last_coffees(&machine.serial, 1).await {
                 Ok(l) => {
                     if errors > 0 {
-                        // Back from a failed poll: still watching this brew.
                         errors = 0;
                         link.status.watching(waiting.clone());
                     }
@@ -314,34 +432,39 @@ async fn watch(
                     continue;
                 }
             };
-            let Some(c) = new_coffee(&list, newest_ms) else {
-                if let Some(c) = list.iter().find(|c| c.time > newest_ms) {
-                    tracing::info!(
-                        "{TITLE}: ignoring coffee marked invalid ({}): {:.1} s",
-                        c.invalid_reason.as_deref().unwrap_or("no reason"),
-                        c.extraction_seconds
-                    );
-                    newest_ms = c.time;
-                }
+            if !link.waiting_for(started) {
+                break;
+            }
+            let coffee = new_coffee(&list, newest_ms);
+            if let Some(c) = list.iter().max_by_key(|c| c.time) {
+                newest_ms = newest_ms.max(c.time);
+            }
+            let Some(c) = coffee else { continue };
+            if cfg.recipe_follow && measured_grams(c).is_none() {
+                link.status.watching(Detail::keyed(
+                    "la_marzocco.recipe_no_weight",
+                    "coffee has no measured scale weight · automatic feedback skipped",
+                ));
                 continue;
-            };
-            newest_ms = c.time;
-            let time =
-                Duration::from_millis((c.extraction_seconds.max(0.0) * 1000.0).round() as u64);
-            // The cloud sends float32 noise like 37.4000015; the scale reads 0.1 g.
+            }
+            let time = Duration::from_secs_f64(c.extraction_seconds);
             let weight = c.dose_value.map(|g| {
                 (
                     (g * 10.0).round() / 10.0,
                     "weighed by the machine".to_owned(),
                 )
             });
-            link.report(time, weight);
+            link.report_for(started, time, weight);
             idle = Some(Idle::from(c));
             break;
         }
         link.status.connected(idle_line(idle.as_ref(), now_ms()));
     }
 }
+
+#[cfg(test)]
+#[path = "watch_tests.rs"]
+mod watch_tests;
 
 #[cfg(test)]
 mod tests {
@@ -358,6 +481,22 @@ mod tests {
         assert_eq!(age_of(47 * 3_600_000), "47 h");
         assert_eq!(age_of(3 * 86_400_000 + 5), "3 days");
         assert_eq!(age_of(-5), "0 s");
+    }
+
+    #[test]
+    fn automatic_feedback_requires_a_positive_weight_after_rounding() {
+        let mut coffee: LastCoffee = serde_json::from_value(json!({
+            "time": 100, "extractionSeconds": 28, "doseValue": 30.2, "doseMode": "MassType"
+        }))
+        .unwrap();
+        assert_eq!(measured_grams(&coffee), Some(30.2));
+        for grams in [0.0, 0.01, f64::NAN, f64::INFINITY, -1.0, 1001.0] {
+            coffee.dose_value = Some(grams);
+            assert_eq!(measured_grams(&coffee), None, "{grams}");
+        }
+        coffee.dose_value = Some(30.2);
+        coffee.dose_mode = Some("PulsesType".into());
+        assert_eq!(measured_grams(&coffee), None);
     }
 
     #[test]

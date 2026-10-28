@@ -359,6 +359,8 @@ ul.kinds button:hover { border-color: var(--accent); }
 .form-field .opt { font-weight: 400; color: var(--muted); }
 .form-field .field input { font-size: 16px; font-weight: 500; }
 .form-field .help { font-size: 12px; line-height: 1.4; color: var(--muted); }
+.form-field .checkbox-field { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.checkbox-field input { flex: none; width: 22px; height: 22px; accent-color: var(--accent); }
 .actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 14px; min-width: 0; }
 .set-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }

@@ -1,5 +1,14 @@
 # gbs-anywhere
 
+> **Experimental recipe following, without an ESP board:** this fork's
+> [`codex/desktop-recipe-follow`](https://github.com/zpmdd/gbs-anywhere/tree/codex/desktop-recipe-follow)
+> branch adds an opt-in La Marzocco Brew-by-Weight target selection step for
+> paired E65/E80 GbS grinders. It selects a matching preset, or saves the
+> target to Dose 1 and selects it, keeping Dose 2. Build it for Mac, PC or Docker/NAS
+> using the [recipe-follow guide](RECIPE-FOLLOW.md). The upstream images and
+> releases below do not include this feature. No real-cup validation of this
+> desktop implementation has been completed.
+
 Grind-by-Sync for the Mahlkönig **E64/E65/E80** GbS grinders
 (**E64 WS, E65W, E65T, E80W, E80T**) with any espresso machine
 

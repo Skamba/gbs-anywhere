@@ -90,6 +90,17 @@ struct Inner {
     /// The E65/E80 link that may report its state: a replaced one may still
     /// be finishing a step.
     wifi_owner: u64,
+    recipe_job: Option<RecipeJob>,
+}
+
+/// One fresh, explicitly accepted E65/E80 job may change a machine target once.
+#[derive(Clone)]
+pub(crate) struct RecipeJob {
+    pub since: Instant,
+    pub grind_uuid: String,
+    pub grinder: String,
+    owner: u64,
+    claimed: bool,
 }
 
 /// What we know about the grinder from its requests (or, for an E65/E80
@@ -128,6 +139,7 @@ impl Server {
                 wifi_ids: None,
                 wifi_accept: None,
                 wifi_owner: 0,
+                recipe_job: None,
             }),
             events: broadcast::channel(256).0,
             transcript: None,
@@ -206,6 +218,77 @@ impl Server {
         self.lock().grinder.clone()
     }
 
+    fn accept_recipe_job(&self, owner: u64, grind_uuid: &str) {
+        let mut inner = self.lock();
+        if inner.wifi_owner != owner {
+            return;
+        }
+        let Some(grinder) = inner.grinder.wifi.as_ref().map(|w| w.grinder.clone()) else {
+            return;
+        };
+        let since = self.apply(&mut inner, |m, now| match m.phase(now) {
+            crate::protocol::Phase::Running {
+                since,
+                requested_by_grinder: true,
+            } if m.brewing_for_brew_job(now)
+                && m.last_grind().and_then(|g| g.raw["grindUuid"].as_str()) == Some(grind_uuid) =>
+            {
+                Some(since)
+            }
+            _ => None,
+        });
+        if let Some(since) = since {
+            if inner
+                .recipe_job
+                .as_ref()
+                .is_some_and(|j| j.since == since && j.owner == owner)
+            {
+                return;
+            }
+            inner.recipe_job = Some(RecipeJob {
+                since,
+                grind_uuid: grind_uuid.to_owned(),
+                grinder,
+                owner,
+                claimed: false,
+            });
+        }
+    }
+
+    pub(crate) fn claim_recipe_job(&self, since: Instant) -> Option<RecipeJob> {
+        let mut inner = self.lock();
+        let owner = inner.wifi_owner;
+        let job = inner.recipe_job.as_mut()?;
+        if job.since != since || job.owner != owner || job.claimed {
+            return None;
+        }
+        job.claimed = true;
+        Some(job.clone())
+    }
+
+    pub(crate) fn recipe_job_current(&self, job: &RecipeJob) -> bool {
+        let mut inner = self.lock();
+        if inner.wifi_owner != job.owner
+            || inner
+                .grinder
+                .wifi
+                .as_ref()
+                .is_none_or(|w| w.state != WifiState::Paired || w.unreachable)
+            || inner
+                .grinder
+                .last_poll
+                .is_none_or(|at| at.elapsed() > Duration::from_secs(10))
+        {
+            return false;
+        }
+        self.apply(&mut inner, |m, now| {
+            matches!(m.phase(now), crate::protocol::Phase::Running {
+                since, requested_by_grinder: true,
+            } if since == job.since)
+                && m.last_grind().and_then(|g| g.raw["grindUuid"].as_str()) == Some(&job.grind_uuid)
+        })
+    }
+
     /// Serves the app's icons from `dir` (`GET /icons/<name>`): put
     /// `<integration id>.svg` or `.png` there to replace a built-in glyph,
     /// e.g. a vendor's official logo you are allowed to use.
@@ -243,6 +326,7 @@ impl Server {
         let (atx, arx) = mpsc::channel(1);
         let mut inner = self.lock();
         inner.wifi_owner += 1;
+        inner.recipe_job = None;
         inner.wifi_ids = Some(tx);
         inner.wifi_accept = Some(atx);
         (inner.wifi_owner, rx, arx)
@@ -254,6 +338,7 @@ impl Server {
     fn detach_wifi(&self) {
         let mut inner = self.lock();
         inner.wifi_owner += 1;
+        inner.recipe_job = None;
         inner.wifi_ids = None;
         inner.wifi_accept = None;
         inner.grinder.wifi = None;

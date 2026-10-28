@@ -12,6 +12,8 @@ anyhow = "1.0.104"
 axum = "0.8.9"
 base64 = "0.23.1"
 clap = { version = "4.6.7", features = ["derive", "env"] }
+# Read the grinder's bounded ordinary CSV export, including quoted fields.
+csv = "1.4"
 futures-util = "0.3.34"
 p256 = "0.14"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json"] }
@@ -27,6 +29,8 @@ tokio-tungstenite = "0.30"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.26.1", features = ["v4"] }
+# Ordinary log archives use stored/deflate members; keep compression pure Rust.
+zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 
 [lints.rust]
 unsafe_code = "forbid"

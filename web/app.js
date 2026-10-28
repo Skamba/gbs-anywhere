@@ -532,7 +532,13 @@
     if (!online) return s("error", "alert", "offline", t("sys.text.offline"));
     if (!S) return s("none", "clock", "connecting", "");
     const blocked = grindBlocked();
-    if (f.sc === "running") return s("run", "clock", "running", t("sys.text.running"));
+    if (f.sc === "running") {
+      const recipe = recipeFollowStatus();
+      if (recipe) return s(recipe.stage === "wait" ? "run" : "warn", recipe.stage === "wait" ? "clock" : "alert",
+        recipe.stage === "wait" ? "recipeWait" : recipe.stage === "ready" ? "recipeReady" : "recipeCheck",
+        recipe.integration.health === "failing" ? recipe.integration.last_error : integDetail(recipe.integration));
+      return s("run", "clock", "running", t("sys.text.running"));
+    }
     if (f.sc === "checking") return s("run", "clock", "running", t("sys.text.checking"));
     if (f.sc === "knob") return s("run", "clock", "knob", t("sys.text.knob"));
     // Not paired yet: the setup (System status leads there) says what to do.
@@ -720,8 +726,10 @@
     const f = flow();
     const r = reporters();
     const tg = targets();
+    const recipeStatus = f.sc === "running" ? recipeFollowStatus() : null;
     const sys = renderHeader(f);
     renderBanner(f, sys);
+    renderStartIntegrations();
 
     // Step 1 says when no shot can start: blocked while there is no grinder
     // (or no gbs-anywhere, or the grinder won't grind), waiting while it
@@ -737,6 +745,7 @@
       ui.typeIn = ui.typeIn || r.manual || !S.shot.requested_by_grinder || ui.missed;
     }
     let plan = PLANS[f.sc];
+    if (recipeStatus) plan = [plan[0], ["run", recipeStatus.stage === "wait" ? "waiting" : "check"], plan[2]];
     // Also after a shot, whose result stays in steps 2 and 3.
     if (stop && (sys.key === "setup" || sys.key === "pairing")) plan = [["wait", "waiting"], ...plan.slice(1)];
     else if (stop && ["ready", "done", "error", "aborted"].includes(f.sc)) plan = [[sys.tone === "warn" ? "warn" : "error", "blocked"], ...plan.slice(1)];
@@ -780,6 +789,10 @@
     m1.hidden = !m1.textContent;
 
     // Step 2
+    $("s2-title").textContent = t(recipeStatus
+      ? recipeStatus.stage === "wait" ? "start.step2.waitTarget"
+        : recipeStatus.stage === "result" ? "start.step2.checkResult" : "start.step2.checkTarget"
+      : "start.step2.title");
     const win = windowS();
     $("s2-ready").hidden = !(f.sc === "ready" || f.sc === "knob");
     if (!$("s2-ready").hidden) {
@@ -1282,6 +1295,37 @@
     return /\{\w+\}/.test(text) ? i.detail : text;
   }
 
+  /** Keep target confirmation visible while preparing a shot, also after a reload. */
+  function renderStartIntegrations() {
+    const box = $("start-integrations");
+    const rows = ((S && S.integrations) || []).filter((i) => i.kind === "la_marzocco").map((i) => ({
+      title: i.title,
+      bad: i.health === "failing" || i.health === "stopped",
+      text: i.health === "failing" ? (i.last_error || i.detail || t("integ.errorFallback"))
+        : i.health === "stopped" ? t("integ.stopped") : integDetail(i),
+    }));
+    box.hidden = !online || !rows.length;
+    const list = $("start-integration-details");
+    const signature = JSON.stringify(rows);
+    if (list.dataset.signature === signature) return;
+    list.dataset.signature = signature;
+    list.replaceChildren(...rows.map((row) => el("div", { class: "stack-8" },
+      el("p", { class: "integ-title", text: row.title }),
+      el("p", { class: "integ-detail" + (row.bad ? " bad" : ""), text: row.text || "" }))));
+  }
+
+  /** A grinder job is not proof that the pump has started. Use keyed target status. */
+  function recipeFollowStatus() {
+    const stages = {
+      "la_marzocco.recipe_reading": "wait", "la_marzocco.recipe_ready": "ready",
+      "la_marzocco.recipe_manual": "check", "la_marzocco.recipe_unknown": "check",
+      "la_marzocco.recipe_no_weight": "result", "la_marzocco.baseline_failed": "result",
+    };
+    const list = ((S && S.integrations) || []).filter((i) => i.kind === "la_marzocco" && stages[i.detail_key]);
+    const integration = list.find((i) => i.detail_key !== "la_marzocco.recipe_ready" || i.health !== "watching") || list[0];
+    return integration ? { integration, stage: integration.health === "watching" ? stages[integration.detail_key] : "check" } : null;
+  }
+
   /** The ⋮ menu: only integrations in the app can be deleted there. */
   function integActions(i) {
     const acts = [];
@@ -1369,6 +1413,13 @@
     // Label, help and a placeholder that is a word come from the server in
     // English, translated by the catalog where it has them (serverText).
     const key = (part) => kindKey(kindId, "field." + f.key + "." + part);
+    if (f.input === "checkbox") {
+      const input = el("input", { id, name: f.key, type: "checkbox", "aria-describedby": f.help ? id + "-help" : null });
+      input.checked = (value == null || value === "" ? f.default : value) === "true";
+      return el("div", { class: "form-field" },
+        el("label", { for: id, class: "checkbox-field" }, input, stEl("span", null, key("label"), f.label)),
+        f.help ? stEl("p", { id: id + "-help", class: "help" }, key("help"), f.help) : null);
+    }
     const input = el("input", {
       id, name: f.key, type: { email: "email", password: "password" }[f.input] || "text",
       inputmode: f.input === "number" ? "decimal" : null, autocapitalize: "off", spellcheck: "false",
@@ -1392,6 +1443,7 @@
   function formValues(box) {
     const settings = {};
     for (const input of box.querySelectorAll("input")) {
+      if (input.type === "checkbox") { settings[input.name] = String(input.checked); continue; }
       const v = input.type === "password" ? input.value : input.value.trim();
       if (v) settings[input.name] = v;
     }
