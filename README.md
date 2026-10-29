@@ -214,21 +214,26 @@ gbs-anywhere checks the pairing 30 s after you tap **Accepted** in the
 app, and sends the grinder nothing until then. Without the tap, it checks
 every 40 s, and the setup keeps waiting for the tap. If the grinder hasn't
 accepted gbs-anywhere by the check, gbs-anywhere waits for the accept and a
-new tap. If the grinder shows **Timeout** next to **Start Pairing**, its
+new tap. If the grinder lists gbs-anywhere more than once, accept the
+entry with the Pairing Code the app shows; it may be further down. If the
+grinder shows **Timeout** next to **Start Pairing**, its
 pairing search ended: tap **Start Pairing** again. The grinder may freeze
 and restart: its LED pulses red, then
 white. When a pairing check goes unanswered, gbs-anywhere
 sends the grinder nothing for 3 minutes, then checks again; the setup waits
-with you. Then:
+with you (or, while you restart the grinder after a pairing that wasn't
+saved, goes on with the next try). Then:
 
 - **Configuration shows a Pairing ID** (and gbs-anywhere as the name): the
   pairing is made. The setup asks for that number and checks it with the
   grinder. (It is also under **Diagnosis**, after the serial number.
   `GRINDER_PAIRING_ID` sets it from the command line, unchecked.)
 - **No Pairing ID under Configuration:** the pairing wasn't kept. It can't
-  be brought back; the setup says so and starts again at step 2 with a new
-  Pairing Code. **Enable** may be off again after the restart. It can take
-  several tries.
+  be brought back; the setup says so and asks you to restart the grinder
+  before the next try, then starts again at step 2 with a new Pairing Code.
+  The restart also clears the grinder's list of pairing requests, so it
+  shows only the new one. **Enable** may be off again after the restart.
+  It can take several tries.
 
 A pairing seems to stick more easily on an idle grinder: don't grind right
 before or while you pair, and leave the grinder alone after you accept

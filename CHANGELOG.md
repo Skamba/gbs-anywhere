@@ -37,7 +37,10 @@ before.
   grinder polls. An E65/E80 GbS is paired; this replaces the pairing card
   and the Pairing ID form on the Start tab. A reload keeps your answers.
   Once an E65/E80 is paired, the setup asks whether the grinder shows
-  Status On, and starts again from step 2 if not.
+  Status On, and starts again from step 2 if not. When a pairing wasn't
+  saved, it asks you to restart the grinder before the next try, which also
+  clears the grinder's list of pairing requests, and it says which entry to
+  accept if gbs-anywhere is listed more than once.
 - A ⋮ menu on the grinder card under Status: **Change IP address**
   (**Enter IP address** while none is set) and, while an E65/E80 is paired,
   **Clear pairing**, which opens the setup to pair again.
