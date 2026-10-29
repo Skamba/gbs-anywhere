@@ -29,6 +29,13 @@ by step. This README is the reference.
 
 ## Run it
 
+**On a Raspberry Pi, the easiest way** is
+[gbs-anywhere-pi](https://github.com/Skamba/gbs-anywhere-pi): an SD card
+image with gbs-anywhere already installed. Write it to a card with Raspberry
+Pi Imager, start the Pi, and open the app on your phone, with no screen,
+keyboard or command line needed. Its README lists the Pi models it supports
+and takes you through the steps.
+
 On any computer on the same network as the grinder (PC, NAS, Raspberry Pi),
 with Docker:
 
