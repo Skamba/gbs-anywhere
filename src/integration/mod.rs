@@ -599,6 +599,13 @@ impl Backoff {
         tracing::info!("{title}: retrying in {} s", self.peek().as_secs());
         self.wait().await
     }
+
+    /// As [`Backoff::retry`], with the line in the debug log only: for a
+    /// retry after an error left out of the log as a repeat.
+    pub(crate) async fn retry_quietly(&mut self, title: &str) -> Duration {
+        tracing::debug!("{title}: retrying in {} s", self.peek().as_secs());
+        self.wait().await
+    }
 }
 
 #[cfg(test)]

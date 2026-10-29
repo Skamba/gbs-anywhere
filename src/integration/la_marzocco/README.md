@@ -71,7 +71,13 @@ says which.
   5 s to 5 min. A refused login, or a machine it can't pick (none on the
   account, the serial number not on it, or more than one and no serial
   number), is tried again within minutes at first and then after an hour,
-  or at once when its settings are changed in the app.
+  or at once when its settings are changed in the app. An error that keeps
+  coming back is logged once and then once an hour, the tries in between
+  only at the debug level.
+- **New terms come first.** When La Marzocco updates its terms and privacy
+  policy, the cloud refuses every request until you confirm them in the La
+  Marzocco app, which asks when it opens. The card says so, and
+  gbs-anywhere connects again within 5 minutes of confirming.
 
 ## Official logo
 

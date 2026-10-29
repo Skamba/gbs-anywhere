@@ -21,6 +21,8 @@ const PERMANENT_RETRY: Duration = Duration::from_secs(3600);
 /// once and work a minute later. Counted from the first refusal rather than
 /// in tries, so it holds whatever the backoff's steps.
 const REFUSED_BEFORE_THE_HOUR: Duration = Duration::from_secs(120);
+/// How often an error that keeps coming back unchanged is logged again.
+const REPEAT_REMINDER: Duration = Duration::from_secs(3600);
 
 /// The integration. See the module docs.
 pub(crate) struct LaMarzocco {
@@ -50,6 +52,7 @@ async fn run(link: Link, cfg: Config) {
     let mut backoff = Backoff::new(MIN_BACKOFF, MAX_BACKOFF);
     // When the first of the refusals in a row came, if the last error was one.
     let mut refused_since: Option<Instant> = None;
+    let mut repeats = Repeats::default();
     loop {
         link.status
             .starting(Detail::keyed("la_marzocco.logging_in", "logging in"));
@@ -57,6 +60,7 @@ async fn run(link: Link, cfg: Config) {
             Ok((client, machine)) => {
                 backoff.reset();
                 refused_since = None;
+                repeats.clear();
                 link.status.subject(&machine.subject);
                 link.status
                     .connected(idle_line(machine.last.as_ref(), now_ms()));
@@ -69,10 +73,10 @@ async fn run(link: Link, cfg: Config) {
         };
         // A wrong or missing serial: the card lists the machines in full,
         // the log only by their last four characters.
-        match e.downcast_ref::<MachineChoice>() {
-            Some(choice) => tracing::warn!("{TITLE}: {}", choice.log),
-            None => tracing::warn!("{TITLE}: {e:#}"),
-        }
+        let logged = repeats.log(&match e.downcast_ref::<MachineChoice>() {
+            Some(choice) => choice.log.clone(),
+            None => format!("{e:#}"),
+        });
         let now = Instant::now();
         refused_since = is_permanent(&e).then(|| refused_since.unwrap_or(now));
         if refused_since.is_some_and(|first| waits_an_hour(first, now)) {
@@ -81,8 +85,76 @@ async fn run(link: Link, cfg: Config) {
             tokio::time::sleep(PERMANENT_RETRY).await;
         } else {
             link.status.error(format!("{e:#}"));
-            backoff.retry(TITLE).await;
+            if logged {
+                backoff.retry(TITLE).await;
+            } else {
+                backoff.retry_quietly(TITLE).await;
+            }
         }
+    }
+}
+
+/// Keeps an error that comes back unchanged out of the log, as the cloud
+/// can refuse every request for hours: the first one is logged, the same one
+/// again only after [`REPEAT_REMINDER`], with how often it came meanwhile.
+/// The rest go to the debug log; the card always shows the latest.
+#[derive(Debug, Default)]
+struct Repeats {
+    /// The last error logged, and when.
+    last: Option<(String, Instant)>,
+    /// How often it came since, unlogged.
+    unlogged: u32,
+}
+
+impl Repeats {
+    /// The line to log for `error` at `now`, or `None` to leave it out.
+    fn note(&mut self, error: &str, now: Instant) -> Option<String> {
+        let line = match &self.last {
+            Some((last, at)) if last == error => {
+                let since = now.saturating_duration_since(*at);
+                if since < REPEAT_REMINDER {
+                    self.unlogged += 1;
+                    return None;
+                }
+                let since_ms = i64::try_from(since.as_millis()).unwrap_or(i64::MAX);
+                match self.unlogged {
+                    0 => error.to_owned(),
+                    1 => format!(
+                        "{error} (1 more time since it was logged {} ago)",
+                        age_of(since_ms)
+                    ),
+                    n => format!(
+                        "{error} ({n} more times since it was logged {} ago)",
+                        age_of(since_ms)
+                    ),
+                }
+            }
+            _ => error.to_owned(),
+        };
+        self.last = Some((error.to_owned(), now));
+        self.unlogged = 0;
+        Some(line)
+    }
+
+    /// Logs `error` as a warning, or only to the debug log while it repeats;
+    /// whether it was logged.
+    fn log(&mut self, error: &str) -> bool {
+        match self.note(error, Instant::now()) {
+            Some(line) => {
+                tracing::warn!("{TITLE}: {line}");
+                true
+            }
+            None => {
+                tracing::debug!("{TITLE}: {error}");
+                false
+            }
+        }
+    }
+
+    /// After a success: the next error is logged again. Whether one was
+    /// logged before, so the log can say it is over.
+    fn clear(&mut self) -> bool {
+        std::mem::take(self).last.is_some()
     }
 }
 
@@ -332,6 +404,7 @@ async fn watch(
     };
     let mut refresh = tokio::time::interval(IDLE_REFRESH);
     refresh.tick().await; // the first tick fires at once
+    let mut repeats = Repeats::default();
     loop {
         let brew = tokio::select! {
             next = brews.next() => match next {
@@ -343,7 +416,16 @@ async fn watch(
                 continue;
             }
         };
-        watch_brew(link, cfg, &mut client, &machine.serial, brew, &mut seen).await?;
+        watch_brew(
+            link,
+            cfg,
+            &mut client,
+            &machine.serial,
+            brew,
+            &mut seen,
+            &mut repeats,
+        )
+        .await?;
         link.status
             .connected(idle_line(seen.idle.as_ref(), now_ms()));
     }
@@ -362,6 +444,7 @@ async fn watch_brew(
     serial: &str,
     brew: Brew,
     seen: &mut Seen,
+    repeats: &mut Repeats,
 ) -> anyhow::Result<()> {
     let poll_s = cfg.poll.as_secs();
     tracing::info!("{TITLE}: grinder is waiting, watching the coffee log every {poll_s} s");
@@ -384,6 +467,9 @@ async fn watch_brew(
         }
         let list = match client.last_coffees(serial, 1).await {
             Ok(l) => {
+                if repeats.clear() {
+                    tracing::info!("{TITLE}: coffee log answers again");
+                }
                 if errors > 0 {
                     // Back from a failed fetch: still watching this brew.
                     errors = 0;
@@ -393,7 +479,7 @@ async fn watch_brew(
             }
             Err(e) => {
                 errors += 1;
-                tracing::warn!("{TITLE}: {e:#}");
+                repeats.log(&format!("{e:#}"));
                 link.status.error(format!("{e:#}"));
                 if errors >= 10 {
                     bail!("giving up on this session after {errors} errors");
@@ -460,6 +546,42 @@ mod tests {
         assert_eq!(seen.newest_ms, Some(9_000));
         seen.note(&list[..1]);
         assert_eq!(seen.newest_ms, Some(9_000), "never goes back");
+    }
+
+    #[test]
+    fn an_error_that_keeps_coming_is_logged_once_an_hour() {
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let e = "machine list failed: 403 Forbidden";
+        let mut r = Repeats::default();
+        assert_eq!(r.note(e, t0).as_deref(), Some(e));
+        // Every 5 minutes for the rest of the hour: left out.
+        for n in 1..12 {
+            assert_eq!(r.note(e, at(n * 300)), None, "try {n}");
+        }
+        assert_eq!(
+            r.note(e, at(3600)).as_deref(),
+            Some(
+                "machine list failed: 403 Forbidden (11 more times since it was logged 60 min ago)"
+            )
+        );
+        // An hour on without a repeat in between (a longer wait): no count.
+        assert_eq!(r.note(e, at(7200)).as_deref(), Some(e));
+        assert_eq!(r.note(e, at(7500)), None, "the hour starts again");
+        // Another error is logged at once, and so is the first one back.
+        let other = "coffee log failed: 502 Bad Gateway";
+        assert_eq!(r.note(other, at(7503)).as_deref(), Some(other));
+        assert_eq!(r.note(e, at(7506)).as_deref(), Some(e));
+        // After a success, the same error is new again.
+        assert!(r.clear(), "one was logged");
+        assert!(!r.clear(), "none since");
+        assert_eq!(r.note(e, at(7509)).as_deref(), Some(e));
+        // A single repeat in between.
+        assert_eq!(r.note(e, at(7510)), None);
+        assert_eq!(
+            r.note(e, at(7509 + 3600)).as_deref(),
+            Some("machine list failed: 403 Forbidden (1 more time since it was logged 60 min ago)")
+        );
     }
 
     #[test]
@@ -612,6 +734,8 @@ mod tests {
         /// Coffee log requests so far.
         asked: AtomicU32,
         refuse_login: AtomicBool,
+        /// The machine list is refused until new terms are confirmed.
+        ask_terms: AtomicBool,
     }
 
     impl Cloud {
@@ -635,8 +759,12 @@ mod tests {
         Json(json!({"accessToken": "access", "refreshToken": "refresh"})).into_response()
     }
 
-    async fn things(State(c): State<Arc<Cloud>>) -> Json<Value> {
-        Json(c.things.lock().unwrap().clone())
+    async fn things(State(c): State<Arc<Cloud>>) -> Response {
+        if c.ask_terms.load(Ordering::SeqCst) {
+            let reply = json!({"success": false, "message": "User must accept latest policy", "code": "USER_MUST_ACCEPT_POLICY"});
+            return (StatusCode::FORBIDDEN, Json(reply)).into_response();
+        }
+        Json(c.things.lock().unwrap().clone()).into_response()
     }
 
     async fn last_coffees(State(c): State<Arc<Cloud>>) -> Response {
@@ -851,6 +979,13 @@ mod tests {
         cloud.failing.store(1, Ordering::SeqCst);
         let e = connect_error(&cfg).await;
         assert!(!is_permanent(&e), "{e:#}");
+        // New terms to confirm too: confirming them in the app ends it, and
+        // the next try within 5 minutes connects.
+        cloud.ask_terms.store(true, Ordering::SeqCst);
+        let e = connect_error(&cfg).await;
+        assert!(!is_permanent(&e), "{e:#}");
+        assert!(format!("{e:#}").contains("confirm them"), "{e:#}");
+        cloud.ask_terms.store(false, Ordering::SeqCst);
 
         // A refusal is tried again soon at first, in case this computer's
         // clock was just being set; only refusals in a row for 2 minutes
