@@ -222,7 +222,9 @@ app, and sends the grinder nothing until then. Without the tap, it checks
 every 40 s, and the setup keeps waiting for the tap. If the grinder hasn't
 accepted gbs-anywhere by the check, gbs-anywhere waits for the accept and a
 new tap. If the grinder lists gbs-anywhere more than once, accept the
-entry with the Pairing Code the app shows; it may be further down. If the
+entry with the Pairing Code the app shows; it may be further down. The app
+shows only the code gbs-anywhere has open now, and says so when a new one
+replaces the code you were comparing. If the
 grinder shows **Timeout** next to **Start Pairing**, its
 pairing search ended: tap **Start Pairing** again. The grinder may freeze
 and restart: its LED pulses red, then

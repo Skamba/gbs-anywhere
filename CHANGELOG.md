@@ -6,6 +6,13 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Fixed
+
+- Step 3 of **Set up grinder** no longer shows an earlier Pairing Code while
+  gbs-anywhere has none open, also after a reload; it waits for the next
+  one. When a new code replaces the one being compared, the step says so,
+  with both codes, as the grinder may still list the earlier entry.
+
 ## [0.4.0] - 2026-10-30
 
 ### Changed (breaking)
