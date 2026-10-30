@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
 use super::{
-    Fake, PAIRING_ID, RESTART_QUIET_IN_TESTS, Setup, accepting, age_ms, asking, in_phase, in_state,
-    paired, pairing_file, polls, saved, saved_id, wifi, wifi_json,
+    Fake, PAIRING_ID, RESTART_QUIET_IN_TESTS, Setup, accepting, age_ms, asking, checks, in_phase,
+    in_state, paired, pairing_file, polls, saved, saved_id, start_link, wifi, wifi_json,
 };
 use crate::server::wait_for;
 use crate::server::wifi_grinder::{PairingIdRefusal, WifiPhase, WifiState};
@@ -442,4 +442,228 @@ async fn asking_again_keeps_the_question_and_an_id_typed_meanwhile() {
     server.use_grinder_pairing_id(PAIRING_ID).unwrap();
     wait_for("paired", || paired(&server)).await;
     assert_eq!(wifi(&server).pairing_id, Some(PAIRING_ID));
+}
+
+/// The link shows `code` and waits for the person to accept it.
+fn showing(server: &crate::server::Server, code: u32) -> bool {
+    server
+        .grinder_link()
+        .wifi
+        .is_some_and(|w| w.pairing_code == Some(code) && w.phase == Some(WifiPhase::Accepting))
+}
+
+#[tokio::test]
+async fn a_restart_goes_on_with_the_pairing_request_the_grinder_has_open() {
+    // As 0.4.0 wrote it while not paired: no request in it.
+    let file = pairing_file("open-request");
+    let unpaired = json!({ "brew_device_id": "dev-1", "pairing_id": null });
+    std::fs::write(&file, unpaired.to_string()).unwrap();
+    // Not accepted on the grinder until the test says so.
+    let fake = Fake {
+        slow_accept: 1000,
+        ..Fake::default()
+    };
+    let (server, fake, cfg) = Setup::new(fake).pairing_file(&file).build().await;
+    start_link(&server, cfg.clone());
+    wait_for("the code", || showing(&server, 73)).await;
+    let now = saved(&file);
+    assert_eq!(now["brew_device_id"], "dev-1", "same device as before");
+    assert_eq!(now["open_request"]["application_id"], json!(5));
+    assert_eq!(now["open_request"]["pairing_code"], json!(73));
+
+    // gbs-anywhere restarts: the new link checks the request it has.
+    let restarted = Instant::now();
+    start_link(&server, cfg);
+    wait_for("a check after the restart", || {
+        checks(&fake).iter().any(|at| *at > restarted)
+    })
+    .await;
+    assert!(showing(&server, 73), "the same code");
+    assert_eq!(fake.lock().unwrap().applications(), 1, "no new request");
+
+    fake.lock().unwrap().slow_accept = 0;
+    wait_for("paired", || paired(&server)).await;
+    assert_eq!(fake.lock().unwrap().applications(), 1);
+    let now = saved(&file);
+    assert_eq!(now["pairing_id"], json!(PAIRING_ID));
+    assert!(now.get("open_request").is_none(), "settled");
+    let _ = std::fs::remove_file(file);
+}
+
+#[tokio::test]
+async fn a_saved_request_the_grinder_no_longer_has_is_asked_for_once_more() {
+    let file = pairing_file("gone-request");
+    let fake = Fake {
+        forget_requests: 1,
+        slow_accept: 1000,
+        ..Fake::default()
+    };
+    let (server, fake, cfg) = Setup::new(fake).pairing_file(&file).build().await;
+    let before = json!({
+        "brew_device_id": "dev-1",
+        "pairing_id": null,
+        "open_request": { "application_id": 4, "pairing_code": 41, "grinder": cfg.base_url },
+    });
+    std::fs::write(&file, before.to_string()).unwrap();
+    start_link(&server, cfg);
+    wait_for("the new code", || showing(&server, 73)).await;
+    {
+        let f = fake.lock().unwrap();
+        assert_eq!(f.applications(), 1, "asked once");
+        assert_eq!(
+            f.requests[0].0,
+            wifi::PATH_PAIRING_STATUS,
+            "the saved request checked first"
+        );
+    }
+    assert_eq!(saved(&file)["open_request"]["pairing_code"], json!(73));
+    assert!(!wifi(&server).pairing_lost, "it ran out, nothing was lost");
+    let _ = std::fs::remove_file(file);
+}
+
+#[tokio::test]
+async fn a_saved_request_is_kept_for_the_same_grinder_written_differently() {
+    let file = pairing_file("same-grinder-request");
+    let fake = Fake {
+        slow_accept: 1000,
+        ..Fake::default()
+    };
+    let (server, fake, cfg) = Setup::new(fake).pairing_file(&file).build().await;
+    let spelled = format!("{}/", cfg.base_url.replacen("http://", "HTTP://", 1));
+    let before = json!({
+        "brew_device_id": "dev-1",
+        "pairing_id": null,
+        "open_request": { "application_id": 4, "pairing_code": 41, "grinder": spelled },
+    });
+    std::fs::write(&file, before.to_string()).unwrap();
+    start_link(&server, cfg);
+    wait_for("a check", || !checks(&fake).is_empty()).await;
+    assert!(showing(&server, 41), "the saved code");
+    assert_eq!(fake.lock().unwrap().applications(), 0);
+    let _ = std::fs::remove_file(file);
+}
+
+#[tokio::test]
+async fn a_saved_request_for_another_grinder_is_not_checked() {
+    let file = pairing_file("other-grinder-request");
+    let before = json!({
+        "brew_device_id": "dev-1",
+        "pairing_id": null,
+        "open_request": { "application_id": 4, "pairing_code": 41, "grinder": "https://192.168.1.30:30001" },
+    });
+    std::fs::write(&file, before.to_string()).unwrap();
+    let fake = Fake {
+        slow_accept: 1000,
+        ..Fake::default()
+    };
+    let (server, fake, cfg) = Setup::new(fake).pairing_file(&file).build().await;
+    let base = cfg.base_url.clone();
+    start_link(&server, cfg);
+    wait_for("the code", || showing(&server, 73)).await;
+    assert_eq!(
+        fake.lock().unwrap().requests[0].0,
+        wifi::PATH_PAIRING_APPLICATION,
+        "asked at once"
+    );
+    assert_eq!(saved(&file)["open_request"]["grinder"], json!(base));
+    let _ = std::fs::remove_file(file);
+}
+
+#[tokio::test]
+async fn one_check_turned_down_keeps_the_saved_request() {
+    let file = pairing_file("refused-once-request");
+    let fake = Fake {
+        refuse_checks: 1,
+        slow_accept: 1000,
+        ..Fake::default()
+    };
+    let (server, fake, cfg) = Setup::new(fake)
+        .pairing_file(&file)
+        .retrying()
+        .build()
+        .await;
+    let before = json!({
+        "brew_device_id": "dev-1",
+        "pairing_id": null,
+        "open_request": { "application_id": 4, "pairing_code": 41, "grinder": cfg.base_url },
+    });
+    std::fs::write(&file, before.to_string()).unwrap();
+    start_link(&server, cfg);
+    wait_for("checked again", || checks(&fake).len() >= 2).await;
+    assert!(showing(&server, 41), "the same request");
+    assert_eq!(fake.lock().unwrap().applications(), 0, "no new request");
+    let _ = std::fs::remove_file(file);
+}
+
+#[tokio::test]
+async fn a_saved_request_whose_checks_keep_being_turned_down_is_let_go() {
+    let file = pairing_file("refused-request");
+    let fake = Fake {
+        refuse_checks: 3,
+        slow_accept: 1000,
+        ..Fake::default()
+    };
+    let (server, fake, cfg) = Setup::new(fake)
+        .pairing_file(&file)
+        .retrying()
+        .build()
+        .await;
+    let before = json!({
+        "brew_device_id": "dev-1",
+        "pairing_id": null,
+        "open_request": { "application_id": 4, "pairing_code": 41, "grinder": cfg.base_url },
+    });
+    std::fs::write(&file, before.to_string()).unwrap();
+    start_link(&server, cfg);
+    wait_for("a new request", || showing(&server, 73)).await;
+    assert_eq!(fake.lock().unwrap().applications(), 1);
+    assert_eq!(saved(&file)["open_request"]["application_id"], json!(5));
+    let _ = std::fs::remove_file(file);
+}
+
+#[tokio::test]
+async fn an_unreadable_saved_request_keeps_the_pairing() {
+    let file = pairing_file("unreadable-request");
+    let stored =
+        json!({ "brew_device_id": "dev-1", "pairing_id": PAIRING_ID, "open_request": "?" });
+    std::fs::write(&file, stored.to_string()).unwrap();
+    let fake = Fake {
+        paired: Some(PAIRING_ID),
+        ..Fake::default()
+    };
+    let (server, fake) = Setup::new(fake).pairing_file(&file).start().await;
+    wait_for("paired", || paired(&server)).await;
+    assert_eq!(fake.lock().unwrap().applications(), 0);
+    let now = saved(&file);
+    assert_eq!(now["pairing_id"], json!(PAIRING_ID));
+    assert!(now.get("open_request").is_none());
+    let _ = std::fs::remove_file(file);
+}
+
+#[tokio::test]
+async fn the_given_pairing_id_drops_a_saved_request() {
+    let file = pairing_file("given-drops-request");
+    let fake = Fake {
+        paired: Some(PAIRING_ID),
+        ..Fake::default()
+    };
+    let (server, fake, cfg) = Setup::new(fake)
+        .pairing_file(&file)
+        .pairing_id(PAIRING_ID)
+        .build()
+        .await;
+    let before = json!({
+        "brew_device_id": "dev-1",
+        "pairing_id": null,
+        "open_request": { "application_id": 4, "pairing_code": 41, "grinder": cfg.base_url },
+    });
+    std::fs::write(&file, before.to_string()).unwrap();
+    start_link(&server, cfg);
+    wait_for("paired", || paired(&server)).await;
+    assert_eq!(fake.lock().unwrap().applications(), 0);
+    assert!(
+        saved(&file).get("open_request").is_none(),
+        "nothing to go on with"
+    );
+    let _ = std::fs::remove_file(file);
 }

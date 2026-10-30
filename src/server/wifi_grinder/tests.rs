@@ -72,6 +72,9 @@ struct Fake {
     forget_requests: u32,
     /// Status checks to fail with HTTP 503, as if the network dropped.
     fail_checks: u32,
+    /// Status checks to turn down with a client error other than an unknown
+    /// request.
+    refuse_checks: u32,
     /// Save the pairing on the accept and restart, as a grinder may: the
     /// accept check is not answered, and the request is gone afterwards.
     restart_on_accept: bool,
@@ -197,6 +200,10 @@ async fn handle(State(fake): State<Shared>, uri: Uri, Json(body): Json<Value>) -
             if f.fail_checks > 0 {
                 f.fail_checks -= 1;
                 return StatusCode::SERVICE_UNAVAILABLE.into_response();
+            }
+            if f.refuse_checks > 0 {
+                f.refuse_checks -= 1;
+                return refuse("ClientErrorPairingNotAllowed");
             }
             f.status_checks += 1;
             if f.status_checks < 2 + f.slow_accept {
