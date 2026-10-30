@@ -6,6 +6,8 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-30
+
 ### Changed (breaking)
 
 `grinder.wifi` in `GET /api/state` (and in the replies that carry the same
@@ -61,7 +63,6 @@ before.
   up for pairing would). System status and the grinder card say the grinder
   is not set up only then; any other error while not paired shows as an
   error, with its detail and the way to the log.
-
 - Opened by name (such as `gbs-anywhere.local`), the E64 WS setup and
   the grinder card under Status show the address to enter on the grinder
   too, as the server sees it. When that looks like an address inside

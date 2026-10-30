@@ -104,7 +104,7 @@ name like `gbs.tail1234.ts.net`, needs `--allow-host`, with the name given in
 full. Behind a reverse proxy, pass the `Host` header through and allow the
 proxy's name the same way.
 
-`latest` is the newest release; pin one with e.g. `:0.3`, or follow
+`latest` is the newest release; pin one with e.g. `:0.4`, or follow
 `:nightly`, built each night from `main`. The app shows its version under
 **Status** (and at the bottom of the other tabs); what changed is in
 [CHANGELOG.md](CHANGELOG.md).
