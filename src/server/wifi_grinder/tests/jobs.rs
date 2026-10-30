@@ -12,6 +12,7 @@ use super::{
 use crate::protocol::{
     AbortCause, GrinderRange, MachineConfig, MachineError, MachineEvent, ShotResult,
 };
+use crate::server::history::ShotOutcome;
 use crate::server::wait_for;
 use crate::server::wifi_grinder::{ProblemCause, ResultProblem};
 
@@ -378,6 +379,7 @@ async fn the_newest_job_is_the_shot_being_pulled() {
 #[tokio::test]
 async fn a_newer_grind_cancels_one_still_waiting() {
     let (server, fake) = Setup::new(Fake::default()).start().await;
+    server.record_history(None).unwrap();
     wait_for("pairing", || paired(&server)).await;
     fake.lock().unwrap().jobs.push(job("first", 36_000));
     wait_for("the first job taken", || taken(&fake) == 1).await;
@@ -394,24 +396,40 @@ async fn a_newer_grind_cancels_one_still_waiting() {
         wifi(&server).detail == "sent 28.0 s, 40.0 g"
     })
     .await;
-    let f = fake.lock().unwrap();
-    let accepted = f.calls_to(wifi::PATH_BREW_ACCEPT);
-    assert_eq!(accepted.len(), 2);
+    {
+        let f = fake.lock().unwrap();
+        let accepted = f.calls_to(wifi::PATH_BREW_ACCEPT);
+        assert_eq!(accepted.len(), 2);
+        assert_eq!(
+            (&accepted[0]["grindUuid"], &accepted[1]["grindUuid"]),
+            (&json!("first"), &json!("second"))
+        );
+        let done = f.calls_to(wifi::PATH_BREW_DONE);
+        assert_eq!(
+            (&done[0]["grindUuid"], &done[0]["result"]),
+            (&json!("first"), &json!("Canceled")),
+            "the grinder stops waiting for the first"
+        );
+        assert_eq!(
+            (&done[1]["grindUuid"], &done[1]["result"]),
+            (&json!("second"), &json!("Success"))
+        );
+        assert!(f.ongoing.is_empty() && f.jobs.is_empty());
+    }
+    // In the history, the first grind is discarded rather than aborted.
+    wait_for("both in the history", || server.history().list().len() == 2).await;
+    let shots = server.history().list();
+    let ended: Vec<_> = shots.iter().map(|s| (s.outcome, s.cause)).collect();
     assert_eq!(
-        (&accepted[0]["grindUuid"], &accepted[1]["grindUuid"]),
-        (&json!("first"), &json!("second"))
+        ended,
+        [
+            (ShotOutcome::Succeeded, None),
+            (
+                ShotOutcome::Discarded,
+                Some(AbortCause::GrinderShotReplaced)
+            ),
+        ]
     );
-    let done = f.calls_to(wifi::PATH_BREW_DONE);
-    assert_eq!(
-        (&done[0]["grindUuid"], &done[0]["result"]),
-        (&json!("first"), &json!("Canceled")),
-        "the grinder stops waiting for the first"
-    );
-    assert_eq!(
-        (&done[1]["grindUuid"], &done[1]["result"]),
-        (&json!("second"), &json!("Success"))
-    );
-    assert!(f.ongoing.is_empty() && f.jobs.is_empty());
 }
 
 #[tokio::test]

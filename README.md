@@ -262,7 +262,8 @@ shot is coming. Pull the shot and enter its time and weight in the app
 (`http://<computer's IP>/`), or let an [integration](#integrations) report
 it. The grinder waits for it up to the shot window (3 minutes unless changed
 in the app's settings or with `--shot-window-s`); if you grind again first,
-the shot counts for the newer grind.
+the shot counts for the newer grind, and the History lists the earlier one
+as discarded.
 
 The grinder adjusts only from a shot over 10 s and within 15 s of the
 recipe's **Brew Time** (for 28 s: over 13 s, up to 43 s; for 20 s: over
@@ -360,6 +361,9 @@ follows the device's light or dark mode and its language.
 The **History** tab shows the last 200 shots the grinder asked for, with
 their time, weight and target, and marks the ones the grinder ignored as
 too short or too long (kept in `history.json` next to the settings file).
+A grind that a newer one replaced before its shot came in, such as a purge
+before the dose on an E65/E80 GbS, is listed as **Discarded**. These are
+hidden until you turn them on: **+1** after the filters shows their filter.
 The **Log** card at the bottom of **Status** (also opened with **Log**
 next to the last error in System status) shows the last 1,000 lines of
 gbs-anywhere's log (INFO and up, as `docker logs` prints them by default),

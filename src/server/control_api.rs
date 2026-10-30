@@ -99,7 +99,7 @@
 //! ## GET /api/history
 //!
 //! * `shots`: the last 200 shots the grinder asked for, newest first, each with
-//!   * `outcome`: how it ended, `succeeded`, `aborted` or `failed`;
+//!   * `outcome`: how it ended, `succeeded`, `aborted`, `failed` or `discarded` (a newer grind replaced it before a result came in, as a purge before the dose on an E65/E80 GbS; earlier builds saved these as `aborted`, and they stay so);
 //!   * `started_at` and `ended_at` (UTC, whole seconds; `ended_at` as the clock read when the shot ended, `started_at` counted back from it by the shot's length on a clock that does not jump);
 //!   * `running_ms`: how long it ran, from the grinder's request to its end, on that clock; for shots saved by earlier builds, `ended_at` less `started_at`;
 //!   * for each that succeeded, `time_ms` and `weight_g`, with `in_grinder_range` and `integration_id` as on `shot_reported` (`in_grinder_range` is `null` when the shot's window was not known, see `grinder.shot_range`; both are `null` on shots saved by earlier builds);

@@ -6,6 +6,17 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Changed
+
+- The History lists an E65/E80 grind that a newer one replaced before its
+  shot came in (a purge before the dose, say) as **Discarded** rather than
+  aborted. They are hidden until turned on: **+1** after the filters shows
+  their filter in a second row. In `GET /api/history`, `outcome` is then
+  `discarded`, with `cause` still `grinder_shot_replaced`; shots saved
+  before keep `aborted`. An older build leaves these shots out and saves
+  the history without them. The filters are a little narrower, so the first row stays on
+  one line.
+
 ## [0.4.0] - 2026-10-30
 
 ### Changed (breaking)
