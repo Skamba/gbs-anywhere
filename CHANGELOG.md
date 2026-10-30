@@ -6,6 +6,13 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+Opening the **Status** tab now looks for a newer release right away (at most
+once a minute), so the update card is current instead of up to a day old. The
+daily check and the `--update-check off` switch are unchanged. New endpoint
+`POST /api/update/check`.
+
 ## [0.4.0] - 2026-10-30
 
 ### Changed (breaking)
