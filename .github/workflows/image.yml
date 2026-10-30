@@ -8,13 +8,13 @@
 # `main` always publishes). A `vX.Y.Z` tag publishes `X.Y.Z`, `X.Y`, `X`
 # (from 1.0) and `latest`, and creates the GitHub release from that version's
 # section in CHANGELOG.md, with the binaries and Debian packages for amd64 and
-# arm64 attached (`packages`; pull requests build them as a check). A release
-# without a `-` in its tag then asks gbs-anywhere-pi to build a Raspberry Pi
-# image from its arm64 Debian package.
+# arm64 attached (`packages`; pull requests build them as a check).
+# gbs-anywhere-pi finds the release by itself and builds its Raspberry Pi
+# image from the arm64 Debian package.
 #
 # Every action is pinned to a commit, its version next to it: a moved tag
 # must not be able to run new code with the tokens here (packages: write,
-# contents: write for the release, the gbs-anywhere-pi App's key).
+# contents: write for the release).
 # Dependabot moves the pins each month.
 name: image
 
@@ -290,28 +290,3 @@ jobs:
           if [[ $TAG == *-* ]]; then flags+=(--prerelease); fi
           gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$notes" "${flags[@]}" \
             "$RUNNER_TEMP"/dist/*
-
-      # The image build downloads the .deb and SHA256SUMS from the release
-      # above, so this comes after it. The token comes from a GitHub App
-      # installed only on gbs-anywhere-pi, with Contents: write and nothing
-      # else. If this fails, the release is already out: start the image by
-      # hand from gbs-anywhere-pi's Actions → Image → Run workflow.
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        id: pi-token
-        if: ${{ !contains(github.ref_name, '-') }}
-        with:
-          client-id: ${{ vars.PI_IMAGE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.PI_IMAGE_APP_KEY }}
-          owner: Skamba
-          repositories: gbs-anywhere-pi
-          permission-contents: write
-
-      - name: Ask gbs-anywhere-pi to build an image
-        if: ${{ !contains(github.ref_name, '-') }}
-        env:
-          GH_TOKEN: ${{ steps.pi-token.outputs.token }}
-          TAG: ${{ github.ref_name }}
-        run: >
-          gh api repos/Skamba/gbs-anywhere-pi/dispatches
-          -f event_type=gbs-anywhere-release
-          -f "client_payload[version]=${TAG#v}"
