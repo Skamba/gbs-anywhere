@@ -2608,6 +2608,9 @@
     // A kept code is a string or nothing (the loop lets any object through
     // for a field that starts as null).
     for (const k of ["lastCode", "restartCode"]) if (typeof fresh.pair[k] !== "string") fresh.pair[k] = null;
+    const nc = fresh.pair.newCode;
+    if (!nc || typeof nc.code !== "string" || typeof nc.old !== "string") fresh.pair.newCode = null;
+    else fresh.pair.newCode = { code: nc.code, old: nc.old };
     // The hash moves to #setup only once the old pairing is cleared.
     if (v.mode === "repair" && mode === "setup") fresh.pair.cleared = true;
     return fresh;
@@ -3019,6 +3022,9 @@
       host: null,           // the address the last sync saw (not kept)
       afterWait: false,     // past the restart wait, before the next attempt
       lastCode: null,       // the Pairing Code last shown, for step 3 once done
+      newCode: null,        // { code, old }: another code came while step 3 compared one
+      shownCode: null,      // the code the last sync saw (not kept)
+      noCodeFrom: null,     // Date.now() the link's code went away (not kept)
       editHost: false, hostValue: null, hostError: "", hostBusy: false,
       acceptError: "", acceptBusy: false, tapped: false,
       acceptFor: null,      // the Pairing Code "Accepted" was sent for, until the link took it
@@ -3195,11 +3201,14 @@
     if (n === 3) {
       if (st === "later") return null;
       const fin = st === "done";
-      const code = at.code || wz.pair.lastCode;
+      // While it waits, only the code the link shows now: an earlier one may
+      // have gone, and the grinder would list it next to the new one.
+      const code = fin ? at.code || wz.pair.lastCode : at.code;
       const shown = wz.pair.c31 || fin;
       const out = [];
       if (wz.pair.attempt > 1 && !fin) out.push(el("span", { class: "wz-attempt", text: t("setup.attempt", { n: wz.pair.attempt }) }));
       if (!fin && wz.pair.note === "notAccepted") out.push(banner("warn", t("setup.note.notAccepted"), "warn"));
+      if (!fin && wz.pair.newCode) out.push(banner("warn", t("setup.note.newCode", wz.pair.newCode), "warn"));
       let first;
       if (at.code) first = [hint(t("setup.s31.text")), answers(answer("no31", "no", "cross", t("setup.s31.no")), answer("c31", "ok", "check", t("setup.s31.yes")))];
       else {
@@ -3212,9 +3221,17 @@
         // After the restart asked for: no new code until the quiet is over.
         if (pairingPhase(w) === "quiet") first.push(hint(t("setup.s3.quiet", { n: quietMinutes(w) })));
       }
+      // No code to compare (it ran out, or gbs-anywhere restarted): 3.2
+      // waits for the next, and says so once it is late, as 3.1 does.
+      const waits = !fin && !code;
       out.push(parts([
         { id: "wz-s31", title: shown ? t("setup.s31.done") : t("setup.s31.title"), s: shown ? "done" : "now", body: first },
-        { id: "wz-s32", title: fin ? t("setup.s32.done", { code: code || "" }) : t("setup.s32.title"), s: fin ? "done" : shown ? "now" : "next", body: [
+        { id: "wz-s32", title: fin ? t("setup.s32.done", { code: code || "" }) : t("setup.s32.title"), s: fin ? "done" : shown ? "now" : "next", body: waits ? [
+          el("div", { class: "wz-codebox waiting" },
+            el("p", { class: "meta", text: t("setup.s3.subWait") }), el("p", { class: "wz-code", "aria-hidden": "true", text: "··" })),
+          ...(wz.pair.late ? [banner("warn", t("setup.note.noCode")),
+            el("button", { type: "button", class: "wz-btn plain wide", "data-act": "noCodeBack" }, icon("back", 16, 2.5), t("setup.back"))] : []),
+        ] : [
           el("div", { class: "wz-codebox" },
             el("p", { class: "wz-name", text: "gbs-anywhere" }),
             el("p", { class: "wz-code", text: code || "" }),
@@ -3396,7 +3413,7 @@
     // Another address is another grinder: nothing from the last one's wait
     // applies (also when it changed elsewhere, not through Back here).
     const host = pairHost();
-    if (wz.pair.host != null && host !== wz.pair.host) Object.assign(wz.pair, { afterWait: false, gone: false, lastCode: null, restarting: false, restartCode: null });
+    if (wz.pair.host != null && host !== wz.pair.host) Object.assign(wz.pair, { afterWait: false, gone: false, lastCode: null, newCode: null, restarting: false, restartCode: null });
     wz.pair.host = host;
     // The first code after the wait, also after the link restarted in
     // between (gbs-anywhere restarted); not while another address is being
@@ -3416,7 +3433,12 @@
     const unreached = pairCard(1, at) === "retry";
     if (unreached && !wz.pair.unreached) setupSay(t("setup.s1.unreached", { host: pairHost() }));
     wz.pair.unreached = unreached;
-    const late = at.step === 3 && !at.code && !!wz.pair.started && Date.now() - wz.pair.started > NO_CODE_MS
+    // Counted from Pairing started, or from when the code being compared
+    // went away (a request that ran out, gbs-anywhere restarting).
+    if (shown != null) wz.pair.noCodeFrom = null;
+    else if (wz.pair.shownCode != null) wz.pair.noCodeFrom = Date.now();
+    wz.pair.shownCode = shown;
+    const late = at.step === 3 && !at.code && !!wz.pair.started && Date.now() - Math.max(wz.pair.started, wz.pair.noCodeFrom || 0) > NO_CODE_MS
       && !WAIT_PHASES.includes(phase) && !(wz.mode === "repair" && !wz.pair.cleared);
     if (late && !wz.pair.late) setupSay(t("setup.note.noCode"));
     wz.pair.late = late;
@@ -3439,6 +3461,8 @@
         // A later pairing is asked about again.
         wz.pair.statusOn = false;
       }
+      // A step change ends the note, but not the first sync after a reload.
+      if (wz.at) wz.pair.newCode = null;
       wz.at = key;
       wz.open = {};
       if (at.step === 4) {
@@ -3481,6 +3505,14 @@
       if (wz.pair.restartCode === "") wz.pair.restartCode = shown;
       else if (shown !== wz.pair.restartCode && at.part !== "lost") wz.pair.restarting = false;
     }
+    // Another Pairing Code while one is compared here (a request ran out,
+    // or gbs-anywhere restarted): the grinder may still list the earlier
+    // entry next to the new one. Said once, until the step changes.
+    if (shown != null && wz.pair.lastCode != null && shown !== wz.pair.lastCode && at.step === 3 && !at.part && wz.pair.c31
+      && !wz.pair.restarting && !wz.pair.editHost) {
+      wz.pair.newCode = { code: shown, old: wz.pair.lastCode };
+      setupSay(t("setup.note.newCode", wz.pair.newCode));
+    }
     // The code the link shows now, at any step (also at step 2 before
     // "Pairing started"): a wait entered from here is about this request.
     // Taken last, so the comparisons above still see the one before. Not
@@ -3491,7 +3523,7 @@
   }
 
   const PAIR_FLOW = {
-    kept: ["clearTapped", "noClear", "c21", "started", "c31", "attempt", "note", "lostAck", "gone", "restarting", "restartCode", "afterWait", "confirmed", "lastCode"],
+    kept: ["clearTapped", "noClear", "c21", "started", "c31", "attempt", "note", "lostAck", "gone", "restarting", "restartCode", "afterWait", "confirmed", "lastCode", "newCode"],
     // The clear card sits above step 1, as the first thing to do.
     cards: () => [...(wz.mode === "repair" && !wz.pair.noClear ? ["clear"] : []), 1, 2, 3, 4, 5],
     number: (n) => (typeof n === "number" ? n : null),
@@ -3515,7 +3547,7 @@
     },
     sig() {
       const w = wifiOf(), p = wz.pair;
-      return [pairHost(), pairReached(), p.c21, p.c31, !!p.started, p.late, p.note, p.attempt, p.clearTapped, p.cleared, p.lastCode, p.restarting, p.restartCode,
+      return [pairHost(), pairReached(), p.c21, p.c31, !!p.started, p.late, p.note, p.attempt, p.clearTapped, p.cleared, p.lastCode, p.newCode && p.newCode.code, p.restarting, p.restartCode,
         p.hostError, p.hostBusy, p.acceptError, p.acceptBusy, p.tapped, p.idError, p.idBusy, p.statusOn, p.stillPaired, p.confirmed,
         w && w.phase, w && w.unknown_pairing_id, w && w.pairing_id];
     },
@@ -3643,6 +3675,7 @@
       wz.pair.tapped = true;
       wz.pair.confirmed = true;
       wz.pair.acceptFor = wz.pair.lastCode;
+      wz.pair.newCode = null;
       if (wz.pair.note === "notAccepted") wz.pair.note = "";
       await tick();
     } catch (x) {

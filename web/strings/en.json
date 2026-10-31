@@ -228,6 +228,7 @@
   "setup.note.notShown": "“gbs-anywhere” wasn’t shown. Start pairing again on the grinder; it may have timed out.",
   "setup.note.notAccepted": "The grinder hadn’t accepted yet when gbs-anywhere checked. Tap Accept Pairing on the grinder, then Accepted here again.",
   "setup.note.noCode": "No Pairing Code yet. Check that “Local WiFi connected” is enabled, then tap Start Pairing again.",
+  "setup.note.newCode": "gbs-anywhere has a new Pairing Code: {code}. The grinder may still list the earlier one ({old}) as well; accept the entry with {code}.",
   "setup.s3.title": "Accept device “gbs-anywhere”",
   "setup.s3.sub": "Pairing Code {code}",
   "setup.s3.subWait": "Waiting for the Pairing Code",
