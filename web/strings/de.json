@@ -227,6 +227,7 @@
   "setup.note.mismatch": "Die Pairing Codes stimmten nicht überein. Akzeptiere nicht an der Mühle; ein neuer Pairing-Versuch bringt einen neuen Pairing Code.",
   "setup.note.notShown": "„gbs-anywhere“ wurde nicht angezeigt. Starte das Pairing an der Mühle erneut; es ist vielleicht abgelaufen.",
   "setup.note.notAccepted": "Die Mühle hatte bei der Prüfung noch nicht akzeptiert. Tippe an der Mühle auf „Pairing akzeptieren“ und dann hier erneut auf „Akzeptiert“.",
+  "setup.note.restarted": "gbs-anywhere wurde neu gestartet, bevor es das Pairing prüfen konnte; es macht mit derselben Anfrage weiter. Hast du an der Mühle akzeptiert, tippe hier erneut auf „Akzeptiert“.",
   "setup.note.noCode": "Noch kein Pairing Code. Prüfe, ob „Lokal WiFi verbunden“ aktiviert ist, und tippe dann erneut auf Pairing starten.",
   "setup.note.newCode": "gbs-anywhere hat einen neuen Pairing Code: {code}. Die Mühle zeigt den früheren ({old}) vielleicht noch mit an; akzeptiere den Eintrag mit {code}.",
   "setup.s3.title": "Gerät „gbs-anywhere“ akzeptieren",

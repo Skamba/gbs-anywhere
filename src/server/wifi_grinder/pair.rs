@@ -8,12 +8,20 @@ use reqwest::StatusCode;
 use serde_json::json;
 use tokio::sync::mpsc;
 
+use super::pairing_file::OpenRequest;
 use super::reply::{Reply, failure, no_answer, refused};
 use super::{WifiGrinder, WifiPhase, WifiState};
 use crate::protocol::wifi::{
     self, API_VERSION, Paired, PairingApplication, PairingApplicationRes, PairingStatusRes,
 };
 use crate::server::Server;
+
+/// Answered pairing checks in a row that say nothing about the request
+/// (an error other than an unknown request, or a reply that can't be read)
+/// before gbs-anywhere lets the request go and asks again. One such answer
+/// may be a hiccup, and asking again lists gbs-anywhere on the grinder once
+/// more; a request it keeps failing on is no use either.
+const UNUSABLE_CHECKS: u32 = 3;
 
 impl WifiGrinder {
     /// Applies for pairing and waits until the person accepts it on the
@@ -24,23 +32,38 @@ impl WifiGrinder {
         ids: &mut mpsc::Receiver<u32>,
         accept: &mut mpsc::Receiver<()>,
     ) -> anyhow::Result<()> {
-        let app = PairingApplication::new(&self.pairing.brew_device_id);
-        let reply = self.post(wifi::PATH_PAIRING_APPLICATION, &app).await?;
-        if reply.status() == wifi::STATUS_ALREADY_PAIRED {
-            return self.wait_for_pairing_id(server, ids).await;
-        }
-        // It answers but turns the application down: not set up for pairing.
-        self.screen.not_set_up = refused(&reply);
-        reply.ok().context("asking to pair")?;
-        let res: PairingApplicationRes = reply.parse()?;
-        let application_id = res
-            .application_id
-            .context("the grinder sent no application ID")?;
-        if self.pairing.refused_pairing_id.take().is_some() {
-            // It no longer has this gbs-anywhere paired: that ID is gone.
-            self.save_pairing()?;
-        }
-        let code = res.pairing_code;
+        // The request from before a restart, if the grinder may still have
+        // it: checked like a new one, so the first check after an accept on
+        // the grinder still waits for the confirmation in the app.
+        let resumed = self.open_request()?;
+        let (application_id, code) = match &resumed {
+            Some(open) => (open.application_id, open.pairing_code),
+            None => {
+                let app = PairingApplication::new(&self.pairing.brew_device_id);
+                let reply = self.post(wifi::PATH_PAIRING_APPLICATION, &app).await?;
+                if reply.status() == wifi::STATUS_ALREADY_PAIRED {
+                    return self.wait_for_pairing_id(server, ids).await;
+                }
+                // It answers but turns the application down: not set up for
+                // pairing.
+                self.screen.not_set_up = refused(&reply);
+                reply.ok().context("asking to pair")?;
+                let res: PairingApplicationRes = reply.parse()?;
+                let application_id = res
+                    .application_id
+                    .context("the grinder sent no application ID")?;
+                // It no longer has this gbs-anywhere paired: that ID is gone.
+                self.pairing.refused_pairing_id = None;
+                self.unusable_checks = 0;
+                self.pairing.open_request = Some(OpenRequest {
+                    application_id,
+                    pairing_code: res.pairing_code,
+                    grinder: self.cfg.base_url.clone(),
+                });
+                self.save_pairing()?;
+                (application_id, res.pairing_code)
+            }
+        };
         let detail = format!(
             "{}on the grinder, under Configuration, tap Start Pairing and \
              accept gbs-anywhere{}",
@@ -52,7 +75,11 @@ impl WifiGrinder {
             },
             code.map_or(String::new(), |c| format!(" (Pairing Code {c})"))
         );
-        tracing::info!("grinder: {detail}");
+        if resumed.is_some() {
+            tracing::info!("grinder: going on with the pairing request already open: {detail}");
+        } else {
+            tracing::info!("grinder: {detail}");
+        }
         // The new code is shown first: a confirmation left from an earlier
         // attempt must not release this one (cf. `wait_for_pairing_id`
         // draining `ids`). A new code starts its own phase age, also after
@@ -84,19 +111,41 @@ impl WifiGrinder {
             }
             let reply = outcome?;
             if reply.status() == wifi::STATUS_APPLICATION_UNKNOWN {
+                self.forget_request()?;
                 if quiet {
                     tracing::info!(
                         "grinder: it no longer has the pairing request (it restarted?), asking \
                          again"
                     );
                     self.screen.pairing_lost = true;
+                } else if resumed.is_some() {
+                    tracing::info!(
+                        "grinder: it no longer has the pairing request that was open, asking again"
+                    );
                 } else {
                     tracing::info!("grinder: the pairing request expired, asking again");
                 }
                 return Ok(());
             }
-            reply.ok().context("checking the pairing")?;
-            let status: PairingStatusRes = reply.parse()?;
+            let checked = reply
+                .ok()
+                .context("checking the pairing")
+                .and_then(|()| reply.parse::<PairingStatusRes>());
+            let status = match checked {
+                Ok(status) => {
+                    self.unusable_checks = 0;
+                    status
+                }
+                Err(e) => {
+                    // Tried again with the same request, up to a point.
+                    self.unusable_checks += 1;
+                    if self.unusable_checks >= UNUSABLE_CHECKS {
+                        self.unusable_checks = 0;
+                        self.forget_request()?;
+                    }
+                    return Err(e);
+                }
+            };
             if !status.accepted {
                 // Back without a restart, the request still open; or
                 // confirmed before the grinder had it accepted. Either way
@@ -229,6 +278,7 @@ impl WifiGrinder {
         // The grinder has the pairing: whatever restarted, it stuck, and we
         // are no longer waiting for an accept.
         self.screen.pairing_lost = false;
+        self.forget_request()?;
         // Asked before, and back after `ask_window` (or a failed request): the
         // question goes on, with its age and an ID typed meanwhile.
         let again = self.screen.phase == WifiPhase::Asking;
@@ -315,6 +365,45 @@ impl WifiGrinder {
         self.set_phase(WifiPhase::Checking);
         self.pairing.pairing_id = Some(id);
         self.pairing.refused_pairing_id = None;
+        self.pairing.open_request = None;
         self.save_pairing()
+    }
+
+    /// The saved pairing request to go on with: none, or one made to another
+    /// grinder (which is dropped).
+    fn open_request(&mut self) -> anyhow::Result<Option<OpenRequest>> {
+        if self
+            .pairing
+            .open_request
+            .as_ref()
+            .is_some_and(|open| !same_grinder(&open.grinder, &self.cfg.base_url))
+        {
+            self.forget_request()?;
+        }
+        Ok(self.pairing.open_request.clone())
+    }
+
+    /// Drops the saved pairing request: it was settled, or the grinder no
+    /// longer has it.
+    fn forget_request(&mut self) -> anyhow::Result<()> {
+        self.unusable_checks = 0;
+        if self.pairing.open_request.take().is_some() {
+            self.save_pairing()?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether two grinder addresses name the same grinder, written as they may
+/// be (`Grinder.local` on the command line, `grinder.local` from the app).
+fn same_grinder(a: &str, b: &str) -> bool {
+    let key = |url: &str| {
+        let url = reqwest::Url::parse(url).ok()?;
+        let host = url.host_str()?.to_ascii_lowercase();
+        Some((url.scheme().to_owned(), host, url.port_or_known_default()))
+    };
+    match (key(a), key(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => a == b,
     }
 }

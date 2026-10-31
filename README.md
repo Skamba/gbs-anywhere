@@ -226,7 +226,10 @@ accepted gbs-anywhere by the check, gbs-anywhere waits for the accept and a
 new tap. If the grinder lists gbs-anywhere more than once, accept the
 entry with the Pairing Code the app shows; it may be further down. The app
 shows only the code gbs-anywhere has open now, and says so when a new one
-replaces the code you were comparing. If the
+replaces the code you were comparing. With a pairing file
+(`--grinder-pairing-file`, the default with `--config`), a restart of
+gbs-anywhere goes on with the request the grinder has open, with the same
+Pairing Code, rather than adding gbs-anywhere to its list again. If the
 grinder shows **Timeout** next to **Start Pairing**, its
 pairing search ended: tap **Start Pairing** again. The grinder may freeze
 and restart: its LED pulses red, then
@@ -391,7 +394,7 @@ there turns on the control address the image and the package turn off:
 | `--serial <sn>` | built in | the machine serial number the E64 WS is shown |
 | `--accept-browser-headers` | off | let requests with browser headers reach the E64 WS's routes; only if the log says your E64 WS was refused (then please report it) |
 | `--grinder <host>` | off | pair with this E65/E80 GbS over its Local WiFi; also `GRINDER_HOST`; an address set in the app wins |
-| `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing across restarts; also `GRINDER_PAIRING_FILE` |
+| `--grinder-pairing-file <file>` | `grinder-pairing.json` next to `--config`; off without `--config` | keeps that pairing, and a pairing request still open, across restarts; also `GRINDER_PAIRING_FILE` |
 | `--grinder-pairing-id <id>` | off | the Pairing ID the grinder shows, used when none is saved or the grinder refuses the saved one (the app's setup can take it too); also `GRINDER_PAIRING_ID` |
 | `--update-check <on\|off>` | on | look for a newer release once a day (see [Update check](#run-it)); also `UPDATE_CHECK`; a choice made in the app wins |
 | `--lm-*` | off | La Marzocco cloud, see [its README](src/integration/la_marzocco/README.md) |

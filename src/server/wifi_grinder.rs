@@ -311,6 +311,9 @@ pub(crate) struct WifiGrinder {
     lock: PairingLock,
     /// Held while this link may write it.
     holding: Option<OwnedMutexGuard<()>>,
+    /// Pairing checks in a row the grinder answered with something other
+    /// than the request's state (see `UNUSABLE_CHECKS`).
+    unusable_checks: u32,
 }
 
 /// What the app is shown of the pairing, besides the link's state.
@@ -396,6 +399,7 @@ impl WifiGrinder {
             owner: 0,
             lock,
             holding,
+            unusable_checks: 0,
         })
     }
 

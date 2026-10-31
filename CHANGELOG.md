@@ -19,6 +19,14 @@ daily check and the `--update-check off` switch are unchanged. New endpoint
   gbs-anywhere has none open, also after a reload; it waits for the next
   one. When a new code replaces the one being compared, the step says so,
   with both codes, as the grinder may still list the earlier entry.
+- A restart of gbs-anywhere while an E65/E80 GbS waits for its accept goes
+  on with the pairing request the grinder has open, with the same Pairing
+  Code, instead of asking again: each new request was listed on the grinder
+  next to the earlier ones until they ran out or the grinder restarted. The
+  pairing file keeps the open request (`open_request`), and drops it once
+  the grinder accepted it or no longer has it, or the address changed. When
+  gbs-anywhere restarts before it checked an accept, the setup says so
+  rather than that the grinder hadn't accepted.
 
 ## [0.4.0] - 2026-10-30
 
