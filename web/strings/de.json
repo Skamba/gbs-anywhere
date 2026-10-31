@@ -533,10 +533,11 @@
   "version.installed": "Installiert",
   "version.latest": "Neueste Version",
   "version.notChecked": "noch nicht geprüft",
+  "version.checking": "Wird geprüft…",
   "version.whatsNew": "Was ist neu",
   "version.whatsNewLabel": "Was ist neu (öffnet einen neuen Tab)",
   "version.failing": "GitHub nicht erreichbar",
-  "version.note": "Prüft einmal am Tag bei GitHub, ob es eine neuere Version gibt.",
+  "version.note": "Prüft bei GitHub, wenn du diesen Tab öffnest, und einmal am Tag.",
   "version.github": "gbs-anywhere auf GitHub (öffnet einen neuen Tab)",
 
   "history.filter": "Nach Status filtern",
