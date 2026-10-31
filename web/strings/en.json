@@ -508,10 +508,11 @@
   "version.installed": "Installed",
   "version.latest": "Latest release",
   "version.notChecked": "not checked yet",
+  "version.checking": "Checking…",
   "version.whatsNew": "What’s new",
   "version.whatsNewLabel": "What’s new (opens in a new tab)",
   "version.failing": "Couldn’t reach GitHub",
-  "version.note": "Checks GitHub once a day for a newer release.",
+  "version.note": "Checks GitHub when you open this tab, and once a day.",
   "version.github": "gbs-anywhere on GitHub (opens in a new tab)",
 
   "history.filter": "Filter by status",

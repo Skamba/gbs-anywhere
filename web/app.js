@@ -612,6 +612,7 @@
     renderAll();
     if (toLog) { log.open = true; scrollToLog(); openLog().then(scrollToLog); }
     else if (name === "status" && log.open) openLog();   // back after a restart: start over
+    if (changed && name === "status") recheckUpdate();
     if (name === "history" && primed) loadHistory();   // else the first catch-up does
   }
   /** Opens a tab and puts it in the address, without a navigation: Safari on
@@ -2093,7 +2094,8 @@
     const failing = on && !!u.failing;
     // A known newer release stays news when GitHub fails later; "up to date"
     // does not.
-    const word = !on ? null : u.available ? ["run", t("version.updateAvailable")]
+    const word = !on ? null : u.checking ? ["none", t("version.checking")]
+      : u.available ? ["run", t("version.updateAvailable")]
       : failing ? ["none", t("version.failing")] : u.latest ? ["ok", t("version.upToDate")] : null;
     badge.hidden = !word;
     if (word) { setTone(badge, word[0]); badge.textContent = word[1]; }
@@ -2102,6 +2104,19 @@
     $("v-note").hidden = !on;
     $("v-off").hidden = !(u && !on);
     $("v-whatsnew").hidden = !(on && u.available);
+  }
+
+  // Opening the Status tab asks the server to look for a newer release now,
+  // so "Up to date" is fresh rather than up to a day old. The server ignores
+  // it when the check is off or it looked under a minute ago; the result
+  // comes in with the next state poll.
+  let recheckInFlight = false;
+  async function recheckUpdate() {
+    if (recheckInFlight || !S || !S.settings || !S.settings.update_check) return;
+    recheckInFlight = true;
+    try { await api("/api/update/check", { method: "POST" }); } catch (_) {}
+    recheckInFlight = false;
+    tick();
   }
 
   /** Renders the Status tab; `L` is this render's linkStatus(), when it has one. */

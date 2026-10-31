@@ -7,7 +7,7 @@
 
 use std::cmp::Ordering;
 use std::sync::{Arc, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail};
 use serde::Deserialize;
@@ -24,6 +24,11 @@ pub(crate) const RELEASES_PAGE: &str = "https://github.com/Skamba/gbs-anywhere/r
 
 /// A release description is a few kilobytes; anything this big is not one.
 const MAX_REPLY_BYTES: usize = 1024 * 1024;
+
+/// A manual re-check (the app asks for one when the Status tab opens) is
+/// ignored when the last look is this recent, so opening the tab again and
+/// again does not keep asking GitHub.
+const MANUAL_MIN_GAP: Duration = Duration::from_secs(60);
 
 /// When and where to look.
 #[derive(Debug, Clone)]
@@ -60,6 +65,12 @@ pub(super) struct UpdateState {
     latest: Option<String>,
     /// The last look failed (said once in the log, not every hour).
     failing: bool,
+    /// A look is under way (so the app can say it is checking).
+    checking: bool,
+    /// When the last look finished, for `checked_age_ms` and the manual gap.
+    checked: Option<Instant>,
+    /// A manual re-check is waiting for the task to pick it up.
+    recheck: bool,
 }
 
 impl Server {
@@ -93,9 +104,30 @@ impl Server {
             // Turned on again later, an old result would pass for a new one.
             if !on {
                 s.latest = None;
+                s.checked = None;
+                s.recheck = false;
             }
             self.update_wake.notify_waiters();
         }
+    }
+
+    /// Asks for a look right away (the app does when the Status tab opens),
+    /// skipped when the check is off, one is under way, or the last was less
+    /// than [`MANUAL_MIN_GAP`] ago. The periodic look is unaffected.
+    pub(crate) fn request_update_check(&self) {
+        {
+            let mut s = self.update_state();
+            if !s.enabled || s.checking || s.checked.is_some_and(|t| t.elapsed() < MANUAL_MIN_GAP) {
+                return;
+            }
+            s.recheck = true;
+        }
+        self.update_wake.notify_waiters();
+    }
+
+    /// Takes the pending manual re-check, if any.
+    fn take_recheck(&self) -> bool {
+        std::mem::take(&mut self.update_state().recheck)
     }
 
     /// Whether the check is on (`update_check` in the settings).
@@ -111,6 +143,8 @@ impl Server {
             "latest": s.latest,
             "available": s.latest.as_deref().is_some_and(is_newer),
             "failing": s.enabled && s.failing,
+            "checking": s.enabled && s.checking,
+            "checked_age_ms": s.checked.map(|t| t.elapsed().as_millis() as u64),
             "url": RELEASES_PAGE,
         })
     }
@@ -126,23 +160,40 @@ impl Server {
 async fn run(server: Arc<Server>, cfg: UpdateConfig, http: reqwest::Client) {
     let mut wait = cfg.first;
     loop {
-        // Registered before the check, so a switch in between is not missed.
+        // Registered before the check, so a wake in between is not missed.
         let switched = server.update_wake.notified();
         if !server.update_state().enabled {
             switched.await;
             wait = cfg.first;
             continue;
         }
-        tokio::select! {
-            () = tokio::time::sleep(wait) => {}
-            // Turned off (or on again): start over.
-            () = switched => {
+        // A manual re-check asked for while the last look ran is picked up
+        // here; otherwise wait for the timer or a wake.
+        if !server.take_recheck() {
+            tokio::select! {
+                () = tokio::time::sleep(wait) => {}
+                () = switched => {
+                    // A manual re-check looks now; an on/off switch starts over.
+                    if !server.take_recheck() {
+                        wait = cfg.first;
+                        continue;
+                    }
+                }
+            }
+        }
+        {
+            let mut s = server.update_state();
+            // Turned off since the wake: send nothing.
+            if !s.enabled {
                 wait = cfg.first;
                 continue;
             }
+            s.checking = true;
         }
         let found = latest_release(&http, &cfg.url).await;
         let mut s = server.update_state();
+        s.checking = false;
+        s.checked = Some(Instant::now());
         if !s.enabled {
             // Turned off while it looked: the answer is not kept.
             wait = cfg.first;
@@ -507,5 +558,44 @@ mod tests {
         assert!(latest_release(&http, &url).await.is_err());
         *reply.lock().unwrap() = (StatusCode::OK, r#"{"tag_name":"v1.2.3"}"#.to_owned());
         assert_eq!(latest_release(&http, &url).await.unwrap(), "1.2.3");
+    }
+
+    #[tokio::test]
+    async fn a_manual_check_looks_right_away_then_waits() {
+        let reply = Arc::new(Mutex::new((
+            StatusCode::OK,
+            r#"{"tag_name":"v999.0.0"}"#.to_owned(),
+        )));
+        let agents = Arc::new(Mutex::new(Vec::new()));
+        let url = fake(reply, agents.clone()).await;
+        let server = Server::new(MachineConfig::default());
+        server.set_update_check(true);
+        // A long interval, so only a manual re-check makes it look soon.
+        server.start_update_check(UpdateConfig {
+            url,
+            first: Duration::from_secs(600),
+            every: Duration::from_secs(600),
+            retry: Duration::from_secs(600),
+            timeout: Duration::from_secs(5),
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            agents.lock().unwrap().is_empty(),
+            "no look before it is due"
+        );
+
+        // Asking looks now, despite the long interval.
+        server.request_update_check();
+        wait_for("the manual look", || {
+            server.update_json()["latest"] == "999.0.0"
+        })
+        .await;
+        assert_eq!(agents.lock().unwrap().len(), 1, "one look");
+        assert_eq!(server.update_json()["checking"], false, "the look finished");
+
+        // Asking again right away is ignored (less than the minimum gap).
+        server.request_update_check();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(agents.lock().unwrap().len(), 1, "debounced");
     }
 }
