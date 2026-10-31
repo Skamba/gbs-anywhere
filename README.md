@@ -111,7 +111,9 @@ proxy's name the same way.
 
 **Update check.** One minute after it starts, and then once a day,
 gbs-anywhere asks GitHub for its latest release, and the gbs-anywhere card
-under **Status** says when a newer one is out. GitHub sees the request like
+under **Status** says when a newer one is out. Opening the **Status** tab
+also asks once right away (at most once a minute), so the card is current
+rather than up to a day old. GitHub sees the request like
 any other, including your IP address; it carries nothing but the
 gbs-anywhere version. Turn it off under **Status → Settings**, or with
 `--update-check off` (`UPDATE_CHECK=off` in Docker). It goes through a proxy
@@ -222,11 +224,12 @@ app, and sends the grinder nothing until then. Without the tap, it checks
 every 40 s, and the setup keeps waiting for the tap. If the grinder hasn't
 accepted gbs-anywhere by the check, gbs-anywhere waits for the accept and a
 new tap. If the grinder lists gbs-anywhere more than once, accept the
-entry with the Pairing Code the app shows; it may be further down. With a
-pairing file (`--grinder-pairing-file`, the default with `--config`), a
-restart of gbs-anywhere goes on with the request the grinder has open, with
-the same Pairing Code, rather than adding gbs-anywhere to its list again. If
-the
+entry with the Pairing Code the app shows; it may be further down. The app
+shows only the code gbs-anywhere has open now, and says so when a new one
+replaces the code you were comparing. With a pairing file
+(`--grinder-pairing-file`, the default with `--config`), a restart of
+gbs-anywhere goes on with the request the grinder has open, with the same
+Pairing Code, rather than adding gbs-anywhere to its list again. If the
 grinder shows **Timeout** next to **Start Pairing**, its
 pairing search ended: tap **Start Pairing** again. The grinder may freeze
 and restart: its LED pulses red, then

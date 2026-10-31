@@ -6,8 +6,19 @@ a minor release may change behaviour.
 
 ## [Unreleased]
 
+### Added
+
+Opening the **Status** tab now looks for a newer release right away (at most
+once a minute), so the update card is current instead of up to a day old. The
+daily check and the `--update-check off` switch are unchanged. New endpoint
+`POST /api/update/check`.
+
 ### Fixed
 
+- Step 3 of **Set up grinder** no longer shows an earlier Pairing Code while
+  gbs-anywhere has none open, also after a reload; it waits for the next
+  one. When a new code replaces the one being compared, the step says so,
+  with both codes, as the grinder may still list the earlier entry.
 - A restart of gbs-anywhere while an E65/E80 GbS waits for its accept goes
   on with the pairing request the grinder has open, with the same Pairing
   Code, instead of asking again: each new request was listed on the grinder
