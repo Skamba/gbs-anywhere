@@ -2130,10 +2130,17 @@
   }
 
   // --- History tab -----------------------------------------------------------------
-  const HKINDS = ["succeeded", "aborted", "failed"];
+  const HKINDS = ["succeeded", "aborted", "failed", "discarded"];
+  // Kinds whose chip sits behind "+n" in a second row: discarded grinds
+  // rarely matter, so they are hidden until turned on here.
+  const HMORE = ["discarded"];
   const kindLabel = (k) => (HKINDS.includes(k) ? t("history.kind." + k) : k);
   let hHidden = {};
   try { hHidden = JSON.parse(store.get("historyHidden") || "{}") || {}; } catch (_) {}
+  if (typeof hHidden !== "object" || Array.isArray(hHidden)) hHidden = {};
+  for (const k of HMORE) if (hHidden[k] === undefined) hHidden[k] = true;
+  // The second row is open while one of its kinds is shown, until closed.
+  let hMore = HMORE.some((k) => !hHidden[k]);
   let histLoading = false, histTried = 0, histError = "";
   let histGen = 0;   // counts the history loads, for renderHistory's signature
 
@@ -2216,11 +2223,29 @@
     // a chip keeps the focus; a tapped one gets it back by its key.
     const counts = HKINDS.map((k) => shots.filter((s) => s.outcome === k).length);
     const shown = (k) => !hHidden[k];
-    patch(chips, JSON.stringify([lang, locale, HKINDS.map(shown), counts]), () => HKINDS.map((k, i) => el("button", {
-      type: "button", class: "chip-hit k-" + k, "aria-pressed": String(shown(k)), "data-key": "chip:" + k,
-      "aria-label": t("history.chip", { label: kindLabel(k), n: counts[i] }),
-      onclick: () => { hHidden[k] = shown(k); store.set("historyHidden", JSON.stringify(hHidden)); renderHistory(); },
-    }, el("span", { class: "chip" }, kindLabel(k), el("span", { class: "chip-count", text: fmt.int.format(counts[i]) })))));
+    const chip = (k) => {
+      const n = counts[HKINDS.indexOf(k)];
+      return el("button", {
+        type: "button", class: "chip-hit k-" + k, "aria-pressed": String(shown(k)), "data-key": "chip:" + k,
+        "aria-label": t("history.chip", { label: kindLabel(k), n }),
+        onclick: () => { hHidden[k] = shown(k); store.set("historyHidden", JSON.stringify(hHidden)); renderHistory(); },
+      }, el("span", { class: "chip" }, el("span", { class: "chip-label", text: kindLabel(k) }), el("span", { class: "chip-count", text: fmt.int.format(n) })));
+    };
+    // "+n" only when there are such shots; open, an arrow closes it again.
+    // Closed while one of them is shown, it is filled, as a chip that is on.
+    const more = HMORE.filter((k) => counts[HKINDS.indexOf(k)] > 0);
+    const open = hMore && more.length > 0;
+    const moreOn = !open && more.some(shown);
+    patch(chips, JSON.stringify([lang, locale, HKINDS.map(shown), counts, open]), () => [
+      el("div", { class: "chip-row" }, ...HKINDS.filter((k) => !HMORE.includes(k)).map(chip),
+        more.length ? el("button", {
+          type: "button", class: "chip-hit chip-more-hit" + (moreOn ? " on" : ""), "aria-expanded": String(open),
+          "aria-controls": open ? "h-chips-more" : null, "data-key": "chip:more",
+          "aria-label": t("history.more", { n: more.length }),
+          onclick: () => { hMore = !open; renderHistory(); },
+        }, el("span", { class: "chip chip-more" }, open ? icon("down", 14, 2.4) : t("history.moreCount", { n: more.length }))) : null),
+      open ? el("div", { class: "chip-row", id: "h-chips-more" }, ...more.map(chip)) : null,
+    ].filter(Boolean));
     // Newest first by the time shown, so a shot dated wrongly (the clock
     // was not set, or stepped) cannot split the days; those without a
     // known day come last, newest recorded first.
@@ -2250,7 +2275,9 @@
           el("span", { class: "h-badge", text: ignored ? t("history.ignored") : kindLabel(s.outcome) }));
       })))));
     empty.hidden = visible.length > 0;
-    setText(empty, shots.length === 0 ? t("history.empty") : t("history.noMatch"));
+    // Only shots behind a closed "+n": the chips above can't show them.
+    const behindMore = !open && shots.every((s) => HMORE.includes(s.outcome) && !shown(s.outcome));
+    setText(empty, shots.length === 0 ? t("history.empty") : behindMore ? t("history.noMatchMore", { n: more.length }) : t("history.noMatch"));
     foot.hidden = false;
     const kept = { n: hist.capacity || 200 };
     setText(foot, hist.persistent === false ? t("history.keptMemory", kept) : t("history.kept", kept));

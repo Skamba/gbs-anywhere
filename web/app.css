@@ -19,6 +19,7 @@
   --on-solid: #FFFFFF;
   --neutral-bg: #EFEAE3;
   --neutral-fg: #5C5248;
+  --neutral-solid: #6B6157;
   --start-bg: #F6EBDD;
   --start-fg: #8A4F1C;
   --run-bg: #DDEBF3;
@@ -64,7 +65,7 @@
   --bg: #14110E; --surface: #201B16; --sunk: #17130F; --ink: #F3EDE5; --text: #D2C8BB; --muted: #A69A8C;
   --strong: #E5DCD1; --line: #352D26; --line-soft: #2B241E; --field: #4A4037; --nav: #29231D; --nav-ink: #B9AD9F;
   --nav-on: #3B332B; --tile: #2E2720; --accent: #DB9A5E; --on-accent: #1F1B16; --on-solid: #FFFFFF;
-  --neutral-bg: #2F2822; --neutral-fg: #CBBFB2; --start-bg: #3F2C19; --start-fg: #EFB883;
+  --neutral-bg: #2F2822; --neutral-fg: #CBBFB2; --neutral-solid: #6E6358; --start-bg: #3F2C19; --start-fg: #EFB883;
   --run-bg: #16303F; --run-fg: #9FD1EA; --run-dot: #5AB3DD; --run-note: #132733;
   --ok-bg: #173526; --ok-fg: #92D7AD; --ok: #4FB97B; --ok-solid: #2F8053;
   --bad-bg: #431F19; --bad-fg: #F4A298; --bad: #E0695A; --bad-solid: #B5473A; --bad-box: #2D1814; --bad-line: #5A2B24; --bad-field: #7B3C33;
@@ -416,20 +417,34 @@ ul.kinds .chev { display: grid; }
 /* History */
 .panel.loose { gap: 14px; }
 .h-foot { margin-top: 4px; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip-hit { min-height: 44px; padding: 0; border: 0; background: transparent; display: inline-flex; align-items: center; }
-.chip {
-  display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 30px; padding: 3px 8px 3px 10px;
-  border-radius: 999px; border: 1.5px solid var(--cc); background: transparent; color: var(--ci); font-size: 12px; font-weight: 600;
+/* Rows of filter chips: the first never wraps (its chips shrink, labels
+   last), the second holds the kinds behind "+n". */
+.chips { display: flex; flex-direction: column; }
+.chip-row { display: flex; gap: 2px; min-width: 0; }
+.chip-hit {
+  min-height: 40px; min-width: 0; flex: 0 1 auto; padding: 0; border: 0; background: transparent;
+  display: inline-flex; align-items: center;
 }
+.chip {
+  display: inline-flex; align-items: center; justify-content: center; gap: 3px; min-height: 30px; min-width: 0;
+  padding: 3px 4px 3px 7px; border-radius: 999px; border: 1.5px solid var(--cc); background: transparent; color: var(--ci);
+  font-size: 12px; font-weight: 600;
+}
+.chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip-hit[aria-pressed="true"] .chip { background: var(--cc); color: var(--on-solid); }
 .chip-count {
-  min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--cs); color: var(--ci); font-size: 11px;
+  flex: none; min-width: 18px; padding: 1px 4px; border-radius: 999px; background: var(--cs); color: var(--ci); font-size: 11px;
   font-weight: 700; text-align: center;
 }
+.chip-more-hit { flex: none; --cc: var(--neutral-solid); --ci: var(--neutral-fg); }
+.chip.chip-more { min-width: 30px; padding: 3px 7px; white-space: nowrap; }
+.chip-more svg { transform: rotate(180deg); }
+.chip-more-hit.on .chip { background: var(--cc); color: var(--on-solid); }
 .k-succeeded { --cc: var(--ok-solid); --cs: var(--ok-bg); --ci: var(--ok-fg); }
 .k-aborted { --cc: var(--warn-solid); --cs: var(--warn-soft); --ci: var(--warn-fg); }
 .k-failed { --cc: var(--bad-solid); --cs: var(--bad-bg); --ci: var(--bad-fg); }
+/* A grind a newer one replaced (a purge): grey, like a shot that didn't count. */
+.k-discarded { --cc: var(--neutral-solid); --cs: var(--neutral-bg); --ci: var(--neutral-fg); }
 /* A success the grinder ignored: listed under Success, with a neutral badge. */
 .k-ignored { --cs: var(--neutral-bg); --ci: var(--neutral-fg); }
 .day { display: flex; flex-direction: column; gap: 8px; }

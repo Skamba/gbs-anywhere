@@ -36,22 +36,31 @@ pub(crate) enum ShotOutcome {
     /// Measured and sent to the grinder.
     #[serde(alias = "success")]
     Succeeded,
-    /// Ended on purpose ([`AbortCause::on_purpose`]): aborted by a person,
-    /// replaced by a newer grind, or the grinder address changed.
+    /// Ended on purpose: aborted by a person, or the grinder address
+    /// changed.
     Aborted,
     /// Nothing came in time, the grinder stopped waiting, or the end was
     /// missed.
     #[serde(alias = "error")]
     Failed,
+    /// A newer grind replaced it before a result came in, as a purge before
+    /// the dose does on an E65/E80 GbS. Shots saved by earlier builds keep
+    /// `aborted`.
+    Discarded,
 }
 
 impl ShotOutcome {
-    /// How a shot that ended for `cause` is listed.
+    /// How a shot that ended for `cause` is listed. No wildcard, so a new
+    /// cause has to choose.
     fn of(cause: AbortCause) -> Self {
-        if cause.on_purpose() {
-            Self::Aborted
-        } else {
-            Self::Failed
+        match cause {
+            AbortCause::GrinderShotReplaced => Self::Discarded,
+            AbortCause::ShotAbortedByUser | AbortCause::GrinderAddressChanged => Self::Aborted,
+            AbortCause::ShotTimedOut
+            | AbortCause::GrinderShotDropped
+            | AbortCause::GrinderShotRefused
+            | AbortCause::GrinderUnpaired
+            | AbortCause::ShotEndMissed => Self::Failed,
         }
     }
 }
@@ -804,10 +813,23 @@ mod tests {
     }
 
     #[test]
+    fn only_causes_nobody_chose_are_errors() {
+        // The history files by `ShotOutcome::of`; the Start tab by
+        // `on_purpose` (the app's CAUSES): an error in one is one in both.
+        for cause in AbortCause::ALL {
+            assert_eq!(
+                ShotOutcome::of(cause) == ShotOutcome::Failed,
+                !cause.on_purpose(),
+                "{cause:?}"
+            );
+        }
+    }
+
+    #[test]
     fn abort_causes_are_sorted() {
         for (cause, kind) in [
             (AbortCause::ShotAbortedByUser, ShotOutcome::Aborted),
-            (AbortCause::GrinderShotReplaced, ShotOutcome::Aborted),
+            (AbortCause::GrinderShotReplaced, ShotOutcome::Discarded),
             (AbortCause::GrinderAddressChanged, ShotOutcome::Aborted),
             (AbortCause::ShotTimedOut, ShotOutcome::Failed),
             (AbortCause::GrinderShotDropped, ShotOutcome::Failed),
@@ -974,6 +996,47 @@ mod tests {
         // Written back with them, so the words no longer matter.
         let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved["shots"][3]["cause"], "shot_timed_out");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn replaced_shots_saved_as_aborted_stay_so_and_new_ones_are_discarded() {
+        let dir = temp_path("history-discarded");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("history.json");
+        // A grind a newer one replaced, as 0.4.0 saved it.
+        let earlier = r#"{"shots":[{"id":"replaced","started_at":"2026-10-30T07:37:00Z",
+            "ended_at":"2026-10-30T07:37:20Z","outcome":"aborted","time_ms":null,
+            "weight_g":null,"in_grinder_range":null,"target_time_ms":28000,
+            "target_weight_g":36.0,"reason":"a newer Grind-by-Sync grind replaced it",
+            "cause":"grinder_shot_replaced","running_ms":20000,"integration_id":null}]}"#;
+        std::fs::write(&path, earlier).unwrap();
+        let h = History::default();
+        h.use_file(&path).unwrap();
+        // Kept as it was: only shots from now on are discarded.
+        let old = &h.list()[0];
+        assert_eq!(
+            (old.outcome, old.cause),
+            (ShotOutcome::Aborted, Some(AbortCause::GrinderShotReplaced))
+        );
+        let mut r = Recorder::default();
+        r.feed(&started(true), at(0));
+        h.add(
+            r.feed(&aborted(AbortCause::GrinderShotReplaced), at(1))
+                .unwrap(),
+        );
+        let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let outcomes: Vec<_> = saved["shots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["outcome"].clone())
+            .collect();
+        assert_eq!(outcomes, [json!("discarded"), json!("aborted")]);
+        // And read back as discarded.
+        let again = History::default();
+        again.use_file(&path).unwrap();
+        assert_eq!(again.list()[0].outcome, ShotOutcome::Discarded);
         let _ = std::fs::remove_dir_all(dir);
     }
 

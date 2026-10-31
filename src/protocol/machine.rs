@@ -296,8 +296,10 @@ impl AbortCause {
         }
     }
 
-    /// Whether someone chose to end the brew (aborted), rather than it
-    /// failing (an error).
+    /// Whether someone chose to end the brew, rather than it failing. The
+    /// app's `CAUSES` say the same (`onPurpose`), checked in `page.rs`; the
+    /// history files it by `ShotOutcome::of`.
+    #[cfg(test)]
     pub(crate) fn on_purpose(self) -> bool {
         match self {
             Self::ShotAbortedByUser => true,

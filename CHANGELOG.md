@@ -13,6 +13,17 @@ once a minute), so the update card is current instead of up to a day old. The
 daily check and the `--update-check off` switch are unchanged. New endpoint
 `POST /api/update/check`.
 
+### Changed
+
+- The History lists an E65/E80 grind that a newer one replaced before its
+  shot came in (a purge before the dose, say) as **Discarded** rather than
+  aborted. They are hidden until turned on: **+1** after the filters shows
+  their filter in a second row. In `GET /api/history`, `outcome` is then
+  `discarded`, with `cause` still `grinder_shot_replaced`; shots saved
+  before keep `aborted`. An older build leaves these shots out and saves
+  the history without them. The filters are a little narrower, so the first row stays on
+  one line.
+
 ### Fixed
 
 - Step 3 of **Set up grinder** no longer shows an earlier Pairing Code while

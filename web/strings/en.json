@@ -520,6 +520,9 @@
   "history.kind.succeeded": "Success",
   "history.kind.aborted": "Aborted",
   "history.kind.failed": "Error",
+  "history.kind.discarded": "Discarded",
+  "history.moreCount": "+{n}",
+  "history.more": { "one": "+{n} more filter", "other": "+{n} more filters" },
   "history.chip": { "one": "{label}, {n} shot", "other": "{label}, {n} shots" },
   "history.today": "Today",
   "history.yesterday": "Yesterday",
@@ -538,6 +541,7 @@
   "history.loading": "Loading…",
   "history.empty": "No shots yet. Each shot shows up here once it is done.",
   "history.noMatch": "No shots match the filter. Tap a status above to show it again.",
+  "history.noMatchMore": "Only discarded grinds so far: tap +{n} above to show them.",
   "history.kept": { "one": "The last shot is kept on this computer.", "other": "The last {n} shots are kept on this computer." },
   "history.keptMemory": { "one": "The last shot is kept in memory for now, not saved on this computer.", "other": "The last {n} shots are kept in memory for now, not saved on this computer." },
 

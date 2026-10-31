@@ -546,6 +546,9 @@
   "history.kind.succeeded": "Erfolgreich",
   "history.kind.aborted": "Abgebrochen",
   "history.kind.failed": "Fehler",
+  "history.kind.discarded": "Verworfen",
+  "history.moreCount": "+{n}",
+  "history.more": { "one": "+{n} weiterer Filter", "other": "+{n} weitere Filter" },
   "history.chip": { "one": "{label}, {n} Bezug", "other": "{label}, {n} Bezüge" },
   "history.today": "Heute",
   "history.yesterday": "Gestern",
@@ -564,6 +567,7 @@
   "history.loading": "Lädt…",
   "history.empty": "Noch keine Bezüge. Jeder Bezug erscheint hier, sobald er fertig ist.",
   "history.noMatch": "Kein Bezug passt zum Filter. Tippe oben auf einen Status, um ihn wieder anzuzeigen.",
+  "history.noMatchMore": "Bisher nur verworfene Mahlgänge: tippe oben auf +{n}, um sie zu zeigen.",
   "history.kept": { "one": "Der letzte Bezug wird auf diesem Computer gespeichert.", "other": "Die letzten {n} Bezüge werden auf diesem Computer gespeichert." },
   "history.keptMemory": { "one": "Der letzte Bezug wird vorerst nur im Arbeitsspeicher gehalten, nicht auf diesem Computer gespeichert.", "other": "Die letzten {n} Bezüge werden vorerst nur im Arbeitsspeicher gehalten, nicht auf diesem Computer gespeichert." },
 

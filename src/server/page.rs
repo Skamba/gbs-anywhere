@@ -794,12 +794,16 @@ mod tests {
             ShotOutcome::Succeeded,
             ShotOutcome::Aborted,
             ShotOutcome::Failed,
+            ShotOutcome::Discarded,
         ];
         for kind in all {
             // No wildcard, so a new kind has to be named here, next to
             // `all`, as a reminder to add it there too.
             match kind {
-                ShotOutcome::Succeeded | ShotOutcome::Aborted | ShotOutcome::Failed => {}
+                ShotOutcome::Succeeded
+                | ShotOutcome::Aborted
+                | ShotOutcome::Failed
+                | ShotOutcome::Discarded => {}
             }
         }
         let en = catalog("en");
