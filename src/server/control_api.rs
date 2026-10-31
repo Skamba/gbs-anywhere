@@ -20,6 +20,7 @@
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
 //! | GET | `/api/state` | everything, by group (see [below](#get-apistate)) |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them (see [below](#put-apisettings)) |
+//! | POST | `/api/update/check` | look for a newer release now (the app asks when the Status tab opens); ignored while the check is off, one is under way, or the last was under a minute ago. Replies with `update` as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
 //! | GET | `/api/integrations/<id>/settings` | the settings of one added in the app, without passwords (`secrets_set` names the ones that are set) |
@@ -175,6 +176,7 @@ pub(crate) fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::R
         .route("/apple-touch-icon-precomposed.png", get(no_icon))
         .route("/api/state", get(get_state))
         .route("/api/settings", put(put_settings))
+        .route("/api/update/check", post(update_check_now))
         .route("/api/history", get(get_history))
         .route("/api/log", get(get_log))
         .route("/api/log/stream", get(stream_log))
@@ -464,6 +466,14 @@ impl EventStream {
             }
         }
     }
+}
+
+/// Looks for a newer release now (the app asks when the Status tab opens),
+/// then replies with `update` as in `/api/state`. Off, under way or just
+/// done, it looks again later instead (see `request_update_check`).
+async fn update_check_now(State(x): State<Arc<Server>>) -> Json<Value> {
+    x.request_update_check();
+    Json(x.update_json())
 }
 
 async fn put_settings(State(x): State<Arc<Server>>, Body(body): Body<Value>) -> Response {
