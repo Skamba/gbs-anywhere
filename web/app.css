@@ -422,7 +422,7 @@ ul.kinds .chev { display: grid; }
 .chips { display: flex; flex-direction: column; }
 .chip-row { display: flex; gap: 2px; min-width: 0; }
 .chip-hit {
-  min-height: 40px; min-width: 0; flex: 0 1 auto; padding: 0; border: 0; background: transparent;
+  min-height: 44px; min-width: 0; flex: 0 1 auto; padding: 0; border: 0; background: transparent;
   display: inline-flex; align-items: center;
 }
 .chip {
