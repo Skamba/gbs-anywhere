@@ -296,6 +296,41 @@ impl Integrations {
         Ok(())
     }
 
+    /// Starts one over with the settings it has, as a change of settings
+    /// does, so a cause fixed meanwhile (new terms confirmed, a scale back
+    /// on) needn't wait for its next try. Also for one set on the command
+    /// line: nothing is saved.
+    pub(crate) fn restart(&self, server: &Arc<Server>, id: &str) -> Result<(), ChangeError> {
+        let mut entries = self.lock();
+        let entry = entries
+            .iter_mut()
+            .find(|e| e.id() == id)
+            .ok_or(ChangeError::NotFound)?;
+        let (settings, in_app) = match (&entry.saved, &entry.cli) {
+            (Some(saved), _) => (&saved.settings, true),
+            (None, Some(cli)) => (cli, false),
+            // Not so: every entry has one or the other.
+            (None, None) => return Err(ChangeError::NotFound),
+        };
+        let kind = entry.kind.ok_or_else(|| {
+            ChangeError::Invalid(format!(
+                "this version of gbs-anywhere has no `{}` integration",
+                entry.saved.as_ref().map_or("", |s| s.kind.as_str())
+            ))
+        })?;
+        let integration = kind
+            .create(settings, in_app)
+            .map_err(|e| ChangeError::Invalid(format!("{e:#}")))?;
+        if let Some(task) = entry.task.take() {
+            task.abort();
+        }
+        // A new status, so the stopped task can't write to it.
+        entry.status = Status::new(id, kind.id, kind.title);
+        entry.task = Some(spawn(server, integration, entry.status.clone()));
+        tracing::info!("{}: started over from the app ({id})", kind.title);
+        Ok(())
+    }
+
     /// Moves one set on the command line into the app: its settings are
     /// saved as an app entry with the same id, marked as moved. While that
     /// entry is in the settings file, the flags are ignored. It keeps
@@ -771,6 +806,81 @@ mod tests {
             Err(ChangeError::NotFound)
         );
         assert_eq!(m.form("nope"), Err(ChangeError::NotFound));
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[tokio::test]
+    async fn restart_starts_one_over_with_its_settings() {
+        static BUILT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        static COUNTED: Kind = Kind {
+            id: "counted",
+            title: "Counted scale",
+            summary: "",
+            icon: "",
+            fields: &[Field {
+                key: "host",
+                label: "Host",
+                help: "",
+                input: Input::Text,
+                required: true,
+                default: "",
+            }],
+            build: |_| {
+                BUILT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Box::new(Idle))
+            },
+        };
+        let built = || BUILT.load(std::sync::atomic::Ordering::SeqCst);
+        let x = Server::new(MachineConfig::default());
+        let m = x.integrations();
+        m.start_cli(&x, &COUNTED, &host("cli")).unwrap();
+        m.add(&x, &COUNTED, host("app")).unwrap();
+        assert_eq!(built(), 2);
+        let status = |i: usize| m.lock()[i].status.clone();
+        wait_for_health(&status(0), Health::Connected).await;
+        status(0).error("refused".to_owned());
+
+        // From the command line and from the app alike, with the settings
+        // they have.
+        m.restart(&x, "counted").unwrap();
+        assert_eq!(built(), 3);
+        wait_for_health(&status(0), Health::Connected).await;
+        m.restart(&x, "counted-2").unwrap();
+        assert_eq!(built(), 4);
+        assert_eq!(m.form("counted-2").unwrap().settings["host"], "app");
+        assert_eq!(ids(&x), ["counted", "counted-2"]);
+        assert_eq!(m.restart(&x, "nope"), Err(ChangeError::NotFound));
+    }
+
+    #[tokio::test]
+    async fn one_that_cannot_start_is_not_restarted() {
+        let path = temp_dir("restart").join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"integrations":[{"id":"gone","kind":"gone","settings":{}},{"id":"scale","kind":"scale","settings":{}}]}"#,
+        )
+        .unwrap();
+        let x = Server::new(MachineConfig::default());
+        let m = x.integrations();
+        m.load(&x, open(&path), &[&SCALE]).unwrap();
+        assert!(matches!(
+            m.restart(&x, "gone"),
+            Err(ChangeError::Invalid(e)) if e.contains("no `gone` integration")
+        ));
+        // Saved settings it rejects: refused, and its error stays.
+        assert_eq!(
+            m.restart(&x, "scale"),
+            Err(ChangeError::Invalid("Host is required".into()))
+        );
+        let list = m.list();
+        let scale = &list[1].status;
+        assert_eq!(scale.health, Health::Failing);
+        assert!(
+            scale
+                .last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("Host is required"))
+        );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

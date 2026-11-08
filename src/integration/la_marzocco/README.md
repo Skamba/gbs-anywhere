@@ -77,7 +77,8 @@ says which.
 - **New terms come first.** When La Marzocco updates its terms and privacy
   policy, the cloud refuses every request until you confirm them in the La
   Marzocco app, which asks when it opens. The card says so, and
-  gbs-anywhere connects again within 5 minutes of confirming.
+  gbs-anywhere connects again within 5 minutes of confirming, or at once
+  with **Try again now** on its card.
 
 ## Official logo
 

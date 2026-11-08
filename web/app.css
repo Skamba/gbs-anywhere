@@ -342,6 +342,7 @@ dl.facts dd { margin: 2px 0 0; font-weight: 600; overflow-wrap: anywhere; font-v
 }
 .integ-detail { font-size: 13px; color: var(--text); overflow-wrap: anywhere; }
 .integ-detail.bad { color: var(--bad-fg); }
+.integ-retry { align-self: flex-start; gap: 6px; margin-block: -6px; }
 .menu {
   position: absolute; top: 46px; right: 10px; z-index: 5; min-width: 168px; padding: 6px; background: var(--surface);
   border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow-menu); display: flex; flex-direction: column;

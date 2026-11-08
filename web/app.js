@@ -1436,7 +1436,7 @@
     // ago", a live weight): that is written in place, so an open ⋮ menu
     // keeps its focus.
     const sig = JSON.stringify([lang, list.map((i) => [i.id, i.title, i.subject, i.health, i.reports, i.source, i.adoptable, i.kind]),
-      !!kinds, menuFor, editing]);
+      !!kinds, menuFor, editing, retryErrors]);
     const box = $("integ-list");
     patch(box, sig, () => list.map((i) => (i.id === editing && editForm) || integItem(i)));
     list.forEach((i, n) => {
@@ -1478,6 +1478,9 @@
     // The status line is filled in by renderIntegrations.
     const item = el("div", { class: "integ" }, head,
       el("p", { class: "integ-detail" + (bad ? " bad" : ""), hidden: true }),
+      bad && kindOf(i.kind) ? el("button", { type: "button", class: "link-btn integ-retry", onclick: () => reconnect(i) },
+        icon("retry", 16, 2.2), t("integ.retryNow")) : null,
+      retryErrors[i.id] ? el("p", { class: "integ-detail bad", role: "alert", text: t("integ.retryFailed", { error: retryErrors[i.id] }) }) : null,
       foot.length ? el("p", { class: "foot", text: foot.join(" · ") }) : null);
     if (menuFor === key) item.append(menuList(key, t("integ.menu", { title: i.title }), actions));
     return item;
@@ -1508,9 +1511,31 @@
   /** The ⋮ menu: only integrations in the app can be deleted there. */
   function integActions(i) {
     const acts = [];
-    if (kindOf(i.kind)) acts.push([t("common.edit"), "edit", "", () => (i.source === "command_line" ? moveToEdit(i) : startEdit(i))]);
+    // Without its kind this build can't start it: only Delete helps.
+    if (kindOf(i.kind)) {
+      acts.push([t("integ.reconnect"), "retry", "", () => reconnect(i)]);
+      acts.push([t("common.edit"), "edit", "", () => (i.source === "command_line" ? moveToEdit(i) : startEdit(i))]);
+    }
     if (i.source === "app") acts.push([t("common.delete"), "trash", "danger", () => confirmDelete(i)]);
     return acts;
+  }
+
+  /** Starts an integration over now, as saving its settings does, so a
+   *  cause fixed meanwhile (new terms confirmed, the scale back on) needn't
+   *  wait for its next try. The card follows with the next state; a
+   *  refusal (settings it can't start with) shows on the card until the
+   *  next try. */
+  const reconnecting = new Set();
+  const retryErrors = {};
+  async function reconnect(i) {
+    if (reconnecting.has(i.id)) return;
+    reconnecting.add(i.id);
+    delete retryErrors[i.id];
+    try { await api("/api/integrations/" + encodeURIComponent(i.id) + "/restart", { method: "POST" }); }
+    catch (err) { retryErrors[i.id] = errorText(err); }
+    reconnecting.delete(i.id);
+    invalidateIntegrations();
+    tick();
   }
 
   $("integ-toggle").addEventListener("click", () => {
