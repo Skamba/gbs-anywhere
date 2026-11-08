@@ -510,6 +510,8 @@
   "version.latest": "Latest release",
   "version.notChecked": "not checked yet",
   "version.checking": "Checking…",
+  "version.checkNow": "Check now",
+  "version.checked": "Last checked {age}",
   "version.whatsNew": "What’s new",
   "version.whatsNewLabel": "What’s new (opens in a new tab)",
   "version.failing": "Couldn’t reach GitHub",

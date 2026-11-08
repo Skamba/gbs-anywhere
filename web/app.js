@@ -2102,22 +2102,34 @@
     $("v-latest-box").hidden = !on;
     $("v-latest").textContent = !on ? "–" : u.latest || (failing ? "–" : t("version.notChecked"));
     $("v-note").hidden = !on;
+    // When it last looked, as of the state, so it goes on until the next one.
+    const age = on && u.checked_age_ms != null ? ageOf(u.checked_age_ms + (performance.now() - stateAt)) : null;
+    const checked = age ? t("version.checked", { age }) : "";
+    // German ages end in a period of their own ("vor 3 Std.").
+    $("v-note").textContent = (checked ? checked + (checked.endsWith(".") ? " " : ". ") : "") + t("version.note");
+    $("v-check").hidden = !on;
+    $("v-check").disabled = !!(on && (u.checking || recheckInFlight));
     $("v-off").hidden = !(u && !on);
     $("v-whatsnew").hidden = !(on && u.available);
   }
 
-  // Opening the Status tab asks the server to look for a newer release now,
-  // so "Up to date" is fresh rather than up to a day old. The server ignores
-  // it when the check is off or it looked under a minute ago; the result
-  // comes in with the next state poll.
-  let recheckInFlight = false;
+  // Opening the Status tab, or "Check now" on it, asks the server to look
+  // for a newer release now, so "Up to date" is fresh rather than up to a
+  // day old. The server ignores it when the check is off or it looked under
+  // a minute ago; the result comes in with the next state poll.
+  let recheckInFlight = false, recheckWanted = false;
   async function recheckUpdate() {
-    if (recheckInFlight || !S || !S.settings || !S.settings.update_check) return;
+    // The page opened on the Status tab: asked once the first state is in.
+    if (!S || !S.settings) { recheckWanted = true; return; }
+    if (recheckInFlight || !S.settings.update_check) return;
     recheckInFlight = true;
+    $("v-check").disabled = true;
     try { await api("/api/update/check", { method: "POST" }); } catch (_) {}
     recheckInFlight = false;
     tick();
   }
+
+  $("v-check").addEventListener("click", () => recheckUpdate());
 
   /** Renders the Status tab; `L` is this render's linkStatus(), when it has one. */
   function renderStatus(L) {
@@ -3894,6 +3906,7 @@
     // answer stands, not the settings from before it (see putSettings).
     if (S && S.settings && !restarted && (settingsSaving || gen !== settingsGen)) st.settings = S.settings;
     S = st; stateAt = performance.now();
+    if (recheckWanted) { recheckWanted = false; if (tab === "status") recheckUpdate(); }
     if (restarted) {
       events = []; lastSeq = 0; seenAt.clear();
       ui.dismissed = 0; ui.planKey = null;

@@ -409,6 +409,7 @@ ul.kinds .chev { display: grid; }
 .seg button[aria-pressed="true"] { background: var(--nav-on); color: var(--ink); font-weight: 600; box-shadow: var(--shadow-tab); }
 .v-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; }
 .link-btn { display: inline-flex; align-items: center; min-height: 44px; padding: 0 2px; border: 0; background: transparent; font-size: 14px; font-weight: 600; color: var(--accent); text-align: left; text-decoration: none; }
+.link-btn:disabled { opacity: .45; cursor: default; }
 .gh-link {
   display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-left: auto; font-size: 14px; font-weight: 600;
   color: var(--strong); text-decoration: none;

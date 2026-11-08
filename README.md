@@ -111,9 +111,10 @@ proxy's name the same way.
 
 **Update check.** One minute after it starts, and then once a day,
 gbs-anywhere asks GitHub for its latest release, and the gbs-anywhere card
-under **Status** says when a newer one is out. Opening the **Status** tab
-also asks once right away (at most once a minute), so the card is current
-rather than up to a day old. GitHub sees the request like
+under **Status** says when a newer one is out and when it last looked.
+Opening the **Status** tab, or tapping **Check now** on that card, asks
+right away (at most once a minute), as does turning the check on in the
+app, so the card is current rather than up to a day old. GitHub sees the request like
 any other, including your IP address; it carries nothing but the
 gbs-anywhere version. Turn it off under **Status → Settings**, or with
 `--update-check off` (`UPDATE_CHECK=off` in Docker). It goes through a proxy
