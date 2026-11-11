@@ -2104,11 +2104,10 @@
     $("v-note").hidden = !on;
     // When it last looked, as of the state, so it goes on until the next one.
     const age = on && u.checked_age_ms != null ? ageOf(u.checked_age_ms + (performance.now() - stateAt)) : null;
-    const checked = age ? t("version.checked", { age }) : "";
-    // German ages end in a period of their own ("vor 3 Std.").
-    $("v-note").textContent = (checked ? checked + (checked.endsWith(".") ? " " : ". ") : "") + t("version.note");
+    $("v-note").textContent = age ? t("version.checkedNote", { age, note: t("version.note") }) : t("version.note");
     $("v-check").hidden = !on;
-    $("v-check").disabled = !!(on && (u.checking || recheckInFlight));
+    // aria-disabled rather than disabled: the button keeps the focus.
+    $("v-check").setAttribute("aria-disabled", String(!!(on && (u.checking || recheckInFlight))));
     $("v-off").hidden = !(u && !on);
     $("v-whatsnew").hidden = !(on && u.available);
   }
@@ -2123,13 +2122,15 @@
     if (!S || !S.settings) { recheckWanted = true; return; }
     if (recheckInFlight || !S.settings.update_check) return;
     recheckInFlight = true;
-    $("v-check").disabled = true;
+    $("v-check").setAttribute("aria-disabled", "true");
     try { await api("/api/update/check", { method: "POST" }); } catch (_) {}
     recheckInFlight = false;
     tick();
   }
 
-  $("v-check").addEventListener("click", () => recheckUpdate());
+  $("v-check").addEventListener("click", (e) => {
+    if (e.currentTarget.getAttribute("aria-disabled") !== "true") recheckUpdate();
+  });
 
   /** Renders the Status tab; `L` is this render's linkStatus(), when it has one. */
   function renderStatus(L) {
