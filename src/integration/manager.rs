@@ -309,7 +309,7 @@ impl Integrations {
         let (settings, in_app) = match (&entry.saved, &entry.cli) {
             (Some(saved), _) => (&saved.settings, true),
             (None, Some(cli)) => (cli, false),
-            // Not so: every entry has one or the other.
+            // Can't happen: every entry has one or the other.
             (None, None) => return Err(ChangeError::NotFound),
         };
         let kind = entry.kind.ok_or_else(|| {
