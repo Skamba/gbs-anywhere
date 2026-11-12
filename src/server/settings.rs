@@ -636,6 +636,10 @@ impl Server {
         // the value does.
         if UPDATE_CHECK.changed(&old.update_check, &new.update_check) {
             self.set_update_check(new.update_check.0);
+            // Turned on in the app: it looks now rather than a minute later.
+            if new.update_check.0 && !old.update_check.0 {
+                self.request_update_check();
+            }
         }
         if SHOT_WINDOW.changed(&old.shot_window_s, &new.shot_window_s) {
             self.with(|m, _| m.set_shot_window(window_limit(new.shot_window_s.0)));

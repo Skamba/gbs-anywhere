@@ -539,6 +539,8 @@
   "version.latest": "Neueste Version",
   "version.notChecked": "noch nicht geprüft",
   "version.checking": "Wird geprüft…",
+  "version.checkNow": "Jetzt prüfen",
+  "version.checkedNote": "Zuletzt {age} geprüft. {note}",
   "version.whatsNew": "Was ist neu",
   "version.whatsNewLabel": "Was ist neu (öffnet einen neuen Tab)",
   "version.failing": "GitHub nicht erreichbar",

@@ -167,8 +167,8 @@ async fn run(server: Arc<Server>, cfg: UpdateConfig, http: reqwest::Client) {
             wait = cfg.first;
             continue;
         }
-        // A manual re-check asked for while the last look ran is picked up
-        // here; otherwise wait for the timer or a wake.
+        // A re-check asked for before the wait began is picked up here;
+        // otherwise wait for the timer or a wake.
         if !server.take_recheck() {
             tokio::select! {
                 () = tokio::time::sleep(wait) => {}
@@ -189,6 +189,8 @@ async fn run(server: Arc<Server>, cfg: UpdateConfig, http: reqwest::Client) {
                 continue;
             }
             s.checking = true;
+            // This look answers a re-check asked for since the wait ended.
+            s.recheck = false;
         }
         let found = latest_release(&http, &cfg.url).await;
         let mut s = server.update_state();
@@ -558,6 +560,35 @@ mod tests {
         assert!(latest_release(&http, &url).await.is_err());
         *reply.lock().unwrap() = (StatusCode::OK, r#"{"tag_name":"v1.2.3"}"#.to_owned());
         assert_eq!(latest_release(&http, &url).await.unwrap(), "1.2.3");
+    }
+
+    #[tokio::test]
+    async fn turned_on_in_the_app_it_looks_right_away() {
+        let reply = Arc::new(Mutex::new((
+            StatusCode::OK,
+            r#"{"tag_name":"v999.0.0"}"#.to_owned(),
+        )));
+        let agents = Arc::new(Mutex::new(Vec::new()));
+        let url = fake(reply, agents.clone()).await;
+        let server = Server::new(MachineConfig::default());
+        let off = crate::server::Startup {
+            update_check: Some(false),
+            ..Default::default()
+        };
+        server.start_settings(off, None).unwrap();
+        // A long interval, so only turning it on makes it look soon.
+        server.start_update_check(UpdateConfig {
+            url,
+            first: Duration::from_secs(600),
+            every: Duration::from_secs(600),
+            retry: Duration::from_secs(600),
+            timeout: Duration::from_secs(5),
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let on = crate::server::settings::SettingsChange::parse(&json!({ "update_check": true }));
+        server.change_settings(on.unwrap()).unwrap();
+        wait_for("the look", || server.update_json()["latest"] == "999.0.0").await;
+        assert_eq!(agents.lock().unwrap().len(), 1, "one look");
     }
 
     #[tokio::test]

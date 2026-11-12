@@ -386,7 +386,6 @@ ul.kinds .chev { display: grid; }
 .win-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .set-from { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; font-size: 12px; color: var(--muted); }
 .set-from .link-btn { margin-left: auto; font-size: 13px; }
-.set-from .link-btn[aria-disabled="true"] { opacity: .45; cursor: default; }
 .win-field { width: 116px; justify-content: center; gap: 4px; }
 .win-field input { flex: 1 1 auto; width: 0; min-width: 0; font-size: 17px; text-align: right; }
 .win-field .unit { font-size: 15px; }
@@ -410,6 +409,7 @@ ul.kinds .chev { display: grid; }
 .seg button[aria-pressed="true"] { background: var(--nav-on); color: var(--ink); font-weight: 600; box-shadow: var(--shadow-tab); }
 .v-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 12px; }
 .link-btn { display: inline-flex; align-items: center; min-height: 44px; padding: 0 2px; border: 0; background: transparent; font-size: 14px; font-weight: 600; color: var(--accent); text-align: left; text-decoration: none; }
+.link-btn[aria-disabled="true"] { opacity: .45; cursor: default; }
 .gh-link {
   display: inline-flex; align-items: center; gap: 6px; min-height: 44px; margin-left: auto; font-size: 14px; font-weight: 600;
   color: var(--strong); text-decoration: none;

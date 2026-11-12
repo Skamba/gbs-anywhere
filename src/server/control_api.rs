@@ -20,7 +20,7 @@
 //! | GET | `/favicon.ico`, `/apple-touch-icon*.png` | 404, so browsers asking for icons don't count as the grinder |
 //! | GET | `/api/state` | everything, by group (see [below](#get-apistate)) |
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them (see [below](#put-apisettings)) |
-//! | POST | `/api/update/check` | look for a newer release now (the app asks when the Status tab opens); ignored while the check is off, one is under way, or the last was under a minute ago. Replies with `update` as in `/api/state` |
+//! | POST | `/api/update/check` | look for a newer release now (the app asks when the Status tab opens and on Check now; turning `update_check` on asks too); ignored while the check is off, one is under way, or the last was under a minute ago. Replies with `update` as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
 //! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
 //! | GET | `/api/integrations/<id>/settings` | the settings of one added in the app, without passwords (`secrets_set` names the ones that are set) |
@@ -65,7 +65,7 @@
 //!   * its `source`, and the `start` value it goes back to;
 //!   * `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit;
 //!   * `persistent`: whether there is a settings file to keep them in.
-//! * `update`: the update check: the `latest` release found, whether it is newer (`available`), whether looking `failing`, and the releases page `url`.
+//! * `update`: the update check: the `latest` release found, whether it is newer (`available`), whether looking `failing`, whether a look is under way (`checking`), how long ago the last one ended (`checked_age_ms`, `null` before the first), and the releases page `url`.
 //! * `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq`; on this route also
 //!   * `ip`: the IPv4 address the request came in on, which an E64 WS can use as its Xenia hostname (`null` over loopback, a link-local or shared (Tailscale) address, or IPv6);
 //!   * `ip_in_docker_range`: whether it is in 172.17.0.0 to 172.31.255.255, where Docker most likely gave it to its container, so the grinder can't reach it.

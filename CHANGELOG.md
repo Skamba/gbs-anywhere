@@ -13,6 +13,12 @@ once a minute), so the update card is current instead of up to a day old. The
 daily check and the `--update-check off` switch are unchanged. New endpoint
 `POST /api/update/check`.
 
+- **Check now** on the gbs-anywhere card under **Status** looks for a newer
+  release right away, and the card says when it last looked. Turning the
+  check on in the app looks right away too, rather than a minute later, and
+  so does opening the page on the **Status** tab (a reload, a bookmark),
+  which didn't before.
+
 - **Reconnect** in an integration's ⋮ menu starts it over with its settings,
   as saving them does, also for one set on the command line. While the card
   shows an error, it offers the same as **Try again now**: after confirming
