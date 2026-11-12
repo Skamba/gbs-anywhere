@@ -13,6 +13,13 @@ once a minute), so the update card is current instead of up to a day old. The
 daily check and the `--update-check off` switch are unchanged. New endpoint
 `POST /api/update/check`.
 
+- **Reconnect** in an integration's ⋮ menu starts it over with its settings,
+  as saving them does, also for one set on the command line. While the card
+  shows an error, it offers the same as **Try again now**: after confirming
+  La Marzocco's new terms, say, it connects at once rather than at its next
+  try, up to 5 minutes later. New endpoint
+  `POST /api/integrations/<id>/restart`.
+
 ### Changed
 
 - The History lists an E65/E80 grind that a newer one replaced before its
