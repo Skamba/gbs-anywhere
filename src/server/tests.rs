@@ -1274,6 +1274,9 @@ async fn integrations_are_edited_and_moved_into_the_app() {
     let edit = json!({ "settings": { "host": "127.0.0.1:10" } });
     let (code, body) = call(reqwest::Method::PUT, url(""), Some(edit.clone())).await;
     assert_eq!((code, body["code"].clone()), on_command_line);
+    // Started over all the same: nothing is saved.
+    let (code, body) = call(reqwest::Method::POST, url("/restart"), None).await;
+    assert_eq!((code, &body["id"]), (200, &json!("half_decent")));
 
     let (code, view) = call(reqwest::Method::POST, url("/adopt"), None).await;
     assert_eq!(code, 200);
@@ -1307,6 +1310,8 @@ async fn integrations_are_edited_and_moved_into_the_app() {
     let (code, body) = call(reqwest::Method::GET, format!("{unknown}/settings"), None).await;
     assert_eq!((code, body["code"].clone()), not_found);
     let (code, body) = call(reqwest::Method::POST, format!("{unknown}/adopt"), None).await;
+    assert_eq!((code, body["code"].clone()), not_found);
+    let (code, body) = call(reqwest::Method::POST, format!("{unknown}/restart"), None).await;
     assert_eq!((code, body["code"].clone()), not_found);
 
     let saved: Value =
@@ -1426,6 +1431,7 @@ async fn the_app_answers_home_names_only_and_refuses_other_sites() {
         (reqwest::Method::PUT, "/api/integrations/x"),
         (reqwest::Method::DELETE, "/api/integrations/x"),
         (reqwest::Method::POST, "/api/integrations/x/adopt"),
+        (reqwest::Method::POST, "/api/integrations/x/restart"),
         (reqwest::Method::POST, "/api/machine"),
         (reqwest::Method::POST, "/api/grinder/pairing"),
         (reqwest::Method::PUT, "/api/overrides"),

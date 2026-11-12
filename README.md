@@ -299,8 +299,11 @@ integrations run at once.
 
 Under **Status → Machine integrations**, tap **+**, pick one and
 fill in its form. Each integration gets a card showing whether it is ready
-and what it last sent; its ⋮ menu has **Edit**, and **Delete** for those
-added in the app. Integrations added in the app are saved, with their
+and what it last sent; its ⋮ menu has **Reconnect** and **Edit**, and
+**Delete** for those added in the app. **Reconnect** starts it over with its
+settings, as saving them does; while the card shows an error, it offers the
+same as **Try again now**, for when you fixed the cause and don't want to
+wait for its next try. Integrations added in the app are saved, with their
 passwords, in `/data` (from source: the `--config` file); without one they
 last until the next restart.
 

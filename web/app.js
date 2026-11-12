@@ -1424,6 +1424,13 @@
   function invalidateIntegrations() { repatch($("integ-list")); renderStatus(); }
   function renderIntegrations() {
     const list = S.integrations || [];
+    // A failed start-over is moot once its card has moved on (or gone):
+    // it would stand next to an integration that works again, or that
+    // fails for a new reason.
+    for (const id of Object.keys(retryErrors)) {
+      const i = list.find((x) => x.id === id);
+      if (!i || i.health !== retryErrors[id].health) delete retryErrors[id];
+    }
     $("integ-count").textContent = String(list.length);
     $("integ-toggle").setAttribute("aria-expanded", String(integOpen));
     $("integ-body").hidden = !integOpen;
@@ -1445,6 +1452,11 @@
       const text = integLine(i);
       setText(line, text);
       line.hidden = !text;
+      // Written in place too, so a rebuild doesn't announce it again.
+      const retried = box.children[n].querySelector(":scope > .integ-retried");
+      const why = retryLineOf(i);
+      setText(retried, why ? t("integ.retryFailed", { error: why }) : "");
+      retried.hidden = !why;
     });
   }
 
@@ -1478,6 +1490,9 @@
     // The status line is filled in by renderIntegrations.
     const item = el("div", { class: "integ" }, head,
       el("p", { class: "integ-detail" + (bad ? " bad" : ""), hidden: true }),
+      bad && kindOf(i.kind) ? el("button", { type: "button", class: "link-btn integ-retry", onclick: () => reconnect(i) },
+        icon("retry", 16, 2.2), t("integ.retryNow")) : null,
+      el("p", { class: "integ-detail bad integ-retried", role: "status", hidden: true }),
       foot.length ? el("p", { class: "foot", text: foot.join(" · ") }) : null);
     if (menuFor === key) item.append(menuList(key, t("integ.menu", { title: i.title }), actions));
     return item;
@@ -1508,9 +1523,42 @@
   /** The ⋮ menu: only integrations in the app can be deleted there. */
   function integActions(i) {
     const acts = [];
-    if (kindOf(i.kind)) acts.push([t("common.edit"), "edit", "", () => (i.source === "command_line" ? moveToEdit(i) : startEdit(i))]);
+    // Without its kind this build can't start it: only Delete helps.
+    if (kindOf(i.kind)) {
+      acts.push([t("integ.reconnect"), "retry", "", () => reconnect(i)]);
+      acts.push([t("common.edit"), "edit", "", () => (i.source === "command_line" ? moveToEdit(i) : startEdit(i))]);
+    }
     if (i.source === "app") acts.push([t("common.delete"), "trash", "danger", () => confirmDelete(i)]);
     return acts;
+  }
+
+  /** Starts an integration over now, as saving its settings does, so a
+   *  cause fixed meanwhile (new terms confirmed, the scale back on) needn't
+   *  wait for its next try. The card follows with the next state; a
+   *  refusal (settings it can't start with) shows on the card until the
+   *  next try, a save or delete, or until the card's health changes. */
+  const reconnecting = new Set();
+  const retryErrors = {};
+  /** Why its last start-over failed, unless the card already says so
+   *  (settings it couldn't start with at load): a second line would only
+   *  repeat it. Both texts come from the same check of its settings on
+   *  the server, so the refusal is part of the card's error. */
+  function retryLineOf(i) {
+    const r = retryErrors[i.id];
+    return r && !(r.server && (i.last_error || "").includes(r.server)) ? r.text : "";
+  }
+  async function reconnect(i) {
+    if (reconnecting.has(i.id)) return;
+    reconnecting.add(i.id);
+    delete retryErrors[i.id];
+    try { await api("/api/integrations/" + encodeURIComponent(i.id) + "/restart", { method: "POST" }); }
+    catch (err) {
+      const now = ((S && S.integrations) || []).find((x) => x.id === i.id);
+      retryErrors[i.id] = { text: errorText(err), server: err && err.server, health: now ? now.health : i.health };
+    }
+    reconnecting.delete(i.id);
+    renderStatus();
+    tick();
   }
 
   $("integ-toggle").addEventListener("click", () => {
@@ -1575,6 +1623,7 @@
           btn.disabled = true;
           try {
             await api("/api/integrations/" + encodeURIComponent(i.id), { method: "DELETE" });
+            delete retryErrors[i.id];
             closeSheet();
             invalidateIntegrations();
             await tick();
@@ -1643,6 +1692,7 @@
       save.disabled = true; error.hidden = true;
       try {
         await api("/api/integrations/" + encodeURIComponent(i.id), { method: "PUT", body: JSON.stringify({ settings: formValues(fields) }) });
+        delete retryErrors[i.id];
         stopEdit();
         await tick();
       } catch (err) { setText(error, errorText(err)); error.hidden = false; save.disabled = false; }

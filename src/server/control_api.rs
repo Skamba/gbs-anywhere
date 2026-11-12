@@ -26,6 +26,7 @@
 //! | GET | `/api/integrations/<id>/settings` | the settings of one added in the app, without passwords (`secrets_set` names the ones that are set) |
 //! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes one added in the app and restarts it; a password left out or empty stays |
 //! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
+//! | POST | `/api/integrations/<id>/restart` | starts one over with its settings, as a change does (also one set on the command line); replies `{"id":…}` |
 //! | DELETE | `/api/integrations/<id>` | stops and removes one added in the app; replies `{"id":…}`, as adding and changing do |
 //! | GET | `/api/history` | the last shots the grinder asked for (see [below](#get-apihistory)) |
 //! | GET | `/api/log?after=N` | the server's last log lines with `seq > N` (see [below](#get-apilog)) |
@@ -193,6 +194,7 @@ pub(crate) fn control_router(state: Arc<Server>, hosts: AllowedHosts) -> axum::R
         )
         .route("/api/integrations/{id}/settings", get(integration_settings))
         .route("/api/integrations/{id}/adopt", post(adopt_integration))
+        .route("/api/integrations/{id}/restart", post(restart_integration))
         .route("/api/machine", post(patch_machine))
         .route("/api/grinder/pairing", post(grinder_pairing))
         .route("/api/grinder/accepted", post(grinder_accepted))
@@ -665,6 +667,16 @@ async fn update_integration(
 async fn adopt_integration(State(x): State<Arc<Server>>, Segment(id): Segment<String>) -> Response {
     match x.integrations().adopt(&id) {
         Ok(view) => Json(view).into_response(),
+        Err(e) => change_error(&e),
+    }
+}
+
+async fn restart_integration(
+    State(x): State<Arc<Server>>,
+    Segment(id): Segment<String>,
+) -> Response {
+    match x.integrations().restart(&x, &id) {
+        Ok(()) => Json(json!({ "id": id })).into_response(),
         Err(e) => change_error(&e),
     }
 }
