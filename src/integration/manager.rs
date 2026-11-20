@@ -60,7 +60,14 @@ pub(crate) enum ChangeError {
     NotPersistent,
     /// The settings file could not be written.
     Save(String),
+    /// [`MAX_INTEGRATIONS`] are there already.
+    Full,
 }
+
+/// How many integrations the app can add: more than a home needs, and few
+/// enough that repeated adds can't fill the settings file or start tasks
+/// without end.
+pub(crate) const MAX_INTEGRATIONS: usize = 16;
 
 impl std::fmt::Display for ChangeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -75,6 +82,10 @@ impl std::fmt::Display for ChangeError {
                 "there is no settings file to keep it in: start gbs-anywhere with --config",
             ),
             Self::Save(e) => write!(f, "could not save the settings: {e}"),
+            Self::Full => write!(
+                f,
+                "there are {MAX_INTEGRATIONS} integrations already: remove one first"
+            ),
         }
     }
 }
@@ -91,6 +102,7 @@ impl ChangeError {
             Self::InApp => "integration_in_app",
             Self::NotPersistent => "settings_file_missing",
             Self::Save(_) => "settings_not_saved",
+            Self::Full => "integration_limit_reached",
         }
     }
 }
@@ -180,6 +192,9 @@ impl Integrations {
             .create(&settings, true)
             .map_err(|e| ChangeError::Invalid(format!("{e:#}")))?;
         let mut entries = self.lock();
+        if entries.len() >= MAX_INTEGRATIONS {
+            return Err(ChangeError::Full);
+        }
         let id = free_id(&entries, kind.id);
         let status = Status::new(id.clone(), kind.id, kind.title);
         entries.push(Entry {
@@ -691,6 +706,21 @@ mod tests {
         // A freed id is reused.
         assert_eq!(m.add(&x, &SCALE, host("d")).unwrap(), "scale-2");
         assert_eq!(m.adopt("scale").err(), Some(ChangeError::NotPersistent));
+    }
+
+    #[tokio::test]
+    async fn the_app_adds_no_more_than_the_limit() {
+        let x = Server::new(MachineConfig::default());
+        let m = x.integrations();
+        m.start_cli(&x, &SCALE, &host("cli")).unwrap();
+        for i in 1..MAX_INTEGRATIONS {
+            m.add(&x, &SCALE, host(&i.to_string())).unwrap();
+        }
+        assert_eq!(m.add(&x, &SCALE, host("one more")), Err(ChangeError::Full));
+        assert_eq!(ids(&x).len(), MAX_INTEGRATIONS);
+        // Room again once one is removed.
+        m.remove("scale-2").unwrap();
+        assert_eq!(m.add(&x, &SCALE, host("again")).unwrap(), "scale-2");
     }
 
     #[tokio::test]

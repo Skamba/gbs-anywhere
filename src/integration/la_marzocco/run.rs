@@ -375,15 +375,19 @@ struct Seen {
     /// computer's, which may be unset or off). Only a newer one can be a
     /// brew's shot.
     newest_ms: Option<i64>,
-    /// For the idle line.
+    /// For the idle line: the newest coffee, reported or not.
     idle: Option<Idle>,
 }
 
 impl Seen {
     /// Takes in a fetched list, in whatever order the cloud sent it.
     fn note(&mut self, list: &[LastCoffee]) {
-        if let Some(t) = list.iter().map(|c| c.time).max() {
-            self.newest_ms = Some(self.newest_ms.map_or(t, |n| n.max(t)));
+        let Some(c) = list.iter().max_by_key(|c| c.time) else {
+            return;
+        };
+        if self.newest_ms.is_none_or(|n| c.time > n) {
+            self.newest_ms = Some(c.time);
+            self.idle = Some(Idle::from(c));
         }
     }
 }
@@ -446,7 +450,8 @@ async fn watch_brew(
     seen: &mut Seen,
     repeats: &mut Repeats,
 ) -> anyhow::Result<()> {
-    let poll_s = cfg.poll.as_secs();
+    // The form takes tenths (1.5 s).
+    let poll_s = (cfg.poll.as_secs_f64() * 10.0).round() / 10.0;
     tracing::info!("{TITLE}: grinder is waiting, watching the coffee log every {poll_s} s");
     let waiting = Detail::keyed(
         "la_marzocco.watching",
@@ -509,7 +514,6 @@ async fn watch_brew(
             .dose_value
             .map(|g| (tenths(g), "weighed by the machine".to_owned()));
         link.report(brew, time, weight);
-        seen.idle = Some(Idle::from(c));
         return Ok(());
     }
 }
@@ -544,8 +548,12 @@ mod tests {
         };
         seen.note(&list);
         assert_eq!(seen.newest_ms, Some(9_000));
+        // The idle line shows it too, also when it was made without a knob
+        // press and so never reported.
+        assert_eq!(seen.idle.as_ref().map(|i| i.time_ms), Some(9_000));
         seen.note(&list[..1]);
         assert_eq!(seen.newest_ms, Some(9_000), "never goes back");
+        assert_eq!(seen.idle.as_ref().map(|i| i.time_ms), Some(9_000));
     }
 
     #[test]

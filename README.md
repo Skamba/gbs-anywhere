@@ -113,8 +113,9 @@ proxy's name the same way.
 gbs-anywhere asks GitHub for its latest release, and the gbs-anywhere card
 under **Status** says when a newer one is out and when it last looked.
 Opening the **Status** tab, or tapping **Check now** on that card, asks
-right away (at most once a minute), as does turning the check on in the
-app, so the card is current rather than up to a day old. GitHub sees the
+right away (at most once a minute: **Check now** is greyed out for a minute
+after each look), as does turning the check on in the app, so the card is
+current rather than up to a day old. GitHub sees the
 request like any other, including your IP address; it carries nothing but
 the gbs-anywhere version. Turn it off under **Status → Settings**, or with
 `--update-check off` (`UPDATE_CHECK=off` in Docker). It goes through a proxy
@@ -305,7 +306,7 @@ settings, as saving them does; while the card shows an error, it offers the
 same as **Try again now**, for when you fixed the cause and don't want to
 wait for its next try. Integrations added in the app are saved, with their
 passwords, in `/data` (from source: the `--config` file); without one they
-last until the next restart.
+last until the next restart. Up to 16 can run at once.
 
 An integration added in the app can be changed there too. Its passwords are
 never shown again; leave a password empty to keep the saved one.

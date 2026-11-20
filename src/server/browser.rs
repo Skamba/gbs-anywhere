@@ -216,6 +216,7 @@ pub(crate) const REFUSED_SITE: &str = "refused requests from other sites";
 pub(crate) const REFUSED_GRINDER: &str = "refused requests on the grinder's routes";
 pub(crate) const UNKNOWN_GRINDER: &str = "unknown requests on the grinder's routes";
 pub(crate) const UNPARSABLE_GRINDER: &str = "unparsable writes on the grinder's routes";
+pub(crate) const GRINDER_IDENTITY: &str = "identity requests on the grinder's routes";
 
 /// For the app's routes: a host name of the home network, and for writes, no
 /// other site.

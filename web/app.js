@@ -1167,9 +1167,20 @@
   $("s2-err-info-btn").addEventListener("click", () => { ui.errInfo = !ui.errInfo; renderStart(); });
   $("s2-dismiss").addEventListener("click", () => {
     const o = lastOf(["shot_aborted"]);
-    if (o) ui.dismissed = o.seq;
+    if (o) {
+      ui.dismissed = o.seq;
+      // Kept over a reload, for this run of the server only: its event
+      // numbers start over when it restarts.
+      store.set("dismissed", S.server.boot_id + ":" + o.seq);
+    }
     renderStart();
   });
+  /** The shot error dismissed on this device before a reload, while the
+   *  server that numbered it still runs. */
+  function dismissedFor(bootId) {
+    const [boot, seq] = String(store.get("dismissed") || "").split(":");
+    return boot === String(bootId) && Number(seq) > 0 ? Number(seq) : 0;
+  }
 
   // Manual entry: the default flow without an integration.
   function setHint(message, warn) {
@@ -2157,7 +2168,8 @@
     $("v-note").textContent = age ? t("version.checkedNote", { age, note: t("version.note") }) : t("version.note");
     $("v-check").hidden = !on;
     // aria-disabled rather than disabled: the button keeps the focus.
-    $("v-check").setAttribute("aria-disabled", String(!!(on && (u.checking || recheckInFlight))));
+    // Off for a minute after each look, as the server would ignore it.
+    $("v-check").setAttribute("aria-disabled", String(!!(on && (!u.can_check || recheckInFlight))));
     $("v-off").hidden = !(u && !on);
     $("v-whatsnew").hidden = !(on && u.available);
   }
@@ -3125,7 +3137,7 @@
       idValue: "", idError: "", idBusy: false, refused: null, late: false,
       confirmed: false,     // Accepted was tapped here for this attempt
       statusOn: false,      // once paired: Status reads On on the grinder (true), or Off ("no")
-      waitFrom: null,       // performance.now() the restart wait counts from
+      waitFrom: null,       // Date.now() the restart wait counts from (goes on while the phone sleeps)
       quietFrom: null,      // performance.now() the quiet time began, while it lasts
       quietMs: 0,           // how long it lasts (quiet_ms)
     };
@@ -3434,7 +3446,7 @@
    *  long until gbs-anywhere checks again. */
   function pairWaited() {
     if (wz.pair.quietFrom != null) return clock(wz.pair.quietMs - (performance.now() - wz.pair.quietFrom), Math.floor);
-    return wz.pair.waitFrom == null ? "0:00" : clock(performance.now() - wz.pair.waitFrom, Math.floor);
+    return wz.pair.waitFrom == null ? "0:00" : clock(Date.now() - wz.pair.waitFrom, Math.floor);
   }
 
   /** The first Pairing Code after the restart wait: the same one is the
@@ -3563,7 +3575,9 @@
       wz.open = {};
       if (at.step === 4) {
         if (!wasWaiting) {
-          wz.pair.waitFrom = stateAt - ((w && w.phase_age_ms) || 0);
+          // On the wall clock: performance.now() stands still while a phone
+          // sleeps, and this is anchored only once, so it would fall behind.
+          wz.pair.waitFrom = Date.now() - (performance.now() - stateAt) - ((w && w.phase_age_ms) || 0);
           wz.pair.waitBoot = S.server.boot_id;
         }
         // What the person said about this attempt is past; the next one
@@ -3956,6 +3970,7 @@
     // A settings save under way or answered since this poll began: its
     // answer stands, not the settings from before it (see putSettings).
     if (S && S.settings && !restarted && (settingsSaving || gen !== settingsGen)) st.settings = S.settings;
+    if (!S) ui.dismissed = dismissedFor(st.server.boot_id);
     S = st; stateAt = performance.now();
     if (recheckWanted) { recheckWanted = false; if (tab === "status") recheckUpdate(); }
     if (restarted) {

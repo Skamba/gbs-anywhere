@@ -42,6 +42,7 @@
   "error.integration_not_found": "Diese Integration gibt es nicht mehr.",
   "error.integration_on_command_line": "Sie stammt aus den Starteinstellungen (Flags oder Umgebungsvariablen): Ändere sie dort, oder übernimm sie in die App.",
   "error.integration_in_app": "Sie wird schon in der App verwaltet.",
+  "error.integration_limit_reached": "Es können keine weiteren Integrationen hinzugefügt werden. Entferne zuerst eine.",
   "error.icon_not_found": "Dieses Symbol gibt es nicht.",
   "unit.shot": "{time}\u00a0s · {weight}\u00a0g",
   "unit.seconds": "{time}\u00a0s",

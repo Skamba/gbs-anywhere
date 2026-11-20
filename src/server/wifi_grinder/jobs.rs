@@ -96,6 +96,9 @@ struct Held {
     /// The grinder has it as taken: it is not listed. A listed job is still
     /// (or again) waiting to be taken.
     accepted: bool,
+    /// The last machine event before its brew started: a shot reported up
+    /// to then belongs to an earlier brew, not to this job.
+    after_seq: u64,
 }
 
 /// A measured (or cancelled) shot on its way to the grinder.
@@ -132,7 +135,7 @@ impl WifiGrinder {
                 biased;
                 event = events.recv() => match event {
                     Ok(rec) => {
-                        if self.on_event(pairing_id, &rec.event) {
+                        if self.on_event(pairing_id, &rec) {
                             self.send_answer(server).await;
                         }
                     }
@@ -155,8 +158,10 @@ impl WifiGrinder {
                     }
                     reply.ok().context("asking for brew jobs")?;
                     refused_since = None;
-                    // Working again: the same failure later is a new one.
+                    // Working again: the same failure later is a new one, and
+                    // waits as briefly as the first.
                     self.reach.last_failure = None;
+                    self.reach.answered = true;
                     if self.pairing.refused_pairing_id.take().is_some() {
                         // The pairing in use works: no fallback needed.
                         self.save_pairing()?;
@@ -285,13 +290,15 @@ impl WifiGrinder {
         };
         let target_ms = job.target_ms();
         let started = server.with_wifi(self.owner, |m, now| {
+            let before = m.last_seq();
             // A shot that is still being shown, or a brew started by hand,
             // goes first; the job waits for the next poll.
             m.on_brew_job(now, grind_result(job), target_ms)
+                .then_some(before)
         });
-        if started != Some(true) {
+        let Some(Some(after_seq)) = started else {
             return;
-        }
+        };
         for other in fresh.iter().filter(|j| j.grind_uuid != job.grind_uuid) {
             tracing::info!("grinder: skipping an older Grind-by-Sync grind");
             self.jobs.handled.push(other.grind_uuid.clone());
@@ -310,6 +317,7 @@ impl WifiGrinder {
         self.jobs.current = Some(Held {
             job: job.clone(),
             accepted: false,
+            after_seq,
         });
     }
 
@@ -359,15 +367,17 @@ impl WifiGrinder {
 
     /// A reported or aborted shot becomes the answer to the current job.
     /// Returns whether there is one to send.
-    fn on_event(&mut self, pairing_id: u32, event: &MachineEvent) -> bool {
-        let (result, time_ms, grams, reason) = match event {
+    fn on_event(&mut self, pairing_id: u32, rec: &EventRecord) -> bool {
+        let (result, time_ms, grams, reason) = match &rec.event {
             MachineEvent::ShotReported { result, .. } => {
                 (BrewResult::Success, result.time_ms, result.weight_g, "")
             }
             MachineEvent::ShotAborted { reason, .. } => (BrewResult::Canceled, 0, 0.0, *reason),
             _ => return false,
         };
-        let Some(held) = self.jobs.current.take() else {
+        // An event from before the job's brew (it waited in the channel
+        // while the job was taken) is not this job's shot.
+        let Some(held) = self.jobs.current.take_if(|h| rec.seq > h.after_seq) else {
             return false;
         };
         let event_uuid = uuid::Uuid::new_v4().to_string();

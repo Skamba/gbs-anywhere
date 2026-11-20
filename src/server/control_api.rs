@@ -22,7 +22,7 @@
 //! | PUT | `/api/settings` | `{"shot_window_s":120,"grinder_host":"192.168.1.30","update_check":false}` (any of them) — changes and saves them (see [below](#put-apisettings)) |
 //! | POST | `/api/update/check` | look for a newer release now (the app asks when the Status tab opens and on Check now; turning `update_check` on asks too); ignored while the check is off, one is under way, or the last was under a minute ago. Replies with `update` as in `/api/state` |
 //! | GET | `/api/integrations/kinds` | the integrations the app can add: title, icon, setup form; whether additions are saved |
-//! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one |
+//! | POST | `/api/integrations` | `{"kind":"la_marzocco","settings":{...}}` — adds and starts one; at most 16 (409 `integration_limit_reached`), each value at most 1024 characters |
 //! | GET | `/api/integrations/<id>/settings` | the settings of one added in the app, without passwords (`secrets_set` names the ones that are set) |
 //! | PUT | `/api/integrations/<id>` | `{"settings":{...}}` — changes one added in the app and restarts it; a password left out or empty stays |
 //! | POST | `/api/integrations/<id>/adopt` | moves one set on the command line into the app (needs a settings file) |
@@ -65,7 +65,7 @@
 //!   * its `source`, and the `start` value it goes back to;
 //!   * `shot_window_range`: the shot windows from `min_s` to `max_s` seconds, 30 and 3600, besides 0 for no limit;
 //!   * `persistent`: whether there is a settings file to keep them in.
-//! * `update`: the update check: the `latest` release found, whether it is newer (`available`), whether looking `failing`, whether a look is under way (`checking`), how long ago the last one ended (`checked_age_ms`, `null` before the first), and the releases page `url`.
+//! * `update`: the update check: the `latest` release found, whether it is newer (`available`), whether looking `failing`, whether a look is under way (`checking`), how long ago the last one ended (`checked_age_ms`, `null` before the first), whether `POST /api/update/check` would look now (`can_check`: on, none under way, the last a minute or more ago), and the releases page `url`.
 //! * `server`: `version`, `boot_id` (changes on every start, so an app can tell its event and log numbers start over) and `last_event_seq`; on this route also
 //!   * `ip`: the IPv4 address the request came in on, which an E64 WS can use as its Xenia hostname (`null` over loopback, a link-local or shared (Tailscale) address, or IPv6);
 //!   * `ip_in_docker_range`: whether it is in 172.17.0.0 to 172.31.255.255, where Docker most likely gave it to its container, so the grinder can't reach it.
@@ -160,7 +160,7 @@ use tokio::sync::broadcast::error::RecvError;
 
 use crate::integration::{self, ChangeError, Settings};
 use crate::server::browser::{self, AllowedHosts};
-use crate::server::logbook::{self, LogLine};
+use crate::server::logbook::LogLine;
 use crate::server::{Conn, Server, SettingsChange, history, page};
 
 /// The app's routes, answering only to home-network host names (`hosts`
@@ -405,27 +405,15 @@ async fn stream_events(
     Params(q): Params<AfterMaybe>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    // A reconnecting browser sends the same URL again, so its
-    // `Last-Event-ID` is newer than the query.
-    let resume = headers
-        .get("last-event-id")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse().ok())
-        .or(q.after);
     // Subscribed first, so nothing falls between the backlog and the feed.
     let (rx, now) = x.subscribe_at();
-    let after = match resume {
-        Some(after) if after <= now => after,
-        // From before a restart (the count started again): all kept events.
-        Some(_) => 0,
-        None => now,
-    };
-    let start = EventStream {
-        pending: x.events_after(after),
-        server: x.clone(),
+    let server = x.clone();
+    let start = Resumed::new(
         rx,
-        last: after,
-    };
+        resume_after(&headers, &q, now),
+        |r| r.seq,
+        move |after| server.events_after(after),
+    );
     let stream = futures_util::stream::unfold(start, |mut s| async move {
         let rec = s.next().await?;
         let data = event_json(&rec, Instant::now());
@@ -441,38 +429,74 @@ async fn stream_events(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-/// The events for one stream, in order and without gaps: when the live
-/// feed falls behind, the missed events are read back from the machine.
-struct EventStream {
-    server: Arc<Server>,
-    rx: tokio::sync::broadcast::Receiver<EventRecord>,
-    pending: std::collections::VecDeque<EventRecord>,
-    /// The last `seq` sent (or skipped as already known).
-    last: u64,
+/// Where a stream starts: after the `Last-Event-ID` a reconnecting browser
+/// sends (it sends the same URL again, so this is newer than the query),
+/// or else `?after=N`, or else now. A number beyond `now` is from before a
+/// restart (the count started again): everything still kept.
+fn resume_after(headers: &HeaderMap, q: &AfterMaybe, now: u64) -> u64 {
+    let resume = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse().ok())
+        .or(q.after);
+    match resume {
+        Some(after) if after <= now => after,
+        Some(_) => 0,
+        None => now,
+    }
 }
 
-impl EventStream {
-    async fn next(&mut self) -> Option<EventRecord> {
+/// The events or log lines for one stream, in order and without gaps: when
+/// the live feed falls behind, the missed ones are read back with `missed`.
+struct Resumed<T> {
+    rx: tokio::sync::broadcast::Receiver<T>,
+    pending: std::collections::VecDeque<T>,
+    /// The last `seq` sent (or skipped as already known).
+    last: u64,
+    seq: fn(&T) -> u64,
+    missed: Box<dyn Fn(u64) -> std::collections::VecDeque<T> + Send>,
+}
+
+impl<T: Clone> Resumed<T> {
+    /// Starts with what came after `after`.
+    fn new(
+        rx: tokio::sync::broadcast::Receiver<T>,
+        after: u64,
+        seq: fn(&T) -> u64,
+        missed: impl Fn(u64) -> std::collections::VecDeque<T> + Send + 'static,
+    ) -> Self {
+        Self {
+            rx,
+            pending: missed(after),
+            last: after,
+            seq,
+            missed: Box::new(missed),
+        }
+    }
+
+    async fn next(&mut self) -> Option<T> {
         loop {
-            if let Some(rec) = self.pending.pop_front() {
-                if rec.seq > self.last {
-                    self.last = rec.seq;
-                    return Some(rec);
+            if let Some(item) = self.pending.pop_front() {
+                let seq = (self.seq)(&item);
+                if seq > self.last {
+                    self.last = seq;
+                    return Some(item);
                 }
                 continue;
             }
             match self.rx.recv().await {
-                Ok(rec) => self.pending.push_back(rec),
-                Err(RecvError::Lagged(_)) => self.pending = self.server.events_after(self.last),
+                Ok(item) => self.pending.push_back(item),
+                Err(RecvError::Lagged(_)) => self.pending = (self.missed)(self.last),
                 Err(RecvError::Closed) => return None,
             }
         }
     }
 }
 
-/// Looks for a newer release now (the app asks when the Status tab opens),
-/// then replies with `update` as in `/api/state`. Off, under way or just
-/// done, it looks again later instead (see `request_update_check`).
+/// Looks for a newer release now (the app asks when the Status tab opens
+/// and on Check now), then replies with `update` as in `/api/state`. Off,
+/// under way or just done, it looks again later instead (see
+/// `request_update_check`).
 async fn update_check_now(State(x): State<Arc<Server>>) -> Json<Value> {
     x.request_update_check();
     Json(x.update_json())
@@ -532,27 +556,15 @@ async fn stream_log(
     Params(q): Params<AfterMaybe>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    // A reconnecting browser sends the same URL again, so its
-    // `Last-Event-ID` is newer than the query.
-    let resume = headers
-        .get("last-event-id")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.trim().parse().ok())
-        .or(q.after);
     // Subscribed first, so nothing falls between the backlog and the feed.
     let (rx, now) = x.log().subscribe_at();
-    let after = match resume {
-        Some(after) if after <= now => after,
-        // From before a restart (the count started again): all kept lines.
-        Some(_) => 0,
-        None => now,
-    };
-    let start = LogStream {
+    let book = x.log().clone();
+    let start = Resumed::new(
         rx,
-        pending: x.log().after(after).0.into(),
-        last: after,
-        book: x.log().clone(),
-    };
+        resume_after(&headers, &q, now),
+        |l| l.seq,
+        move |after| book.after(after).0.into(),
+    );
     let stream = futures_util::stream::unfold(start, |mut s| async move {
         let line = s.next().await?;
         let ev = Event::default()
@@ -569,37 +581,6 @@ async fn stream_log(
 #[derive(Deserialize)]
 struct AfterMaybe {
     after: Option<u64>,
-}
-
-/// The log lines for one stream, in order and without gaps: when the live
-/// feed falls behind, the missed lines are read back from the log book.
-struct LogStream {
-    book: Arc<logbook::LogBook>,
-    rx: tokio::sync::broadcast::Receiver<LogLine>,
-    pending: std::collections::VecDeque<LogLine>,
-    /// The last `seq` sent (or skipped as already known).
-    last: u64,
-}
-
-impl LogStream {
-    async fn next(&mut self) -> Option<LogLine> {
-        loop {
-            if let Some(line) = self.pending.pop_front() {
-                if line.seq > self.last {
-                    self.last = line.seq;
-                    return Some(line);
-                }
-                continue;
-            }
-            match self.rx.recv().await {
-                Ok(line) => self.pending.push_back(line),
-                Err(RecvError::Lagged(_)) => {
-                    self.pending = self.book.after(self.last).0.into();
-                }
-                Err(RecvError::Closed) => return None,
-            }
-        }
-    }
 }
 
 async fn integration_kinds(State(x): State<Arc<Server>>) -> Json<Value> {
@@ -729,9 +710,10 @@ fn change_error(e: &ChangeError) -> Response {
     let code = match e {
         ChangeError::Invalid(_) => StatusCode::BAD_REQUEST,
         ChangeError::NotFound => StatusCode::NOT_FOUND,
-        ChangeError::CommandLine | ChangeError::InApp | ChangeError::NotPersistent => {
-            StatusCode::CONFLICT
-        }
+        ChangeError::CommandLine
+        | ChangeError::InApp
+        | ChangeError::NotPersistent
+        | ChangeError::Full => StatusCode::CONFLICT,
         ChangeError::Save(_) => StatusCode::INTERNAL_SERVER_ERROR,
     };
     error(code, e.code(), &e.to_string())

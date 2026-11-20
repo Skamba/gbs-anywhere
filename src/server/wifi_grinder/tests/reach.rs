@@ -230,3 +230,42 @@ async fn not_set_up_ends_with_another_error() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn a_failure_after_good_polls_waits_the_shortest_again() {
+    // A long outage grows the wait to the longest; once the grinder answers
+    // again, the next single failure waits the shortest, not the longest.
+    let cfg_for = |base: &str| {
+        let mut cfg = test_config(base);
+        cfg.min_backoff = Duration::from_millis(20);
+        cfg.max_backoff = Duration::from_millis(800);
+        cfg.pairing_id = Some(PAIRING_ID);
+        cfg
+    };
+    let (base, fake) = fake_grinder(Fake {
+        paired: Some(PAIRING_ID),
+        fail_jobs: 6,
+        ..Fake::default()
+    })
+    .await;
+    let server = Server::new(MachineConfig::default());
+    start_link(&server, cfg_for(&base));
+    wait_for("paired after the outage", || paired(&server)).await;
+    let polls = || fake.lock().unwrap().requests_to(wifi::PATH_BREW_JOBS);
+    let good = polls().len();
+    wait_for("a few good polls", || polls().len() >= good + 3).await;
+
+    // The next job request fails, once.
+    let before = {
+        let mut f = fake.lock().unwrap();
+        f.fail_jobs = 1;
+        f.requests_to(wifi::PATH_BREW_JOBS).len()
+    };
+    wait_for("the poll after the failure", || polls().len() >= before + 2).await;
+    let times = polls();
+    let retry = times[before + 1] - times[before];
+    assert!(
+        retry < Duration::from_millis(400),
+        "waited as after the outage: {retry:?}"
+    );
+}
