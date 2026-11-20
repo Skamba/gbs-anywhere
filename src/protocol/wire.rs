@@ -319,9 +319,19 @@ fn number_like(v: &Value) -> Option<f64> {
     }
 }
 
+/// The longest text kept from a grinder field.
+const MAX_TEXT_CHARS: usize = 64;
+
 fn text_like(v: &Value) -> Option<String> {
     match v {
-        Value::String(s) => Some(s.clone()),
+        // Logged and shown: no line breaks or escapes from the network, and
+        // no more than a short id needs.
+        Value::String(s) => Some(
+            s.chars()
+                .filter(|c| !c.is_control())
+                .take(MAX_TEXT_CHARS)
+                .collect(),
+        ),
         Value::Number(n) => Some(n.to_string()),
         Value::Bool(b) => Some(b.to_string()),
         _ => None,
@@ -400,6 +410,16 @@ mod tests {
             GrinderRequest::GrindResult(g) => {
                 assert_eq!(g.target_weight_g, Some(36.5));
                 assert_eq!(g.filter.as_deref(), Some("2"));
+            }
+            other => panic!("{other:?}"),
+        }
+        // A line break can't make a log line of its own.
+        let forged = format!(r#"{{"SYNC_FILTER":"2\nWARN forged{}"}}"#, "x".repeat(100));
+        match GrinderRequest::classify("POST", "/api/v2/brewratio", forged.as_bytes()) {
+            GrinderRequest::GrindResult(g) => {
+                let filter = g.filter.unwrap();
+                assert!(filter.starts_with("2WARN forged"), "{filter}");
+                assert_eq!(filter.chars().count(), MAX_TEXT_CHARS);
             }
             other => panic!("{other:?}"),
         }

@@ -348,6 +348,10 @@ struct Reach {
     last_failure: Option<String>,
     /// Why the link fails, for `WifiLink::failure` while it does.
     failure: Option<String>,
+    /// The grinder answered a poll since the last failure, so the next wait
+    /// starts again from the shortest rather than where the last outage left
+    /// it.
+    answered: bool,
 }
 
 impl WifiGrinder {
@@ -468,6 +472,9 @@ impl WifiGrinder {
                 self.reach.unreachable = unreachable;
                 self.reach.failure = Some(e.root_cause().to_string());
                 self.status(&server, WifiState::Failing, None, message);
+                if std::mem::take(&mut self.reach.answered) {
+                    backoff.reset();
+                }
                 tokio::time::sleep(self.retry_delay(&mut backoff)).await;
             } else {
                 backoff.reset();

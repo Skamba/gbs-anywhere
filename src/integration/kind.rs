@@ -55,6 +55,11 @@ pub(crate) enum Input {
     Number,
 }
 
+/// The longest value a form field takes from the app: room for any host
+/// name, account or password, and a limit on what a request makes the
+/// settings file keep.
+const MAX_VALUE_CHARS: usize = 1024;
+
 impl Kind {
     /// Checks `settings` against the form and builds the integration.
     /// `from_app` also refuses keys that are not form fields, so the app
@@ -73,6 +78,15 @@ impl Kind {
             bail!("unknown setting `{key}`");
         }
         for f in self.fields {
+            if from_app
+                && let Some(value) = settings.0.get(f.key)
+                && value.chars().count() > MAX_VALUE_CHARS
+            {
+                bail!(
+                    "{} is too long (at most {MAX_VALUE_CHARS} characters)",
+                    f.label
+                );
+            }
             let present = match f.input {
                 Input::Password => settings.secret(f.key).is_some(),
                 _ => settings.text(f.key).is_some(),
@@ -271,6 +285,12 @@ mod tests {
                 .number("every")
                 .unwrap(),
             Some(2.5)
+        );
+        // A value long beyond any real one is refused from the app.
+        let long = "x".repeat(MAX_VALUE_CHARS + 1);
+        assert_eq!(
+            err(&ok.clone().with("user", Some(&long)), true),
+            "User is too long (at most 1024 characters)"
         );
         // Keys outside the form: command line only.
         let hidden = ok.with("base_url", Some("http://x"));

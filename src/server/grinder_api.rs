@@ -18,7 +18,8 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
 use crate::server::browser::{
-    REFUSED_GRINDER, UNKNOWN_GRINDER, UNPARSABLE_GRINDER, from_browser, short, tell_once,
+    GRINDER_IDENTITY, REFUSED_GRINDER, UNKNOWN_GRINDER, UNPARSABLE_GRINDER, from_browser, short,
+    tell_once,
 };
 use crate::server::logbook::printable;
 use crate::server::private_file::make_private;
@@ -174,8 +175,11 @@ async fn handle(
     let text = reply.to_string();
     // Polls come every 2 s; a grind and a start are logged as the machine's
     // events (see `print_events`), the rest above. Only the identity request
-    // is left, which the grinder sends when it connects.
-    if matches!(req, GrinderRequest::Identity) {
+    // is left, which the grinder sends when it connects: told once per
+    // device, as anything on the network can send it.
+    if matches!(req, GrinderRequest::Identity)
+        && tell_once(GRINDER_IDENTITY, Some(peer.ip()), uri.path())
+    {
         tracing::info!("{peer} {method} {} -> {text}", short(uri.path()));
     } else {
         tracing::debug!("{peer} {method} {uri} -> {text}");

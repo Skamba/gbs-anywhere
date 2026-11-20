@@ -25,8 +25,8 @@ pub(crate) const RELEASES_PAGE: &str = "https://github.com/Skamba/gbs-anywhere/r
 /// A release description is a few kilobytes; anything this big is not one.
 const MAX_REPLY_BYTES: usize = 1024 * 1024;
 
-/// A manual re-check (the app asks for one when the Status tab opens) is
-/// ignored when the last look is this recent, so opening the tab again and
+/// A manual re-check (the app asks for one when the Status tab opens and on
+/// Check now) is ignored when the last look is this recent, so opening the tab again and
 /// again does not keep asking GitHub.
 const MANUAL_MIN_GAP: Duration = Duration::from_secs(60);
 
@@ -73,6 +73,14 @@ pub(super) struct UpdateState {
     recheck: bool,
 }
 
+impl UpdateState {
+    /// Whether a manual re-check would look now: the check is on, no look is
+    /// under way, and the last ended at least [`MANUAL_MIN_GAP`] ago.
+    fn can_check(&self) -> bool {
+        self.enabled && !self.checking && self.checked.is_none_or(|t| t.elapsed() >= MANUAL_MIN_GAP)
+    }
+}
+
 impl Server {
     /// Starts the task that looks for newer releases while the check is on
     /// (see `Server::set_update_check`).
@@ -111,13 +119,13 @@ impl Server {
         }
     }
 
-    /// Asks for a look right away (the app does when the Status tab opens),
-    /// skipped when the check is off, one is under way, or the last was less
-    /// than [`MANUAL_MIN_GAP`] ago. The periodic look is unaffected.
+    /// Asks for a look right away (the app does when the Status tab opens
+    /// and on Check now), skipped unless [`UpdateState::can_check`]. The
+    /// periodic look is unaffected.
     pub(crate) fn request_update_check(&self) {
         {
             let mut s = self.update_state();
-            if !s.enabled || s.checking || s.checked.is_some_and(|t| t.elapsed() < MANUAL_MIN_GAP) {
+            if !s.can_check() {
                 return;
             }
             s.recheck = true;
@@ -145,6 +153,7 @@ impl Server {
             "failing": s.enabled && s.failing,
             "checking": s.enabled && s.checking,
             "checked_age_ms": s.checked.map(|t| t.elapsed().as_millis() as u64),
+            "can_check": s.can_check(),
             "url": RELEASES_PAGE,
         })
     }
@@ -195,12 +204,13 @@ async fn run(server: Arc<Server>, cfg: UpdateConfig, http: reqwest::Client) {
         let found = latest_release(&http, &cfg.url).await;
         let mut s = server.update_state();
         s.checking = false;
-        s.checked = Some(Instant::now());
         if !s.enabled {
-            // Turned off while it looked: the answer is not kept.
+            // Turned off while it looked: the answer is not kept, nor when
+            // it came, so turned on again it looks right away.
             wait = cfg.first;
             continue;
         }
+        s.checked = Some(Instant::now());
         wait = match found {
             Ok(latest) => {
                 if is_newer(&latest) && s.latest.as_deref() != Some(latest.as_str()) {
@@ -535,6 +545,11 @@ mod tests {
         let state = server.update_json();
         assert!(!server.update_check_on());
         assert_eq!(state["latest"], Value::Null, "the late answer is dropped");
+        assert_eq!(state["checked_age_ms"], Value::Null, "nor when it came");
+        assert_eq!(state["can_check"], false, "off");
+        // Turned on again, a manual look is taken at once.
+        server.set_update_check(true);
+        assert_eq!(server.update_json()["can_check"], true);
     }
 
     #[tokio::test]
@@ -616,6 +631,7 @@ mod tests {
         );
 
         // Asking looks now, despite the long interval.
+        assert_eq!(server.update_json()["can_check"], true);
         server.request_update_check();
         wait_for("the manual look", || {
             server.update_json()["latest"] == "999.0.0"
@@ -624,7 +640,9 @@ mod tests {
         assert_eq!(agents.lock().unwrap().len(), 1, "one look");
         assert_eq!(server.update_json()["checking"], false, "the look finished");
 
-        // Asking again right away is ignored (less than the minimum gap).
+        // Asking again right away is ignored (less than the minimum gap),
+        // which the app is told so it doesn't offer it.
+        assert_eq!(server.update_json()["can_check"], false);
         server.request_update_check();
         tokio::time::sleep(Duration::from_millis(100)).await;
         assert_eq!(agents.lock().unwrap().len(), 1, "debounced");

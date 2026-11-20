@@ -666,6 +666,7 @@ mod tests {
             ChangeError::InApp,
             ChangeError::NotPersistent,
             ChangeError::Save(String::new()),
+            ChangeError::Full,
         ];
         let pairing = [
             PairingIdRefusal::NoLink,
@@ -694,7 +695,8 @@ mod tests {
                 | ChangeError::CommandLine
                 | ChangeError::InApp
                 | ChangeError::NotPersistent
-                | ChangeError::Save(_) => {}
+                | ChangeError::Save(_)
+                | ChangeError::Full => {}
             }
         }
         for e in pairing {

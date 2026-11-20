@@ -461,3 +461,44 @@ async fn a_result_after_a_lost_accept_reply_is_retried() {
         "the grinder got it"
     );
 }
+
+#[tokio::test]
+async fn a_shot_from_before_the_job_is_not_its_answer() {
+    let (server, fake) = Setup::new(Fake::default()).start().await;
+    wait_for("pairing", || paired(&server)).await;
+    // A brew started by hand goes first: the job waits.
+    server.with(|m, now| m.on_start_request(now, None));
+    fake.lock().unwrap().jobs.push(job("g-1", 40_000));
+    tokio::time::sleep(polls(3)).await;
+    assert_eq!(taken(&fake), 0, "not while the other brew runs");
+
+    // That brew's shot is reported while a slow job request is under way;
+    // when it answers, the shot is over and the job is taken.
+    let started = {
+        let mut f = fake.lock().unwrap();
+        f.jobs_delay = Duration::from_millis(400);
+        f.requests_to(wifi::PATH_BREW_JOBS).len()
+    };
+    wait_for("a slow job request", || {
+        fake.lock().unwrap().requests_to(wifi::PATH_BREW_JOBS).len() > started
+    })
+    .await;
+    report(&server, 25.0, 36.0);
+    fake.lock().unwrap().jobs_delay = Duration::ZERO;
+    wait_for("the job taken", || taken(&fake) == 1).await;
+    tokio::time::sleep(polls(5)).await;
+    assert!(
+        fake.lock()
+            .unwrap()
+            .calls_to(wifi::PATH_BREW_DONE)
+            .is_empty(),
+        "the earlier shot is not sent for the job"
+    );
+
+    // The job's own shot is.
+    report(&server, 28.0, 40.2);
+    wait_for("the answer", || {
+        wifi(&server).detail == "sent 28.0 s, 40.2 g"
+    })
+    .await;
+}

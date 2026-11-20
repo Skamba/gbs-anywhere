@@ -119,6 +119,8 @@ struct Fake {
     fail_jobs: u32,
     /// How long a pairing application takes to answer.
     application_delay: Duration,
+    /// How long a job request takes to answer.
+    jobs_delay: Duration,
 }
 
 impl Fake {
@@ -159,10 +161,10 @@ async fn handle(State(fake): State<Shared>, uri: Uri, Json(body): Json<Value>) -
     let delay = {
         let mut f = fake.lock().unwrap();
         f.requests.push((path.to_owned(), Instant::now()));
-        if path == wifi::PATH_PAIRING_APPLICATION {
-            f.application_delay
-        } else {
-            Duration::ZERO
+        match path {
+            wifi::PATH_PAIRING_APPLICATION => f.application_delay,
+            wifi::PATH_BREW_JOBS => f.jobs_delay,
+            _ => Duration::ZERO,
         }
     };
     tokio::time::sleep(delay).await;

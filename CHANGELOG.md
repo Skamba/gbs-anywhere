@@ -39,6 +39,33 @@ daily check and the `--update-check off` switch are unchanged. New endpoint
 
 ### Fixed
 
+- **Check now** is greyed out for a minute after each look, the time in
+  which gbs-anywhere ignores another one, rather than looking tappable and
+  doing nothing (also right after GitHub could not be reached). `update` in
+  `GET /api/state` says whether a look would be taken now (`can_check`).
+  Turning the check off during a look and on again looks right away, as
+  turning it on otherwise does.
+- After a short network hiccup, the E65/E80 link tries again after 2 s, as
+  it did before the first outage, rather than waiting up to a minute once
+  the grinder had been off for a while (in standby overnight, say). A
+  Grind-by-Sync grind in that minute could go untaken.
+- An E65/E80 job taken right after a shot of another brew was reported (one
+  started by hand, say) no longer gets that shot as its own result: it
+  waits for its own.
+- A shot error dismissed on the **Start** tab stays dismissed after a reload.
+- The restart wait in step 4 of **Set up grinder** keeps counting while the
+  phone sleeps, rather than falling behind by the time it slept.
+- The La Marzocco card's idle line shows the newest coffee, also one made
+  without a knob press, and its check interval with tenths (1.5 s rather
+  than 1 s).
+- Text the grinder sends (its filter) can no longer break a log line in two:
+  line breaks and other control characters are dropped, and it is cut to 64
+  characters. A grinder's identity request is logged once per device rather
+  than every time, so requests from any device on the network can't push the
+  rest out of the app's log.
+- The app adds at most 16 integrations (409 `integration_limit_reached`),
+  and each form value takes at most 1024 characters, so repeated requests
+  can't fill the settings file or start tasks without end.
 - Step 3 of **Set up grinder** no longer shows an earlier Pairing Code while
   gbs-anywhere has none open, also after a reload; it waits for the next
   one. When a new code replaces the one being compared, the step says so,

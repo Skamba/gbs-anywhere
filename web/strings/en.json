@@ -42,6 +42,7 @@
   "error.integration_not_found": "This integration is no longer there.",
   "error.integration_on_command_line": "It was set at the start (flags or environment variables): change it there, or move it into the app.",
   "error.integration_in_app": "It is already managed in the app.",
+  "error.integration_limit_reached": "No more integrations can be added. Remove one first.",
   "error.icon_not_found": "No such icon.",
   "unit.shot": "{time}\u00a0s · {weight}\u00a0g",
   "unit.seconds": "{time}\u00a0s",
